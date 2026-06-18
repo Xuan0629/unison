@@ -208,6 +208,24 @@ class RiskMatrixConfig:
     external_rules: dict[Operation, RiskLevel] = field(default_factory=dict)
 
 @dataclass(frozen=True)
+class Stage:
+    """DAG 中的一个阶段（V2 多 phase 并行）。
+
+    Attributes:
+        name: Stage 唯一标识（如 "feature-a", "feature-b"）。
+        agents: 该 Stage 使用的 agent 角色映射（覆盖 PipelineSpec.agents）。
+        dependencies: 前置依赖的 Stage name 列表。
+        timeout: Stage 超时（秒）。
+        parallel_group: 并行组标识（同组 Stage 可同时执行）。
+    """
+    name: str
+    agents: dict[str, "AgentSpec"] = field(default_factory=dict)
+    dependencies: list[str] = field(default_factory=list)
+    timeout: int = 600
+    parallel_group: str | None = None
+
+
+@dataclass(frozen=True)
 class PipelineSpec:
     """一次 pipeline 运行的全部配置（不可变）。"""
     version: str  # "1.0"
@@ -218,6 +236,7 @@ class PipelineSpec:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     snapshots: SnapshotConfig = field(default_factory=SnapshotConfig)
     risk_matrix: RiskMatrixConfig = field(default_factory=RiskMatrixConfig)
+    dag: list[Stage] | None = None  # V2: DAG 多 phase 并行（None → V1 线性模式）
     max_iterations: int = 5
     per_agent_timeout: int = 600    # 秒。Codex 慢需 300s+
     context_deflation_limit: int = 5  # 每次迭代只注入最近 5 条 findings
@@ -229,6 +248,15 @@ class PipelineSpec:
         if role not in self.agents:
             raise KeyError(f"agent {role!r} not in spec")
         return self.agents[role]
+
+    def get_stage(self, name: str) -> Stage:
+        """按 name 获取 Stage（V2 DAG 模式）。"""
+        if self.dag is None:
+            raise ValueError("Pipeline has no DAG")
+        for stage in self.dag:
+            if stage.name == name:
+                return stage
+        raise KeyError(f"Stage {name!r} not found")
 
 # ============================================================================
 # State — 状态机单一真相源
