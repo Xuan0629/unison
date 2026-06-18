@@ -1,4 +1,4 @@
-"""State machine — State + Transition data structures + atomic JSON I/O."""
+"""state.py — State + Transition data structures with atomic I/O."""
 
 from __future__ import annotations
 
@@ -7,10 +7,18 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 # ============================================================================
-# Valid phases — matches interfaces.py Phase literal
+# Type Aliases (mirror interfaces.py)
 # ============================================================================
+
+Phase = Literal[
+    "init", "planning_active", "planning_review",
+    "dev_active", "dev_review", "done"
+]
+Actor = Literal["planner", "developer", "reviewer", "orchestrator", "observer", "harness_optimizer", "sean"]
+Verdict = Literal["PASS", "REQUEST_CHANGES"]
 
 VALID_PHASES: frozenset[str] = frozenset({
     "init", "planning_active", "planning_review",
@@ -18,31 +26,27 @@ VALID_PHASES: frozenset[str] = frozenset({
 })
 
 
+def _now_iso() -> str:
+    """Return current UTC time as ISO 8601 string."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 # ============================================================================
 # Transition
 # ============================================================================
 
+
 @dataclass
 class Transition:
-    """状态机迁移日志条目。
+    """状态机迁移日志条目。"""
 
-    Attributes:
-        from_phase: 迁移前 phase。首条迁移为 None（表示从空状态创建）。
-        to_phase: 迁移后 phase。
-        by: 操作者。
-        timestamp: ISO 8601 时间戳。
-        note: 可选备注。
-        iter_n: 迭代编号。
-        verdict: Reviewer verdict。
-        commit: git commit hash。
-    """
-    from_phase: str | None
-    to_phase: str
-    by: str
-    timestamp: str
+    from_phase: Phase | None
+    to_phase: Phase
+    by: Actor
+    timestamp: str  # ISO 8601
     note: str = ""
     iter_n: int | None = None
-    verdict: str | None = None
+    verdict: Verdict | None = None
     commit: str | None = None
 
     def to_dict(self) -> dict:
@@ -77,32 +81,21 @@ class Transition:
 # State
 # ============================================================================
 
+
 @dataclass
 class State:
-    """状态机单一真相源。Orchestrator 写，Observer 读。
+    """状态机单一真相源。Orchestrator 写，Observer 读。"""
 
-    Attributes:
-        version: schema 版本。
-        phase: 当前阶段。
-        iteration: 当前迭代编号。
-        history: 迁移历史。
-        halt_signal: 是否已触发 halt。
-        halt_reason: halt 原因。
-        last_dev_commit: Developer 最近一次 commit。
-        last_review_verdict: Reviewer 最近一次 verdict。
-        last_review_path: 最近一次 review 文件路径。
-        last_activity: 最近活动时间（ISO 8601）。
-    """
     version: str = "1.0"
-    phase: str = "init"
+    phase: Phase = "init"
     iteration: int = 0
     history: list[Transition] = field(default_factory=list)
     halt_signal: bool = False
     halt_reason: str | None = None
     last_dev_commit: str | None = None
-    last_review_verdict: str | None = None
+    last_review_verdict: Verdict | None = None
     last_review_path: Path | None = None
-    last_activity: str | None = None
+    last_activity: str | None = None  # ISO timestamp
 
     def __post_init__(self) -> None:
         if self.phase not in VALID_PHASES:
@@ -111,7 +104,7 @@ class State:
                 f"Must be one of {sorted(VALID_PHASES)}"
             )
 
-    # ---- serialization ----
+    # ---- Serialization ------------------------------------------------------
 
     def to_dict(self) -> dict:
         """JSON 序列化。"""
@@ -124,7 +117,11 @@ class State:
             "halt_reason": self.halt_reason,
             "last_dev_commit": self.last_dev_commit,
             "last_review_verdict": self.last_review_verdict,
-            "last_review_path": str(self.last_review_path) if self.last_review_path is not None else None,
+            "last_review_path": (
+                str(self.last_review_path)
+                if self.last_review_path is not None
+                else None
+            ),
             "last_activity": self.last_activity,
         }
 
@@ -141,19 +138,21 @@ class State:
             halt_reason=d.get("halt_reason"),
             last_dev_commit=d.get("last_dev_commit"),
             last_review_verdict=d.get("last_review_verdict"),
-            last_review_path=Path(last_review_path) if last_review_path is not None else None,
+            last_review_path=(
+                Path(last_review_path) if last_review_path is not None else None
+            ),
             last_activity=d.get("last_activity"),
         )
 
-    # ---- state machine ----
+    # ---- State Machine ------------------------------------------------------
 
-    def transition(self, to: str, by: str, **fields) -> None:
+    def transition(self, to: Phase, by: Actor, **fields) -> None:
         """记录一次迁移，校验合法性并更新状态。
 
         Args:
             to: 目标 phase。
             by: 操作者。
-            **fields: 可选的 Transition 字段（note, iter_n, verdict, commit, timestamp）。
+            **fields: 可选的 Transition 字段（note, iter_n, verdict, commit）。
         """
         if to not in VALID_PHASES:
             raise ValueError(
@@ -161,44 +160,52 @@ class State:
                 f"Must be one of {sorted(VALID_PHASES)}"
             )
 
-        timestamp = fields.pop("timestamp", None) or datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        timestamp = fields.get("timestamp") or _now_iso()
 
         # First transition ever → from_phase is None (bootstrap marker)
-        from_phase = None if len(self.history) == 0 else self.phase
+        from_phase: Phase | None = None if len(self.history) == 0 else self.phase
 
         t = Transition(
             from_phase=from_phase,
             to_phase=to,
             by=by,
             timestamp=timestamp,
-            note=fields.pop("note", ""),
-            iter_n=fields.pop("iter_n", self.iteration),
-            verdict=fields.pop("verdict", None),
-            commit=fields.pop("commit", None),
+            note=fields.get("note", ""),
+            iter_n=fields.get("iter_n", self.iteration),
+            verdict=fields.get("verdict"),
+            commit=fields.get("commit"),
         )
 
         self.phase = to
         self.history.append(t)
         self.last_activity = timestamp
 
-    # ---- atomic I/O ----
+        # Mirror convenience fields from the transition
+        if t.iter_n is not None:
+            self.iteration = t.iter_n
+        if t.commit is not None:
+            self.last_dev_commit = t.commit
+        if t.verdict is not None:
+            self.last_review_verdict = t.verdict
 
-    def atomic_write(self, path: Path) -> None:
-        """原子写：先写 .tmp 文件，再 os.replace 到目标路径。"""
-        d = self.to_dict()
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
-        path.parent.mkdir(parents=True, exist_ok=True)
+    # ---- Atomic I/O ---------------------------------------------------------
+
+    def atomic_write(self, filepath: Path | str) -> None:
+        """原子写：先写 .tmp 文件，再 os.rename 到目标路径。"""
+        filepath = Path(filepath)
+        tmp_path = filepath.with_suffix(filepath.suffix + ".tmp")
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        data = self.to_dict()
         with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(d, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_path, path)
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.rename(tmp_path, filepath)
 
     @classmethod
-    def atomic_read(cls, path: Path) -> "State":
+    def atomic_read(cls, filepath: Path | str) -> "State":
         """从文件读取 State。文件不存在时返回默认 State。"""
-        if not path.exists():
+        filepath = Path(filepath)
+        if not filepath.exists():
             return cls()
-        with open(path, "r", encoding="utf-8") as f:
-            d = json.load(f)
-        return cls.from_dict(d)
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return cls.from_dict(data)
