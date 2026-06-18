@@ -62,7 +62,12 @@ class PipelineLoader:
         {"claude", "codex", "hermes", "openclaw"}
     )
 
-    # Required agent roles
+    # Valid agent roles (matches interfaces.AgentRole)
+    VALID_ROLES: frozenset[str] = frozenset(
+        {"planner", "developer", "reviewer"}
+    )
+
+    # Required agent roles（planner 是可选角色，无 planner 时退化为 2-agent 模式）
     REQUIRED_AGENTS: frozenset[str] = frozenset({"developer", "reviewer"})
 
     # ------------------------------------------------------------------
@@ -141,6 +146,20 @@ class PipelineLoader:
     # dry_run
     # ------------------------------------------------------------------
 
+    def mode(self, spec: PipelineSpec) -> str:
+        """返回 pipeline 模式：``"4-agent"`` 或 ``"2-agent"``。
+
+        Planner 存在 → ``"4-agent"``（Planner → Developer ↔ Reviewer → Observer）。
+        无 Planner → ``"2-agent"``（Developer ↔ Reviewer，向后兼容 V1）。
+
+        Args:
+            spec: A loaded ``PipelineSpec``.
+
+        Returns:
+            ``"4-agent"`` 如果 spec.agents 包含 planner，否则 ``"2-agent"``。
+        """
+        return "4-agent" if "planner" in spec.agents else "2-agent"
+
     def dry_run(self, spec: PipelineSpec) -> bool:
         """Check that every agent's prompt file exists on disk.
 
@@ -188,14 +207,21 @@ class PipelineLoader:
                     f"Agent '{key}' definition must be a mapping"
                 )
 
+            role = ad.get("role", "")
+            if role not in self.VALID_ROLES:
+                raise PipelineValidationError(
+                    f"Invalid role '{role}' for agent '{key}'. "
+                    f"Valid roles: {sorted(self.VALID_ROLES)}"
+                )
+
             runtime = ad.get("runtime", "")
             if runtime not in self.VALID_RUNTIMES:
                 raise PipelineValidationError(
                     f"Invalid runtime '{runtime}' for agent '{key}'"
                 )
 
-            result[ad["role"]] = AgentSpec(
-                role=ad["role"],
+            result[role] = AgentSpec(
+                role=role,
                 runtime=runtime,
                 model=ad.get("model", ""),
                 system_prompt_path=Path(ad.get("system_prompt_path", "")),

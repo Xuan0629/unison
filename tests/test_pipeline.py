@@ -378,6 +378,259 @@ agents:
 
 
 # ============================================================================
+# Test4AgentMode — V2 4-agent 模式测试
+# ============================================================================
+
+
+class Test4AgentMode:
+    """4-agent 模式（Planner → Developer ↔ Reviewer → Observer）测试。"""
+
+    def test_load_4_agent_pipeline(self, tmp_path):
+        """加载包含 planner、developer、reviewer 的 4-agent pipeline。"""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  planner:
+    role: planner
+    runtime: hermes
+    model: qwen3.7-plus
+    system_prompt_path: "prompts/planner.md"
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        assert spec.version == "1.0"
+        assert "planner" in spec.agents
+        assert "developer" in spec.agents
+        assert "reviewer" in spec.agents
+        assert len(spec.agents) == 3
+
+    def test_mode_returns_4_agent_when_planner_present(self, tmp_path):
+        """planner 存在时 mode() 返回 "4-agent"。"""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  planner:
+    role: planner
+    runtime: hermes
+    model: qwen3.7-plus
+    system_prompt_path: "prompts/planner.md"
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert loader.mode(spec) == "4-agent"
+
+    def test_mode_returns_2_agent_when_planner_absent(self, tmp_path):
+        """无 planner 时 mode() 返回 "2-agent"（向后兼容 V1）。"""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert loader.mode(spec) == "2-agent"
+
+    def test_2_agent_backward_compatible(self, tmp_path):
+        """无 planner 的 2-agent pipeline 正常加载（向后兼容）。"""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        assert spec.version == "1.0"
+        assert "planner" not in spec.agents
+        assert "developer" in spec.agents
+        assert "reviewer" in spec.agents
+        assert len(spec.agents) == 2
+
+    def test_dry_run_4_agent_with_all_prompts(self, tmp_path):
+        """4-agent dry-run 在所有 prompt 文件存在时成功。"""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "planner.md").write_text("# Planner prompt")
+        (prompts_dir / "developer.md").write_text("# Developer prompt")
+        (prompts_dir / "reviewer.md").write_text("# Reviewer prompt")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  planner:
+    role: planner
+    runtime: hermes
+    model: qwen3.7-plus
+    system_prompt_path: "prompts/planner.md"
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        result = loader.dry_run(spec)
+        assert result is True
+
+    def test_dry_run_4_agent_missing_planner_prompt(self, tmp_path):
+        """4-agent dry-run 在 planner prompt 缺失时失败。"""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "developer.md").write_text("# Developer prompt")
+        (prompts_dir / "reviewer.md").write_text("# Reviewer prompt")
+        # planner.md 不存在
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  planner:
+    role: planner
+    runtime: hermes
+    model: qwen3.7-plus
+    system_prompt_path: "prompts/planner.md"
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        with pytest.raises(PipelineValidationError, match="planner"):
+            loader.dry_run(spec)
+
+    def test_planner_agent_spec_attributes(self, tmp_path):
+        """planner AgentSpec 包含正确的 role、runtime、model、system_prompt_path。"""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  planner:
+    role: planner
+    runtime: hermes
+    model: qwen3.7-plus
+    system_prompt_path: "prompts/planner.md"
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        planner = spec.agents["planner"]
+        assert planner.role == "planner"
+        assert planner.runtime == "hermes"
+        assert planner.model == "qwen3.7-plus"
+        assert planner.system_prompt_path == Path("prompts/planner.md")
+
+    def test_invalid_agent_role_raises_error(self, tmp_path):
+        """无效的 agent role 抛 PipelineValidationError。"""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+  invalid_agent:
+    role: orchestrator
+    runtime: hermes
+    model: gpt-4
+    system_prompt_path: "prompts/orchestrator.md"
+""")
+        loader = PipelineLoader()
+        with pytest.raises(PipelineValidationError, match="Invalid role"):
+            loader.load(pipeline_file)
+
+    def test_planner_not_in_required_agents(self):
+        """planner 不在 REQUIRED_AGENTS 中（可选角色）。"""
+        loader = PipelineLoader()
+        assert "planner" not in loader.REQUIRED_AGENTS
+        assert "developer" in loader.REQUIRED_AGENTS
+        assert "reviewer" in loader.REQUIRED_AGENTS
+
+
+# ============================================================================
 # TestDAGScheduler — V2 DAG 多 phase 并行测试
 # ============================================================================
 
