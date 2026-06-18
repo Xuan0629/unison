@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -140,7 +141,7 @@ class World:
         """HarnessOptimizer proposal for iteration *iter_n*."""
         return self.reports_dir / f"optimizer-{iter_n}.md"
 
-    def agent_log(self, role: str, iter_n: int, timestamp: str) -> Path:
+    def agent_log(self, role: Literal["planner", "developer", "reviewer"], iter_n: int, timestamp: str) -> Path:
         """Agent subprocess log file.
 
         Args:
@@ -149,3 +150,25 @@ class World:
             timestamp: ISO-like timestamp string (e.g. ``2026-06-18T120000Z``).
         """
         return self.logs_dir / f"{role}_iter-{iter_n}_{timestamp}.log"
+
+    # ---- directory creation ----
+
+    def ensure_directories(self) -> None:
+        """Create all required directories if they don't exist.
+
+        Idempotent — safe to call multiple times.
+        """
+        dirs = [
+            self.root / "prd",
+            self.src,
+            self.tests,
+            self.reviews_dir,
+            self.inbox_dir,
+            self.outbox_dir,
+            self.observer_dir,
+            self.reports_dir,
+            self.logs_dir,
+            self.unison_dir,
+        ]
+        for d in dirs:
+            d.mkdir(parents=True, exist_ok=True)
