@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol, TypeAlias, Iterator
+from typing import Literal, Protocol, TypeAlias, Iterator, TypedDict
 from enum import Enum
 
 # ============================================================================
