@@ -470,6 +470,36 @@ class VerdictParseError(Exception):
     """review 文件无法解析。"""
     pass
 
+
+# ============================================================================
+# ReviewerConfig — 多 Reviewer 并行审查
+# ============================================================================
+
+@dataclass(frozen=True)
+class ReviewerConfig:
+    """多 Reviewer 并行审查配置。
+
+    Attributes:
+        enabled: 启用多 Reviewer（False 时回退到单 Reviewer）。
+        count: Reviewer 数量（enabled=True 时生效）。
+        reconcile_strategy: verdict 合并策略。
+            "majority" — 多数投票（2 of 3 → PASS）。
+            "unanimous" — 全票通过（任意一个 REQUEST_CHANGES → REQUEST_CHANGES）。
+    """
+    enabled: bool = False
+    count: int = 3
+    reconcile_strategy: Literal["majority", "unanimous"] = "majority"
+
+    def __post_init__(self):
+        if self.count < 1:
+            raise ValueError("count must be >= 1")
+        if self.count % 2 == 0 and self.reconcile_strategy == "majority":
+            raise ValueError(
+                f"count={self.count} is even — majority vote needs an odd count "
+                f"to avoid ties"
+            )
+
+
 # ============================================================================
 # RiskEvaluator — 三元组规则引擎
 # ============================================================================
