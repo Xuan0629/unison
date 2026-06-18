@@ -23,6 +23,7 @@ from interfaces import (
     ProjectConfig,
     RiskMatrixConfig,
     SnapshotConfig,
+    Stage,
     World,
 )
 
@@ -270,3 +271,220 @@ class PipelineLoader:
             if key in raw:
                 kwargs[key] = raw[key]
         return RiskMatrixConfig(**kwargs)
+
+
+# ============================================================================
+# DAGScheduler — V2 多 phase 并行调度器
+# ============================================================================
+
+
+class DAGScheduler:
+    """DAG 调度器。解析依赖关系，调度 Stage 并行执行。
+
+    用法::
+
+        stages = [
+            Stage(name="a", dependencies=[]),
+            Stage(name="b", dependencies=["a"]),
+        ]
+        scheduler = DAGScheduler(stages)
+        results = scheduler.execute_parallel(executor=my_executor, max_workers=4)
+    """
+
+    def __init__(self, stages: list[Stage]) -> None:
+        """构建依赖图并检测环。
+
+        Args:
+            stages: DAG 中的 Stage 列表。
+
+        Raises:
+            ValueError: 如果依赖图包含环，或依赖引用了不存在的 Stage。
+        """
+        self.stages: list[Stage] = stages
+        self._graph: dict[str, set[str]] = {}  # stage_name → dependencies
+
+        # 校验：Stage name 唯一
+        seen: set[str] = set()
+        for stage in stages:
+            if stage.name in seen:
+                raise ValueError(
+                    f"Duplicate Stage name: {stage.name!r}"
+                )
+            seen.add(stage.name)
+
+        # 校验：依赖的 Stage 必须存在
+        for stage in stages:
+            for dep in stage.dependencies:
+                if dep not in seen:
+                    raise ValueError(
+                        f"Stage {stage.name!r} depends on unknown "
+                        f"Stage {dep!r}"
+                    )
+
+        self._build_graph()
+
+        # 检测环
+        if self._has_cycle():
+            raise ValueError("DAG contains a cycle")
+
+    def _build_graph(self) -> None:
+        """构建依赖图：stage_name → set of dependency names。"""
+        for stage in self.stages:
+            self._graph[stage.name] = set(stage.dependencies)
+
+    def _has_cycle(self) -> bool:
+        """检测依赖图是否有环（DFS）。
+
+        Returns:
+            ``True`` 如果图中存在环。
+        """
+        visited: set[str] = set()
+        rec_stack: set[str] = set()
+
+        def dfs(node: str) -> bool:
+            visited.add(node)
+            rec_stack.add(node)
+
+            for dep in self._graph.get(node, set()):
+                if dep not in visited:
+                    if dfs(dep):
+                        return True
+                elif dep in rec_stack:
+                    return True
+
+            rec_stack.remove(node)
+            return False
+
+        for node in self._graph:
+            if node not in visited:
+                if dfs(node):
+                    return True
+        return False
+
+    def topological_sort(self) -> list[str]:
+        """返回拓扑排序的 Stage name 列表（依赖在前，被依赖在后）。
+
+        使用 Kahn 算法（BFS 入度归零）。
+
+        Returns:
+            拓扑排序的 Stage name 列表。
+
+        Raises:
+            ValueError: 如果图中包含环（正常情况下不应发生，因为
+                ``__init__`` 已检测）。
+        """
+        # 计算入度：每个 Stage 有多少个未满足的依赖
+        in_degree: dict[str, int] = {name: 0 for name in self._graph}
+        for node, deps in self._graph.items():
+            # node 依赖 deps 中的每个 Stage，所以 node 的入度 = len(deps)
+            in_degree[node] = len(deps)
+
+        # 入度为 0 的节点没有依赖，可以先执行
+        queue = [name for name, degree in in_degree.items() if degree == 0]
+        result: list[str] = []
+
+        while queue:
+            node = queue.pop(0)
+            result.append(node)
+
+            # 找到依赖 node 的 Stage，减少其入度
+            for other, deps in self._graph.items():
+                if node in deps:
+                    in_degree[other] -= 1
+                    if in_degree[other] == 0:
+                        queue.append(other)
+
+        if len(result) != len(self._graph):
+            raise ValueError("DAG contains a cycle")
+
+        return result
+
+    def ready_stages(self, completed: set[str]) -> list[Stage]:
+        """返回依赖已满足、可执行的 Stage 列表。
+
+        Args:
+            completed: 已成功完成的 Stage name 集合。
+
+        Returns:
+            可立即执行的 Stage 列表（所有依赖都在 *completed* 中）。
+        """
+        ready: list[Stage] = []
+        for stage in self.stages:
+            if stage.name in completed:
+                continue
+            if all(dep in completed for dep in stage.dependencies):
+                ready.append(stage)
+        return ready
+
+    def execute_parallel(
+        self,
+        executor: callable,
+        max_workers: int = 4,
+    ) -> dict[str, bool]:
+        """并行执行 DAG。
+
+        无依赖的 Stage 同时提交到线程池。每完成一个 Stage 即检查是否有
+        新的 Stage 变得可执行。依赖失败 Stage 的后续 Stage 自动标记失败。
+
+        Args:
+            executor: 执行单个 Stage 的可调用对象
+                ``(stage: Stage) -> bool``。
+            max_workers: 最大并行数。
+
+        Returns:
+            ``{stage_name: success}`` 的映射。
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        completed: set[str] = set()
+        failed: set[str] = set()
+        results: dict[str, bool] = {}
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            while len(completed) + len(failed) < len(self.stages):
+                ready = self.ready_stages(completed)
+                
+                # 过滤掉已经在 completed 或 failed 中的 Stage
+                ready = [
+                    s for s in ready
+                    if s.name not in completed and s.name not in failed
+                ]
+
+                # 过滤掉依赖已失败 Stage 的 ready stages（失败传播）
+                ready = [
+                    s for s in ready
+                    if not any(dep in failed for dep in s.dependencies)
+                ]
+
+                if not ready:
+                    # 没有可执行的 Stage，但有未完成的
+                    # → 死锁或所有剩余 Stage 的依赖都已失败
+                    remaining = [
+                        s.name for s in self.stages
+                        if s.name not in completed and s.name not in failed
+                    ]
+                    for name in remaining:
+                        results[name] = False
+                        failed.add(name)
+                    break
+
+                futures = {
+                    pool.submit(executor, stage): stage
+                    for stage in ready
+                }
+
+                # 不使用 as_completed，直接对每个 future 调用 result(timeout)
+                # 这样可以正确触发超时
+                for future, stage in futures.items():
+                    try:
+                        success = future.result(timeout=stage.timeout)
+                        results[stage.name] = success
+                        if success:
+                            completed.add(stage.name)
+                        else:
+                            failed.add(stage.name)
+                    except Exception:
+                        results[stage.name] = False
+                        failed.add(stage.name)
+
+        return results
