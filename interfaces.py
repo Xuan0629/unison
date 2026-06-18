@@ -226,6 +226,20 @@ class Stage:
 
 
 @dataclass(frozen=True)
+class WorktreeConfig:
+    """git worktree 配置（V2 并行 Developer）。
+
+    Attributes:
+        enabled: 是否启用 worktree 隔离。
+        base_branch: 新 worktree 的基准分支。
+        worktree_root: worktree 存放目录（相对于项目根）。
+    """
+    enabled: bool = False
+    base_branch: str = "main"
+    worktree_root: Path = Path(".worktrees")
+
+
+@dataclass(frozen=True)
 class PipelineSpec:
     """一次 pipeline 运行的全部配置（不可变）。"""
     version: str  # "1.0"
