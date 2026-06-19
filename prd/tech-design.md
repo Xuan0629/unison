@@ -132,54 +132,97 @@ ORDER BY id
    the linear `dev_active ↔ dev_review` loop. Otherwise fall through
    to the existing linear loop (preserves V1 2-agent behavior).
 
-3. **DAGScheduler timeout (L515)** — deadline-aware scheduler loop:
+3. **DAGScheduler timeout (L515)** — replace `ThreadPoolExecutor`
+   context manager with a **deadline-aware** lifecycle. The current
+   `execute_parallel(executor, max_workers)` shape has
+   `executor(stage) -> bool`, so the loop should run per stage with
+   explicit deadline tracking, not per future with `stage.fn`/`args`
+   (those fields don't exist on the frozen `Stage` contract).
+
+   **New `execute_parallel` shape (target)**:
+
    ```python
    import time
    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
-   self._executor = ThreadPoolExecutor(max_workers=N)
-   # Map: future -> (stage, submit_time, deadline)
-   futures: dict = {}
-   for stage in ready:
-       fut = self._executor.submit(stage.fn, *stage.args)
-       deadline = time.monotonic() + stage.timeout
-       futures[fut] = (stage, time.monotonic(), deadline)
+   def execute_parallel(
+       self,
+       executor: callable,
+       max_workers: int = 4,
+       pool_factory: callable = ThreadPoolExecutor,
+   ) -> dict[str, bool]:
+       completed: set[str] = set()
+       failed: set[str] = set()
+       results: dict[str, bool] = {}
 
-   try:
-       while futures:
-           # Brief wait for any completion
-           done, _ = wait(futures, timeout=0.05, return_when=FIRST_COMPLETED)
-           now = time.monotonic()
-           # Handle completed
-           for f in done:
-               stage, _, _ = futures.pop(f)
-               self._record_result(stage, f.result())
-           # Handle overdue (running but past deadline)
-           overdue = [
-               (f, s, t, d) for f, (s, t, d) in futures.items()
-               if now >= d
-           ]
-           for f, stage, _, _ in overdue:
-               futures.pop(f)
-               # Python cannot kill a running thread, but the future
-               # is removed from the active map so the scheduler
-               # returns. The orphan thread will eventually finish
-               # (or hit daemon-thread teardown at process exit).
-               self._record_result(stage, TimeoutError(f"stage {stage.name} exceeded {stage.timeout}s"))
-           # Submit newly-ready stages
-           for stage in self._newly_ready(completed):
-               fut = self._executor.submit(stage.fn, *stage.args)
-               futures[fut] = (stage, time.monotonic(), time.monotonic() + stage.timeout)
-   finally:
-       # cancel_futures cancels PENDING (not yet started) futures;
-       # running threads are orphaned and may continue in the
-       # background. Use a daemon executor or accept the leak in
-       # test environments.
-       self._executor.shutdown(wait=False, cancel_futures=True)
+       # `pool_factory` is injectable so tests can pass a daemon pool.
+       with pool_factory(max_workers=max_workers) as pool:
+           # Map: future -> (stage, deadline)
+           futures: dict = {}
+           for stage in self._ready(completed, failed):
+               fut = pool.submit(executor, stage)
+               futures[fut] = (stage, time.monotonic() + stage.timeout)
+
+           while futures:
+               done, _ = wait(futures, timeout=0.05,
+                              return_when=FIRST_COMPLETED)
+               now = time.monotonic()
+
+               # Process completions
+               for f in done:
+                   stage, _ = futures.pop(f)
+                   try:
+                       success = f.result()
+                       results[stage.name] = success
+                       (completed if success else failed).add(stage.name)
+                   except Exception as e:
+                       results[stage.name] = False
+                       failed.add(stage.name)
+
+               # Detect overdue running stages
+               overdue = [
+                   (f, s) for f, (s, d) in futures.items()
+                   if now >= d
+               ]
+               for f, stage in overdue:
+                   futures.pop(f)
+                   results[stage.name] = False
+                   failed.add(stage.name)
+                   # Stage thread is orphaned (Python cannot kill it);
+                   # the daemon=True factory in tests lets the test
+                   # process exit cleanly. Documented limitation.
+
+               # Submit newly-ready stages
+               new_ready = self._ready(completed, failed)
+               for stage in new_ready:
+                   fut = pool.submit(executor, stage)
+                   futures[fut] = (stage, time.monotonic() + stage.timeout)
+
+           # Propagate failure to descendants
+           for stage in self.stages:
+               if stage.name in results:
+                   continue
+               if any(dep in failed for dep in stage.dependencies):
+                   results[stage.name] = False
+                   failed.add(stage.name)
+
+       return results
    ```
-   **Key insight**: the scheduler returns within `max(stage.timeout)`
-   + small grace, regardless of how long any individual thread takes
-   to actually die. Running threads are orphaned, not killed.
+
+   The `pool_factory` parameter (default `ThreadPoolExecutor`) is
+   the **injection point** for tests. Tests can pass:
+
+   ```python
+   class DaemonThreadPool(ThreadPoolExecutor):
+       def _adjust_thread_count(self):
+           super()._adjust_thread_count()
+           for t in self._threads:
+               t.daemon = True
+   ```
+
+   or simpler, a wrapper that patches `_threads` post-init. This
+   keeps the production code unchanged but makes the test
+   teardown deterministic.
 
 ### Acceptance tests (in `tests/test_pipeline.py`)
 
@@ -188,19 +231,17 @@ ORDER BY id
 - `test_orchestrator_routes_to_dag_scheduler` — set `spec.dag`;
   assert `_run_state_machine` calls `DAGScheduler.execute_parallel`
   and does not enter the linear loop.
-- `test_dag_scheduler_returns_on_hung_stage` — fake stage
-  `def hang(): time.sleep(60)`; execute_parallel with
-  `timeout=2`; assert returns within `2 + 1s` with the stage
-  marked failed (recording a `TimeoutError`).
-- `test_dag_scheduler_does_not_hang_test_process` — same setup;
-  after the test, assert no non-daemon threads from the executor
-  remain in `threading.enumerate()`. (Use
-  `executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="dag")`
-  with a custom factory that sets `thread.daemon = True` for the
-  test, to make the test deterministic.)
+- `test_dag_scheduler_returns_on_hung_stage` — fake executor
+  `def hang(stage): time.sleep(60)`; scheduler with
+  `stage.timeout=2`; assert returns within `2 + 1s` with the
+  stage marked failed (recorded as `False` in `results`).
 - `test_dag_scheduler_submits_newly_ready_after_completion` —
-  stage A → stage B (A's output feeds B); assert B is submitted
-  only after A's future is in `done`.
+  stage A → stage B; assert B is submitted only after A's future
+  is in `done`.
+- `test_dag_scheduler_daemon_factory_for_tests` — pass
+  `pool_factory=DaemonThreadPool`; after `execute_parallel`
+  returns, assert no non-daemon threads from the pool remain
+  in `threading.enumerate()`.
 
 ---
 
@@ -324,12 +365,21 @@ helper can land in Iter 1 as a standalone module.
 
 1. **Prompt assembly (L579)**: replace the hand-built string in
    `_build_prompt` with a call to `assemble_context(...)`:
+
    ```python
+   from dataclasses import replace
    from unison.context_deflate import assemble_context, extract_top_findings
    from unison.budget import BudgetTracker
 
    def _build_prompt(self, role, iteration):
-       tracker = BudgetTracker.from_config(self.spec.budget)
+       # Construct BudgetTracker using only existing constructor args.
+       # No `from_config` classmethod — it does not exist on the
+       # frozen surface.
+       tracker = BudgetTracker(
+           daily_limit=self.spec.budget.daily_token_limit,
+           per_task_limit=self.spec.budget.per_task_limit,
+           persist_path=self.spec.world.unison_dir / "budget.json",
+       )
        system_prompt = (self.spec.world.root /
                         self.spec.agents[role].system_prompt_path).read_text()
        top_findings = []
@@ -341,14 +391,51 @@ helper can land in Iter 1 as a standalone module.
            if prev.exists():
                top_findings = extract_top_findings(prev, n=3)
        diff = self._recent_diff()
+       # Use the existing `current_usage` property; do NOT call a
+       # non-existent `tracker.remaining()`. Remaining = limit - used.
+       remaining = tracker.daily_limit - tracker.current_usage
        return assemble_context(
            system_prompt=system_prompt,
            task="read prd/PRD.md and prd/tech-design.md, fix V2 issues",
            top_findings=top_findings,
            diff=diff,
-           budget=tracker.remaining(),
+           budget=remaining,
        )
    ```
+
+2. **Downgrade runner selection** (frozen `AgentSpec` copy):
+   The Orchestrator must NOT mutate `self.spec.agents[role]`. When
+   the budget is over and `overflow_action="downgrade"`, build a
+   new `AgentSpec` using `dataclasses.replace` and select the
+   runner from that:
+
+   ```python
+   from dataclasses import replace
+
+   def _select_runner(self, role):
+       """Pick a runner for *role*, applying downgrade if needed."""
+       agent_spec = self.spec.agents[role]
+       tracker = self._budget_tracker  # shared BudgetTracker
+       if (tracker.should_downgrade()
+           and self.spec.budget.overflow_action == "downgrade"
+           and role in self.spec.budget.downgrade_map):
+           target = self.spec.budget.downgrade_map[role]["to"]
+           # Frozen-safe copy: `replace` returns a new frozen instance
+           # with the field swapped. The original spec is unchanged.
+           effective_spec = replace(agent_spec, runtime=target)
+       else:
+           effective_spec = agent_spec
+       runner = self._runners.get(effective_spec.runtime)
+       if runner is None:
+           self.halt(f"No runner for runtime: {effective_spec.runtime}")
+           return None, None
+       return runner, effective_spec
+   ```
+
+   This is the **only** mechanism for downgrade: `dataclasses.replace`
+   on the frozen `AgentSpec`, never mutation. Tests verify that
+   `self.spec.agents[role].runtime` is unchanged after a downgrade
+   run.
 
 2. **`assemble_context` arguments** (must be defined exactly):
    - `system_prompt: str` — full content of agent's prompt file
