@@ -745,3 +745,216 @@ class TestObserverDualWrite:
         content = world.notifications_file.read_text()
         lines = [line for line in content.strip().split("\n") if line]
         assert len(lines) == 3
+
+
+# ============================================================================
+# Phase 1 — Observer liveness + ENOSPC fallback + report file
+# ============================================================================
+
+
+class TestObserverLivenessTimedLoop:
+    """Phase 1: Liveness check fires on idle (timed-out) state."""
+
+    def test_observer_runs_liveness_on_idle_state(self, tmp_path, monkeypatch):
+        """fake next_event returns None twice; liveness check fires."""
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        # Write state with recent activity so check_liveness passes
+        state_data = {
+            "version": "1.0",
+            "phase": "dev_active",
+            "iteration": 0,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": None,
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        }
+        world.state_file.write_text(_json.dumps(state_data))
+
+        mock = MockWatcher()
+        mock.watch([world.unison_dir, world.observer_dir])
+
+        observer = Observer(world=world, watcher=mock, poll_interval=1)
+
+        liveness_checks = []
+
+        def fake_liveness(state=None):
+            """Record that liveness was checked."""
+            liveness_checks.append(True)
+            return True
+
+        observer.check_liveness = fake_liveness
+
+        def run_observer():
+            try:
+                observer.run()
+            except RuntimeError:
+                pass
+
+        thread = threading.Thread(target=run_observer, daemon=True)
+        thread.start()
+        time.sleep(1.5)  # Wait for at least one poll_interval cycle
+        observer.stop()
+        thread.join(timeout=3.0)
+
+        # At least one liveness check should have fired
+        assert len(liveness_checks) >= 1, (
+            f"Expected >=1 liveness checks, got {len(liveness_checks)}"
+        )
+
+    def test_observer_enospc_falls_back_to_polling(self, tmp_path):
+        """fake watch() raises OSError with ENOSPC; _use_polling becomes True."""
+        import errno as _errno
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        # Write state so timed liveness check has something to read
+        import json as _json
+        state_data = {
+            "version": "1.0",
+            "phase": "dev_active",
+            "iteration": 0,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": None,
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        }
+        world.state_file.write_text(_json.dumps(state_data))
+
+        # Create a watcher class that raises OSError(ENOSPC) on watch()
+        class ENOSPCWatcher(MockWatcher):
+            def watch(self, paths):
+                raise OSError(_errno.ENOSPC, "inotify watch limit reached")
+
+        watcher = ENOSPCWatcher()
+        observer = Observer(world=world, watcher=watcher, poll_interval=1)
+
+        def run_observer():
+            try:
+                observer.run()
+            except RuntimeError:
+                pass
+
+        thread = threading.Thread(target=run_observer, daemon=True)
+        thread.start()
+        time.sleep(0.5)
+        observer.stop()
+        thread.join(timeout=3.0)
+
+        # _use_polling should be True after ENOSPC
+        assert observer._use_polling is True, (
+            f"Expected _use_polling=True after ENOSPC, got {observer._use_polling}"
+        )
+
+
+class TestObserverReportFile:
+    """Phase 1: Notification sink writes report file."""
+
+    def test_observer_notifications_write_report_file(self, tmp_path):
+        """Call _process_new_notifications(); assert report file exists."""
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        # Write a state.json first for the full report
+        import json as _json
+        state_data = {
+            "version": "1.0",
+            "phase": "dev_active",
+            "iteration": 1,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": None,
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        }
+        world.state_file.write_text(_json.dumps(state_data))
+
+        # Write a notification so there's something to process
+        notif_line = _json.dumps({
+            "timestamp": "2026-06-19T10:00:00Z",
+            "phase": "dev_active",
+            "severity": "info",
+            "title": "Test notification",
+            "body": "Test body",
+        })
+        world.notifications_file.write_text(notif_line + "\n")
+
+        observer = Observer(world=world)
+
+        # Call _process_new_notifications — should write report
+        observer._process_new_notifications()
+
+        report_path = world.report_file(1)
+        assert report_path.exists(), f"Report file {report_path} should exist"
+        content = report_path.read_text(encoding="utf-8")
+        assert "Observer Report" in content
+        assert "dev_active" in content
+
+    def test_observer_does_not_resend_old_offsets(self, tmp_path):
+        """Call _process_new_notifications twice; second call writes nothing new."""
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        # Write state.json
+        import json as _json
+        state_data = {
+            "version": "1.0",
+            "phase": "dev_active",
+            "iteration": 1,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": None,
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        }
+        world.state_file.write_text(_json.dumps(state_data))
+
+        # Write a notification
+        notif_line = _json.dumps({
+            "timestamp": "2026-06-19T10:00:00Z",
+            "phase": "dev_active",
+            "severity": "info",
+            "title": "Test notification",
+            "body": "Test body",
+        })
+        world.notifications_file.write_text(notif_line + "\n")
+
+        observer = Observer(world=world)
+
+        # First call — should process and write report
+        observer._process_new_notifications()
+
+        report_path = world.report_file(1)
+        assert report_path.exists()
+        first_mtime = report_path.stat().st_mtime
+
+        # Second call — offset has advanced, no new content → should skip
+        observer._process_new_notifications()
+
+        second_mtime = report_path.stat().st_mtime
+        # The report was not rewritten (same mtime)
+        assert first_mtime == second_mtime, (
+            f"Second call should not rewrite report, but mtime changed"
+        )
