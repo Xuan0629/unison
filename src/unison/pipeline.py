@@ -86,13 +86,11 @@ class PipelineLoader:
         {"claude", "codex", "hermes", "openclaw"}
     )
 
-    # Valid agent roles (matches interfaces.AgentRole)
-    VALID_ROLES: frozenset[str] = frozenset(
-        {"planner", "developer", "reviewer"}
-    )
+    # Valid agent roles (matches interfaces.AgentRole — now str, no longer restricted)
+    VALID_ROLES: frozenset[str] = frozenset()
 
-    # Required agent roles（planner 是可选角色，无 planner 时退化为 2-agent 模式）
-    REQUIRED_AGENTS: frozenset[str] = frozenset({"developer", "reviewer"})
+    # Required pipeline roles（planner 是可选角色，无 planner 时退化为 2-agent 模式）
+    REQUIRED_PIPELINE_ROLES: frozenset[str] = frozenset({"developer", "reviewer"})
 
     # ------------------------------------------------------------------
     # load
@@ -201,7 +199,9 @@ class PipelineLoader:
         Returns:
             ``"4-agent"`` 如果 spec.agents 包含 planner，否则 ``"2-agent"``。
         """
-        return "4-agent" if "planner" in spec.agents else "2-agent"
+        return "4-agent" if any(
+            a.effective_role == "planner" for a in spec.agents.values()
+        ) else "2-agent"
 
     def dry_run(self, spec: PipelineSpec) -> bool:
         """Check that every agent's prompt file exists on disk.
@@ -230,11 +230,30 @@ class PipelineLoader:
     # -- validation ----------------------------------------------------
 
     def _validate_required_agents(self, agents_raw: dict[str, Any]) -> None:
-        """Check that all required agent roles are present."""
-        for role in self.REQUIRED_AGENTS:
-            if role not in agents_raw:
+        """Check that all required pipeline roles are covered.
+
+        Each agent in *agents_raw* has an effective pipeline role:
+        ``pipeline_role`` if explicitly set, otherwise its ``role`` field.
+        At least one agent must map to each role in
+        ``REQUIRED_PIPELINE_ROLES``.
+        """
+        for required_role in self.REQUIRED_PIPELINE_ROLES:
+            found = False
+            for key, ad in agents_raw.items():
+                if not isinstance(ad, dict):
+                    continue
+                pr = ad.get("pipeline_role")
+                role = ad.get("role", "")
+                effective = pr if pr else role
+                if effective == required_role:
+                    found = True
+                    break
+            if not found:
                 raise PipelineValidationError(
-                    f"Missing required agent: {role}"
+                    f"Missing required pipeline_role: {required_role!r}. "
+                    f"At least one agent must map to this role "
+                    f"(via role= or pipeline_role=). "
+                    f"Currently configured: {list(agents_raw.keys())}"
                 )
 
     # -- builders ------------------------------------------------------
@@ -251,10 +270,9 @@ class PipelineLoader:
                 )
 
             role = ad.get("role", "")
-            if role not in self.VALID_ROLES:
+            if not role:
                 raise PipelineValidationError(
-                    f"Invalid role '{role}' for agent '{key}'. "
-                    f"Valid roles: {sorted(self.VALID_ROLES)}"
+                    f"Agent '{key}' is missing required field: role"
                 )
 
             runtime = ad.get("runtime", "")
@@ -269,6 +287,7 @@ class PipelineLoader:
                 model=ad.get("model", ""),
                 system_prompt_path=Path(ad.get("system_prompt_path", "")),
                 task_instruction=ad.get("task_instruction"),
+                pipeline_role=ad.get("pipeline_role"),
                 context_budget=ad.get("context_budget"),
             )
         return result

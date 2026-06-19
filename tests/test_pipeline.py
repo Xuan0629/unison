@@ -597,8 +597,8 @@ agents:
         assert planner.model == "qwen3.7-plus"
         assert planner.system_prompt_path == Path("prompts/planner.md")
 
-    def test_invalid_agent_role_raises_error(self, tmp_path):
-        """无效的 agent role 抛 PipelineValidationError。"""
+    def test_custom_role_is_accepted(self, tmp_path):
+        """Phase 11: 任意 role 字符串不再抛错 — AgentRole 现在是 str。"""
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text("""
 version: "1.0"
@@ -614,22 +614,23 @@ agents:
     runtime: codex
     model: gpt-5.5
     system_prompt_path: "prompts/reviewer.md"
-  invalid_agent:
+  orchestrator_agent:
     role: orchestrator
     runtime: hermes
     model: gpt-4
     system_prompt_path: "prompts/orchestrator.md"
 """)
         loader = PipelineLoader()
-        with pytest.raises(PipelineValidationError, match="Invalid role"):
-            loader.load(pipeline_file)
+        spec = loader.load(pipeline_file)
+        assert "orchestrator" in spec.agents
+        assert spec.agents["orchestrator"].role == "orchestrator"
 
-    def test_planner_not_in_required_agents(self):
-        """planner 不在 REQUIRED_AGENTS 中（可选角色）。"""
+    def test_planner_not_in_required_pipeline_roles(self):
+        """planner 不在 REQUIRED_PIPELINE_ROLES 中（可选角色）。"""
         loader = PipelineLoader()
-        assert "planner" not in loader.REQUIRED_AGENTS
-        assert "developer" in loader.REQUIRED_AGENTS
-        assert "reviewer" in loader.REQUIRED_AGENTS
+        assert "planner" not in loader.REQUIRED_PIPELINE_ROLES
+        assert "developer" in loader.REQUIRED_PIPELINE_ROLES
+        assert "reviewer" in loader.REQUIRED_PIPELINE_ROLES
 
 
 # ============================================================================
