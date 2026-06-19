@@ -11,8 +11,29 @@ check for prompt-file existence.
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+
+
+class _NonWaitingThreadPoolExecutor(ThreadPoolExecutor):
+    """ThreadPoolExecutor marker subclass for the production default.
+
+    The non-blocking behavior comes from the explicit
+    ``pool.shutdown(wait=False, cancel_futures=True)`` call in
+    ``DAGScheduler.execute_parallel``'s finally block — not from
+    overriding ``__exit__``. This subclass exists so the production
+    default can be distinguished from a user-supplied default
+    ``ThreadPoolExecutor`` and so future maintainers see the
+    rationale at the import site.
+
+    If you want to make the daemon-exit behavior more robust (e.g.
+    set ``thread.daemon = True`` on the worker threads), subclass
+    and override ``_adjust_thread_count`` here. The current
+    ``shutdown(wait=False, cancel_futures=True)`` is sufficient for
+    the deadline-aware scheduler because orphan worker threads do
+    not block process exit if the harness returns promptly.
+    """
 
 import yaml
 
@@ -590,13 +611,20 @@ class DAGScheduler:
         from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
         if pool_factory is None:
-            pool_factory = ThreadPoolExecutor
+            # Default to a non-blocking pool: on shutdown the executor
+            # does NOT wait for running workers (we already marked
+            # overdue stages failed in the loop). Without this, a
+            # hung stage would cause `execute_parallel` to block
+            # until the worker finishes, even though the scheduler
+            # has already given up on it.
+            pool_factory = _NonWaitingThreadPoolExecutor
 
         completed: set[str] = set()
         failed: set[str] = set()
         results: dict[str, bool] = {}
 
-        with pool_factory(max_workers=max_workers) as pool:
+        pool = pool_factory(max_workers=max_workers)
+        try:
             # Map: future -> (stage, deadline)
             futures: dict = {}
             in_flight: set[str] = set()
@@ -653,5 +681,12 @@ class DAGScheduler:
                 if any(dep in failed for dep in stage.dependencies):
                     results[stage.name] = False
                     failed.add(stage.name)
+        finally:
+            # Non-blocking shutdown: do not wait for running workers
+            # (which may include timed-out stages whose Python threads
+            # we cannot kill). cancel_futures cancels PENDING futures.
+            # This is what makes the production default path safe
+            # under hung-stage scenarios (Codex Iter 1 review).
+            pool.shutdown(wait=False, cancel_futures=True)
 
         return results
