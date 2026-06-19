@@ -79,7 +79,10 @@ class YamlFrontmatterParser:
                 f"Missing 'verdict' field in {review_path}"
             )
 
-        verdict_value = data["verdict"]
+        verdict_value = str(data["verdict"]).strip().upper().replace(" ", "_")
+        # E2E test found that Codex writes "changes_requested" (lowercase)
+        # while the parser expects "REQUEST_CHANGES". Normalize to UPPER_SNAKE
+        # so any reasonable casing works.
         if verdict_value not in ("PASS", "REQUEST_CHANGES"):
             raise VerdictParseError(
                 f"Invalid verdict '{verdict_value}' in {review_path} "
