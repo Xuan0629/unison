@@ -145,6 +145,7 @@ class AgentSpec:
     runtime: Runtime
     model: str
     system_prompt_path: Path  # 路径指向 prompt 模板文件
+    task_instruction: str | None = None  # Phase 11: override hardcoded task in _build_prompt
     context_budget: int | None = None  # V2: per-agent token budget override
 
     @property

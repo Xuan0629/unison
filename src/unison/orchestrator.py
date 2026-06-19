@@ -811,7 +811,10 @@ class Orchestrator:
         remaining = max(1, min(daily_remaining, per_task_remaining))
 
         # Build role-specific task instruction
-        if role == "planner":
+        agent_spec = self.spec.agents.get(role)
+        if agent_spec and agent_spec.task_instruction:
+            task = agent_spec.task_instruction
+        elif role == "planner":
             task = (
                 "Write the Product Requirements Document to prd/PRD.md "
                 "and the technical design to prd/tech-design.md."

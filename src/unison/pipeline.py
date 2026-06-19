@@ -268,6 +268,7 @@ class PipelineLoader:
                 runtime=runtime,
                 model=ad.get("model", ""),
                 system_prompt_path=Path(ad.get("system_prompt_path", "")),
+                task_instruction=ad.get("task_instruction"),
                 context_budget=ad.get("context_budget"),
             )
         return result
