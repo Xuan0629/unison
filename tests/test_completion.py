@@ -150,9 +150,9 @@ class TestGitCompletionDetector:
     def test_detect_nonexistent_log_file(self, tmp_path):
         """Detect with non-existent log file."""
         subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
-        
+
         log_path = tmp_path / "nonexistent.txt"
-        
+
         detector = GitCompletionDetector()
         result = detector.detect(
             workspace=tmp_path,
@@ -160,6 +160,148 @@ class TestGitCompletionDetector:
             role="developer",
             log_path=log_path
         )
-        
+
         # Should handle gracefully
         assert result.log_path == log_path
+
+    # ------------------------------------------------------------------
+    # Phase 4: planner artifact check
+    # ------------------------------------------------------------------
+
+    def test_detect_planner_with_both_artifacts(self, tmp_path):
+        """Phase 4: planner with both prd/PRD.md and prd/tech-design.md passes."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"],
+                       cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"],
+                       cwd=tmp_path, capture_output=True)
+
+        prd_dir = tmp_path / "prd"
+        prd_dir.mkdir()
+        (prd_dir / "PRD.md").write_text("# PRD")
+        (prd_dir / "tech-design.md").write_text("# tech-design")
+
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "planner"],
+                       cwd=tmp_path, capture_output=True)
+
+        log_path = tmp_path / "log.txt"
+        log_path.write_text("Planner output")
+
+        detector = GitCompletionDetector()
+        result = detector.detect(
+            workspace=tmp_path,
+            expected_iter=1,
+            role="planner",
+            log_path=log_path,
+        )
+        assert result.success is True
+        assert "planner artifact missing" not in (result.error or "")
+
+    def test_detect_planner_fails_without_prd(self, tmp_path):
+        """Phase 4: planner without prd/PRD.md fails."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"],
+                       cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"],
+                       cwd=tmp_path, capture_output=True)
+
+        # No prd/ dir at all
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "planner"],
+                       cwd=tmp_path, capture_output=True, check=False)
+
+        log_path = tmp_path / "log.txt"
+        log_path.write_text("Planner output")
+
+        detector = GitCompletionDetector()
+        result = detector.detect(
+            workspace=tmp_path,
+            expected_iter=1,
+            role="planner",
+            log_path=log_path,
+        )
+        assert result.success is False
+        assert "PRD.md" in (result.error or "")
+
+    def test_detect_planner_fails_without_tech_design(self, tmp_path):
+        """Phase 4: planner with PRD.md but missing tech-design.md fails."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"],
+                       cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"],
+                       cwd=tmp_path, capture_output=True)
+
+        prd_dir = tmp_path / "prd"
+        prd_dir.mkdir()
+        (prd_dir / "PRD.md").write_text("# PRD")
+        # No tech-design.md
+
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "planner"],
+                       cwd=tmp_path, capture_output=True)
+
+        log_path = tmp_path / "log.txt"
+        log_path.write_text("Planner output")
+
+        detector = GitCompletionDetector()
+        result = detector.detect(
+            workspace=tmp_path,
+            expected_iter=1,
+            role="planner",
+            log_path=log_path,
+        )
+        assert result.success is False
+        assert "tech-design.md" in (result.error or "")
+
+
+# ============================================================================
+# Phase 4: review-path helper
+# ============================================================================
+
+
+class TestReviewFileForPhase:
+    """Orchestrator._review_file_for_phase — Phase 4 fix.
+
+    Planning review must use a different filename than development
+    review so a stale planning PASS is not parsed as a dev verdict.
+    """
+
+    def test_planning_review_path(self, tmp_path):
+        from unison.orchestrator import Orchestrator
+        from unison.state import State
+        from unison.world import World
+        from interfaces import PipelineSpec, AgentSpec
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(
+            "version: '1.0'\nproject_root: '.'\n"
+            "agents:\n  developer:\n    role: developer\n    runtime: claude\n    model: m\n    system_prompt_path: prompts/d.md\n  reviewer:\n    role: reviewer\n    runtime: codex\n    model: m\n    system_prompt_path: prompts/r.md\n"
+        )
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "prompts" / "d.md").write_text("d")
+        (tmp_path / "prompts" / "r.md").write_text("r")
+
+        loader_module = __import__("unison.pipeline", fromlist=["PipelineLoader"])
+        spec = loader_module.PipelineLoader().load(pipeline_file)
+        orch = Orchestrator(spec=spec)
+        path = orch._review_file_for_phase("planning_review", 1)
+        assert path.name == "plan-iter-1.md"
+
+    def test_dev_review_path(self, tmp_path):
+        from unison.orchestrator import Orchestrator
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(
+            "version: '1.0'\nproject_root: '.'\n"
+            "agents:\n  developer:\n    role: developer\n    runtime: claude\n    model: m\n    system_prompt_path: prompts/d.md\n  reviewer:\n    role: reviewer\n    runtime: codex\n    model: m\n    system_prompt_path: prompts/r.md\n"
+        )
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "prompts" / "d.md").write_text("d")
+        (tmp_path / "prompts" / "r.md").write_text("r")
+
+        loader_module = __import__("unison.pipeline", fromlist=["PipelineLoader"])
+        spec = loader_module.PipelineLoader().load(pipeline_file)
+        orch = Orchestrator(spec=spec)
+        path = orch._review_file_for_phase("dev_review", 1)
+        assert path.name == "iter-1.md"
