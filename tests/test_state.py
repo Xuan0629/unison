@@ -48,7 +48,7 @@ class TestState:
     def test_create_state_default(self):
         """Create a state with default values."""
         s = State()
-        assert s.version == "1.0"
+        assert s.version == "2.0"
         assert s.phase == "init"
         assert s.iteration == 0
         assert s.history == []
@@ -81,7 +81,7 @@ class TestState:
             timestamp="2026-06-18T10:00:00Z"
         ))
         d = s.to_dict()
-        assert d["version"] == "1.0"
+        assert d["version"] == "2.0"
         assert d["phase"] == "planning_active"
         assert d["iteration"] == 1
         assert len(d["history"]) == 1
@@ -205,3 +205,93 @@ class TestStateValidation:
         s = State()
         with pytest.raises(ValueError):
             s.transition("invalid_phase", by="orchestrator")
+
+
+class TestStateSchemaMigration:
+    """Schema auto-migration integration tests for State."""
+
+    def test_from_dict_auto_migrates_v1_state(self):
+        """V1 dict (no dag_status, no reviewer_verdicts) → migrated V2 State."""
+        v1_dict = {
+            "version": "1.0",
+            "phase": "dev_active",
+            "iteration": 3,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": None,
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": None,
+        }
+        s = State.from_dict(v1_dict)
+        assert s.version == "2.0"
+        assert s.phase == "dev_active"
+        assert s.iteration == 3
+
+    def test_from_dict_no_migration_when_current(self):
+        """V2 dict does not trigger migration."""
+        v2_dict = {
+            "version": "2.0",
+            "phase": "planning_review",
+            "iteration": 1,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": None,
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": None,
+        }
+        s = State.from_dict(v2_dict)
+        assert s.version == "2.0"
+        assert s.phase == "planning_review"
+
+    def test_from_dict_missing_version_treated_as_v1(self):
+        """Dict without version key is treated as V1 and migrated."""
+        v1_no_version = {
+            "phase": "init",
+            "iteration": 0,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": None,
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": None,
+        }
+        s = State.from_dict(v1_no_version)
+        assert s.version == "2.0"
+
+    def test_atomic_read_migrates_v1_file(self, tmp_path):
+        """Write V1 state.json, atomic_read returns V2 State."""
+        import json
+
+        state_file = tmp_path / "state.json"
+        v1_data = {
+            "version": "1.0",
+            "phase": "dev_review",
+            "iteration": 2,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": "abc123",
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": "2026-06-18T12:00:00Z",
+        }
+        state_file.write_text(json.dumps(v1_data))
+
+        s = State.atomic_read(state_file)
+        assert s.version == "2.0"
+        assert s.phase == "dev_review"
+        assert s.last_dev_commit == "abc123"
+
+    def test_roundtrip_serialization_v2(self):
+        """State → dict → State roundtrip preserves V2 version."""
+        s1 = State(phase="done", iteration=5)
+        d = s1.to_dict()
+        s2 = State.from_dict(d)
+        assert s2.version == "2.0"
+        assert s2.phase == s1.phase
+        assert s2.iteration == s1.iteration

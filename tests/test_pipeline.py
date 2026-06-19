@@ -45,7 +45,7 @@ agents:
         loader = PipelineLoader()
         spec = loader.load(pipeline_file)
         
-        assert spec.version == "1.0"
+        assert spec.version == "2.0"
         assert spec.world.root == tmp_path
         assert "planner" in spec.agents
         assert "developer" in spec.agents
@@ -196,7 +196,9 @@ class TestPipelineValidation:
     """Pipeline validation tests."""
 
     def test_validate_missing_version(self, tmp_path):
-        """Validate pipeline without version field raises error."""
+        """Validate pipeline without version field is auto-migrated to V2.
+        Version is no longer required — missing version defaults to "1.0"
+        and is migrated to "2.0".  Still fails on missing reviewer."""
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text("""
 project_root: "."
@@ -207,9 +209,9 @@ agents:
     model: deepseek-v4-pro
     system_prompt_path: "prompts/developer.md"
 """)
-        
+
         loader = PipelineLoader()
-        with pytest.raises(PipelineValidationError, match="version"):
+        with pytest.raises(PipelineValidationError, match="reviewer"):
             loader.load(pipeline_file)
 
     def test_validate_missing_agents(self, tmp_path):
@@ -411,7 +413,7 @@ agents:
         loader = PipelineLoader()
         spec = loader.load(pipeline_file)
 
-        assert spec.version == "1.0"
+        assert spec.version == "2.0"
         assert "planner" in spec.agents
         assert "developer" in spec.agents
         assert "reviewer" in spec.agents
@@ -487,7 +489,7 @@ agents:
         loader = PipelineLoader()
         spec = loader.load(pipeline_file)
 
-        assert spec.version == "1.0"
+        assert spec.version == "2.0"
         assert "planner" not in spec.agents
         assert "developer" in spec.agents
         assert "reviewer" in spec.agents

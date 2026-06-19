@@ -86,7 +86,7 @@ class Transition:
 class State:
     """状态机单一真相源。Orchestrator 写，Observer 读。"""
 
-    version: str = "1.0"
+    version: str = "2.0"
     phase: Phase = "init"
     iteration: int = 0
     history: list[Transition] = field(default_factory=list)
@@ -127,10 +127,20 @@ class State:
 
     @classmethod
     def from_dict(cls, d: dict) -> "State":
-        """JSON 反序列化。"""
+        """JSON 反序列化。自动迁移旧版本 schema。"""
+        from unison.schema_migrate import (
+            CURRENT_VERSION,
+            STATE_MIGRATIONS,
+            migrate,
+        )
+
+        stored_version = d.get("version", "1.0")
+        if stored_version != CURRENT_VERSION:
+            d = migrate(d, STATE_MIGRATIONS, CURRENT_VERSION)
+
         last_review_path = d.get("last_review_path")
         return cls(
-            version=d.get("version", "1.0"),
+            version=d.get("version", CURRENT_VERSION),
             phase=d.get("phase", "init"),
             iteration=d.get("iteration", 0),
             history=[Transition.from_dict(t) for t in d.get("history", [])],

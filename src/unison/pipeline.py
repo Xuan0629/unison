@@ -105,6 +105,17 @@ class PipelineLoader:
                 "Pipeline file is empty or not a mapping"
             )
 
+        # ---- schema migration ----
+        from unison.schema_migrate import (
+            CURRENT_VERSION,
+            PIPELINE_MIGRATIONS,
+            migrate,
+        )
+
+        stored_version = raw.get("version", "1.0")
+        if stored_version != CURRENT_VERSION:
+            raw = migrate(raw, PIPELINE_MIGRATIONS, CURRENT_VERSION)
+
         # ---- version ----
         version = raw.get("version")
         if not version:
