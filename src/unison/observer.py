@@ -602,9 +602,15 @@ class Observer:
         except OSError as e:
             if getattr(e, "errno", None) == errno.ENOSPC or "ENOSPC" in str(e):
                 logger.warning(
-                    "ENOSPC on watch, falling back to polling mode"
+                    "ENOSPC on watch, switching to polling watcher"
                 )
                 self._use_polling = True
+                # Replace the inotify watcher with a real polling watcher.
+                # Without this, the InotifyWatcher with no registered
+                # watches would return None from every next_event() call
+                # and never detect file changes (Codex Iter 3 finding).
+                self.watcher = PollingWatcher()
+                self.watcher.watch(paths)
             else:
                 raise
 
