@@ -240,11 +240,10 @@ class InotifyWatcher:
                 err = ctypes.get_errno()
                 if err == errno.ENOSPC:
                     logger.warning(
-                        "inotify_add_watch(%s): %s — degrading",
+                        "inotify_add_watch(%s): %s — skipping directory",
                         watch_dir, os.strerror(err),
                     )
-                    self._running = False
-                    return
+                    continue
                 raise OSError(err, os.strerror(err))
 
             self._wd_to_path[wd] = watch_dir
@@ -561,18 +560,23 @@ class Observer:
         self,
         world: World,
         stall_threshold_seconds: int = 300,
+        poll_interval: int = 60,
         watcher: InotifyWatcher | PollingWatcher | MockWatcher | None = None,
     ) -> None:
         """
         Args:
             world: 项目工作区布局。
             stall_threshold_seconds: 停滞阈值（秒）。超过此时间无活动视为 stalled。
+            poll_interval: 轮询间隔（秒）。用于 next_event 超时 + liveness 检查。
             watcher: 文件监控器。None 则根据平台自动选择。
         """
         self.world = world
         self.stall_threshold_seconds = stall_threshold_seconds
+        self._poll_interval = poll_interval
         self.watcher = watcher if watcher is not None else self._create_default_watcher()
         self._running = False
+        self._use_polling = False
+        self._notification_offset = 0
 
     # ---- public API ----------------------------------------------------------
 
@@ -580,6 +584,10 @@ class Observer:
         """阻塞循环。监控 state.json + notifications.jsonl。Ctrl-C 退出。
 
         监控父目录而非文件，按文件名过滤（避免 atomic_write inode 陷阱）。
+
+        V2: Uses a select-style timed loop — on timeout (no events for
+        ``_poll_interval`` seconds), runs a liveness check on the
+        current state.  Falls back to polling mode on ENOSPC.
 
         Raises:
             RuntimeError: state.json 缺失时。
@@ -589,13 +597,39 @@ class Observer:
 
         # 监控两个父目录
         paths = [self.world.unison_dir, self.world.observer_dir]
-        self.watcher.watch(paths)
+        try:
+            self.watcher.watch(paths)
+        except OSError as e:
+            if getattr(e, "errno", None) == errno.ENOSPC or "ENOSPC" in str(e):
+                logger.warning(
+                    "ENOSPC on watch, falling back to polling mode"
+                )
+                self._use_polling = True
+            else:
+                raise
 
         self._running = True
         while self._running:
-            event = self.watcher.next_event(timeout_seconds=1.0)
+            event = self.watcher.next_event(timeout_seconds=self._poll_interval)
 
             if event is None:
+                # Timed out — check liveness
+                if self.world.state_file.exists():
+                    try:
+                        state = State.atomic_read(self.world.state_file)
+                        if not self.check_liveness(state):
+                            self._write_notification(Notification(
+                                timestamp=datetime.now(timezone.utc).isoformat(),
+                                phase=state.phase,
+                                severity="warn",
+                                title="Session stalled (timed liveness check)",
+                                body=(
+                                    f"No activity for {self.stall_threshold_seconds}s+ "
+                                    f"in phase {state.phase}"
+                                ),
+                            ))
+                    except Exception:
+                        pass
                 continue
 
             # 处理 overflow 事件（inotify 队列满）
@@ -672,18 +706,61 @@ class Observer:
         return elapsed < self.stall_threshold_seconds
 
     def send_full_report(self, session_id: str, report_path: Path) -> bool:
-        """全量报告发到启动器会话（仅当 --from-hermes-session 时）。
+        """Write a full report covering current state + recent notifications.
+
+        Creates the parent directory if it doesn't exist.  Writes a
+        timestamped summary of the current state and any unread
+        notification lines.
 
         Args:
             session_id: Target Hermes session ID.
-            report_path: Path to the report file to send.
+            report_path: Path to the report file to write.
 
         Returns:
-            True if the report was sent successfully.
+            True if the report was written successfully.
         """
-        # Stub implementation — the real send would use Hermes send_message.
-        if not report_path.exists():
-            return False
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+
+        lines: list[str] = []
+        lines.append(f"# Observer Report\n")
+        lines.append(f"Session: {session_id}\n")
+        lines.append(f"Timestamp: {datetime.now(timezone.utc).isoformat()}\n")
+        lines.append(f"\n")
+
+        # Include current state summary
+        if self.world.state_file.exists():
+            try:
+                state = State.atomic_read(self.world.state_file)
+                lines.append(f"## State\n")
+                lines.append(f"- Phase: {state.phase}\n")
+                lines.append(f"- Iteration: {state.iteration}\n")
+                lines.append(f"- Last activity: {state.last_activity}\n")
+                lines.append(f"- Halt signal: {state.halt_signal}\n")
+                if state.halt_reason:
+                    lines.append(f"- Halt reason: {state.halt_reason}\n")
+                lines.append(f"\n")
+            except Exception:
+                lines.append(f"## State\n")
+                lines.append(f"(could not read state.json)\n")
+                lines.append(f"\n")
+
+        # Include recent notifications
+        if self.world.notifications_file.exists():
+            try:
+                content = self.world.notifications_file.read_text(encoding="utf-8")
+                notif_lines = [l for l in content.strip().split("\n") if l.strip()]
+                if notif_lines:
+                    lines.append(f"## Notifications ({len(notif_lines)} total)\n")
+                    for nl in notif_lines[-20:]:  # Last 20 notifications
+                        lines.append(f"- {nl}\n")
+                else:
+                    lines.append(f"## Notifications\n")
+                    lines.append(f"(none)\n")
+            except OSError:
+                lines.append(f"## Notifications\n")
+                lines.append(f"(could not read notifications.jsonl)\n")
+
+        report_path.write_text("".join(lines), encoding="utf-8")
         return True
 
     # ---- private -------------------------------------------------------------
@@ -757,12 +834,30 @@ class Observer:
     def _process_new_notifications(self) -> None:
         """处理 notifications.jsonl 中新增的通知行。
 
-        读取并转发到 Discord（stub — 实际发送未实现）。
+        按文件偏移跟踪已处理内容，仅在新内容到达时写一次 report
+        文件。这保证每个状态变更只触发一次全量报告。
         """
-        # Stub: 在未来的 V1.2 中实现 Discord webhook 发送。
-        # 当前仅确保日志文件存在且可读。
+        if not self.world.notifications_file.exists():
+            return
+
         try:
-            if self.world.notifications_file.exists():
-                _ = self.world.notifications_file.read_text()
+            current_size = self.world.notifications_file.stat().st_size
         except OSError:
-            pass
+            return
+
+        if current_size <= self._notification_offset:
+            return  # No new content since last read
+
+        # Read only new content from the tracked offset
+        try:
+            with open(self.world.notifications_file, "r", encoding="utf-8") as f:
+                f.seek(self._notification_offset)
+                _new_data = f.read()
+        except OSError:
+            return
+
+        self._notification_offset = current_size
+
+        # Write a full report on each new state change
+        report_path = self.world.report_file(1)
+        self.send_full_report("observer", report_path)
