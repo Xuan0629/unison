@@ -240,10 +240,14 @@ class InotifyWatcher:
                 err = ctypes.get_errno()
                 if err == errno.ENOSPC:
                     logger.warning(
-                        "inotify_add_watch(%s): %s — skipping directory",
+                        "inotify_add_watch(%s): %s — raising for fallback",
                         watch_dir, os.strerror(err),
                     )
-                    continue
+                    # Raise ENOSPC so Observer.run() can switch to
+                    # PollingWatcher. Swallowing would leave the
+                    # inotify watcher with zero watches and no way
+                    # to detect file changes (Codex Iter 3).
+                    raise OSError(err, os.strerror(err))
                 raise OSError(err, os.strerror(err))
 
             self._wd_to_path[wd] = watch_dir
