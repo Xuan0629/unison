@@ -345,7 +345,7 @@ class Orchestrator:
                 return
 
             # ---- Verdict routing --------------------------------------------
-            verdict = self._parse_verdict(iteration)
+            verdict = self._parse_verdict(iteration, review_phase)
 
             if verdict == "PASS":
                 # Exit loop — review approved
@@ -694,13 +694,37 @@ class Orchestrator:
                 # Bootstrap failure is non-fatal in v1
                 pass
 
-    def _parse_verdict(self, iteration: int) -> str | None:
+    def _review_file_for_phase(
+        self, review_phase: str, iteration: int
+    ) -> Path:
+        """Return the canonical review-file path for a given review phase.
+
+        Planning review → ``reviews/plan-iter-{N}.md``.
+        Development (or other) review → ``reviews/iter-{N}.md``.
+
+        Phase 4 fix: planning and development reviews used to share
+        ``reviews/iter-{N}.md``, which let a stale planning PASS be
+        parsed as the dev verdict.
+        """
+        if review_phase == "planning_review":
+            return self.spec.world.reviews_dir / f"plan-iter-{iteration}.md"
+        return self.spec.world.reviews_dir / f"iter-{iteration}.md"
+
+    def _parse_verdict(
+        self, iteration: int, review_phase: str = "dev_review"
+    ) -> str | None:
         """Parse the verdict from the review file for *iteration*.
+
+        Args:
+            iteration: Loop iteration number.
+            review_phase: ``"planning_review"`` or ``"dev_review"``
+                (default). Used by Phase 4 review-path helper to pick
+                the correct file.
 
         Returns:
             "PASS", "REQUEST_CHANGES", or None on parse failure.
         """
-        review_path = self.spec.world.review_file(iteration)
+        review_path = self._review_file_for_phase(review_phase, iteration)
         if not review_path.exists():
             return None
 

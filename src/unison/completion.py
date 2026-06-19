@@ -39,14 +39,46 @@ class GitCompletionDetector:
         # Success requires at least one commit on the branch.
         success = commit is not None
 
-        # 3-4. Role-specific filesystem checks (informational — non-blocking).
+        # 3-4. Role-specific filesystem checks. Planner artifact check
+        # (Phase 4) can return failure; developer/reviewer checks are
+        # informational and non-blocking. They run AFTER the log read
+        # so the AgentResult has all fields populated.
+        stdout_tail, stderr_tail, error = self._read_log(log_path)
+
         if role == "developer":
             _ = (workspace / "tests").is_dir()
         elif role == "reviewer":
             _ = (workspace / "reviews" / f"iter-{expected_iter}.md").exists()
-
-        # 5. Read log_path → extract stdout/stderr tails.
-        stdout_tail, stderr_tail, error = self._read_log(log_path)
+        elif role == "planner":
+            # Phase 4 fix: planner must produce prd/PRD.md AND
+            # prd/tech-design.md. A successful git commit alone is
+            # not sufficient — the user-stated artifacts must exist.
+            prd = workspace / "prd" / "PRD.md"
+            tech = workspace / "prd" / "tech-design.md"
+            if not prd.is_file():
+                return AgentResult(
+                    success=False,
+                    exit_code=exit_code,
+                    duration=0.0,
+                    stdout_tail=stdout_tail,
+                    stderr_tail=stderr_tail,
+                    log_path=log_path,
+                    commit=commit,
+                    verdict=None,
+                    error=f"planner artifact missing: {prd}",
+                )
+            if not tech.is_file():
+                return AgentResult(
+                    success=False,
+                    exit_code=exit_code,
+                    duration=0.0,
+                    stdout_tail=stdout_tail,
+                    stderr_tail=stderr_tail,
+                    log_path=log_path,
+                    commit=commit,
+                    verdict=None,
+                    error=f"planner artifact missing: {tech}",
+                )
 
         return AgentResult(
             success=success,
