@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from interfaces import WorktreeConfig
-from unison.worktree import WorktreeInfo, WorktreeManager
+from unison.worktree import MergeResult, WorktreeInfo, WorktreeManager
 
 
 # ============================================================================
