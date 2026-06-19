@@ -455,7 +455,14 @@ class Orchestrator:
             log_path=log_path,
         )
 
-        # 7. Track token usage (estimate from prompt length)
+        # 7. Timeout-recovery: Claude Code often times out at 600s with
+        # valid work already on disk (tested in 4 of 5 Claude invocations
+        # during V2 fix Iter 1-3). Check for partial-but-valid output
+        # before declaring failure.
+        if not result.success and result.error and "timeout" in result.error.lower():
+            self._recover_timeout_work(role, world, iteration)
+
+        # 8. Track token usage (estimate from prompt length)
         estimated_tokens = max(1, len(prompt) // 4)
         tracker.add_usage(estimated_tokens, phase=role, iter_n=iteration)
 
@@ -897,6 +904,63 @@ class Orchestrator:
         except (subprocess.SubprocessError, FileNotFoundError, OSError):
             pass
         return ""
+
+    def _recover_timeout_work(
+        self, role: str, world, iteration: int
+    ) -> None:
+        """Check for valid uncommitted work after an agent timeout.
+
+        Claude Code consistently produces valid output on disk before
+        the 600s timeout fires. If there are uncommitted changes AND
+        the test suite passes against them, auto-commit the work so
+        the pipeline can proceed to review.
+
+        This is called from ``_invoke_agent_for_role`` when
+        ``runner.run()`` reports a timeout error.
+        """
+        try:
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(world.root),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if status.returncode != 0 or not status.stdout.strip():
+                return  # nothing to recover
+
+            # Run the project's test command against the uncommitted state
+            test_result = subprocess.run(
+                self.spec.project.test_command.split(),
+                cwd=str(world.root),
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if test_result.returncode != 0:
+                return  # tests fail — can't auto-commit
+
+            # Tests pass, work is valid — auto-commit
+            subprocess.run(
+                ["git", "add", "-A"],
+                cwd=str(world.root),
+                capture_output=True,
+                timeout=10,
+            )
+            subprocess.run(
+                ["git", "commit", "-m",
+                 f"{role}: auto-commit after timeout recovery (iter {iteration})"],
+                cwd=str(world.root),
+                capture_output=True,
+                timeout=10,
+            )
+            logger.info(
+                "timeout-recovery: auto-committed %s work for iter %d "
+                "(tests passed against uncommitted state)",
+                role, iteration,
+            )
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
+            pass  # recovery is best-effort; failure is non-fatal
 
     def _select_runner(self, role: str) -> tuple:
         """Pick a runner for *role*, applying downgrade if budget is tight.
