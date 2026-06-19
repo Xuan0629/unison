@@ -1,0 +1,1826 @@
+=== COMMAND ===
+claude -p --dangerously-skip-permissions Read prd/PRD-phase9.md and prd/tech-design-phase9.md. Create ~/.openclaw/agents/openclaw-model-debug/SKILL.md — a diagnostic skill with ≥3 scenarios (unreachable, auth failure, timeout). SKILL.md is the deliverable (lives OUTSIDE this repo).
+
+# Developer (Claude Code) — Phase 9: Create SKILL.md
+
+Read `prd/PRD.md` and `prd/tech-design.md`, then create the diagnostic skill.
+
+## Steps
+
+1. Check target: `ls ~/.openclaw/agents/openclaw-model-debug/SKILL.md`
+2. If exists, read for context. If not, create dir + file.
+3. Check existing OpenClaw skills for format reference:
+   `ls ~/.openclaw/agents/` and read 1-2 examples
+4. Write SKILL.md with:
+   - YAML frontmatter: name=openclaw-model-debug, description, version=1.0.0, tags
+   - ≥3 diagnostic scenarios: symptom → diagnosis → fix
+   - Cover: model unreachable, auth failure, timeout, model not found
+5. Validate frontmatter:
+   `python3 -c "import yaml; c=open('...').read(); yaml.safe_load(c.split('---')[1])"`
+
+## Rules
+- The SKILL.md is the primary deliverable — it lives OUTSIDE this git repo
+- You may create supporting files in the repo if needed
+
+
+## Git Diff
+diff --git a/.unison/budget.json b/.unison/budget.json
+index 8b564c2..741b8bc 100644
+--- a/.unison/budget.json
++++ b/.unison/budget.json
+@@ -1,7 +1,7 @@
+ {
+   "date": "2026-06-19",
+-  "daily_used": 101733,
+-  "task_used": 101733,
++  "daily_used": 124614,
++  "task_used": 124614,
+   "phases": [
+     {
+       "phase": "developer",
+@@ -38,6 +38,18 @@
+       "iter_n": 1,
+       "tokens_used": 29807,
+       "timestamp": "2026-06-19T15:12:38.015928+00:00"
++    },
++    {
++      "phase": "planner",
++      "iter_n": 1,
++      "tokens_used": 21094,
++      "timestamp": "2026-06-19T15:27:53.228628+00:00"
++    },
++    {
++      "phase": "reviewer",
++      "iter_n": 1,
++      "tokens_used": 1787,
++      "timestamp": "2026-06-19T15:27:53.823647+00:00"
+     }
+   ]
+ }
+\ No newline at end of file
+
+
+diff --git a/observer/logs/planner_iter-1_20260619T152229Z.log b/observer/logs/planner_iter-1_20260619T152229Z.log
+new file mode 100644
+index 0000000..5c95c92
+--- /dev/null
++++ b/observer/logs/planner_iter-1_20260619T152229Z.log
+@@ -0,0 +1,2016 @@
++=== COMMAND ===
++claude -p --dangerously-skip-permissions Create an OpenClaw agent skill 'openclaw-model-debug' at ~/.openclaw/agents/openclaw-model-debug/SKILL.md. It should diagnose model connectivity issues (unreachable, auth failure, timeout, 404). Write PRD to prd/PRD.md and technical design to prd/tech-design.md. Target: a practical, executable SKILL.md with ≥3 diagnostic scenarios.
++
++# Planner (Claude Code) — Phase 9: Skill Development PRD
++
++You are the **Planner** for Unison Phase 9. Your task: write the Product
++Requirements Document and Technical Design for creating an OpenClaw agent skill.
++
++## Goal
++
++Create `openclaw-model-debug` — a diagnostic SKILL.md for OpenClaw agents
++to troubleshoot model connectivity issues.
++
++## Deliverables
++
++### 1. prd/PRD.md
++- What problem does this skill solve?
++- Scope: which diagnostic scenarios? (unreachable, auth failure, timeout, 404)
++- Acceptance criteria: the SKILL.md this phase produces
++- Constraints: read-only access to other OpenClaw agents
++
++### 2. prd/tech-design.md
++- SKILL.md format spec (YAML frontmatter + markdown body)
++- Diagnostic scenario structure: symptom → diagnosis → fix
++- Target path: `~/.openclaw/agents/openclaw-model-debug/SKILL.md`
++- Research approach: search OpenClaw docs, examine existing skills for format
++- Validation: YAML frontmatter parse check
++
++## Reference
++- Existing OpenClaw skills (for format): `~/.openclaw/agents/*/SKILL.md`
++- SKILL.md format: YAML frontmatter with name/description/version/tags, then markdown body
++- Target directory: `~/.openclaw/agents/openclaw-model-debug/`
++
++
++## Git Diff
++
+
+diff --git a/prd/PRD-v2-fix.bak.md b/prd/PRD-v2-fix.bak.md
++new file mode 100644
++index 0000000..9fd32f2
++--- /dev/null
+++++ b/prd/PRD-v2-fix.bak.md
++@@ -0,0 +1,136 @@
+++# V2 Integration Fix — PRD
+++
+++(This file is read by the Developer agent per Orchestrator's hardcoded
+++prompt: "Read prd/PRD.md and prd/tech-design.md for requirements".)
+++
+++## Goal
+++
+++Fix the 8 phase REQUEST_CHANGES from Codex's V2 review of the Unison
+++project itself. The V2 modules are written but not integrated; this
+++loop wires them into the Orchestrator's main path.
+++
+++## Scope
+++
+++8 phases. Each must end with a Codex PASS verdict in `reviews/iter-N.md`.
+++
+++| Phase | Module | Score | File hints |
+++|-------|--------|-------|------------|
+++| 1 | Observer inotify | 5/10 | src/unison/observer.py:241,595,674,757 |
+++| 2 | SQLiteChannel | 7/10 | src/unison/channel.py:270,305 |
+++| 3 | DAG Parallel | 4/10 | src/unison/pipeline.py:145,515; orchestrator.py:207 |
+++| 4 | 4-Agent Mode | 5/10 | src/unison/orchestrator.py:222,236,674; completion.py:39 |
+++| 5 | Parallel Developer | 2/10 | src/unison/orchestrator.py:296; worktree.py:1 |
+++| 6 | Multi-Reviewer | 4/10 | src/unison/reviewer_pool.py:133; orchestrator.py:565,639 |
+++| 7 | Context Window | 3/10 | src/unison/orchestrator.py:579,604; context_deflate.py; budget.py |
+++| 8 | Schema Migrate | 6/10 | src/unison/schema_migrate.py:252; pipeline.py:138 |
+++
+++## Constraints (revised 2026-06-19)
+++
+++Four `interfaces.py` field additions are **explicitly authorized**
+++by SEAN (Planner ↔ SEAN 2026-06-19). Developer MAY modify
+++`interfaces.py` **only** to add the following four fields, each
+++with a safe default that does not break the 461 existing tests:
+++
+++| Field | Type | Default |
+++|-------|------|---------|
+++| `PipelineSpec.parallel_dev` | `WorktreeConfig \| None` | `None` |
+++| `PipelineSpec.reviewer_config` | `ReviewerConfig \| None` | `None` |
+++| `AgentSpec.context_budget` | `int \| None` | `None` |
+++| `WorktreeConfig.features` | `list[str] \| None` | `None` |
+++
+++(The 4th field — `WorktreeConfig.features` — was added per Codex
+++Round 4 finding that Phase 5 needs a concrete feature list. The
+++field has a safe `None` default and existing `WorktreeConfig(...)`
+++calls in tests still work.)
+++
+++Any **other** modification to `interfaces.py`, `ARCHITECTURE.md`,
+++or root `tech-design.md` is **not** authorized and requires an
+++explicit ask to the Planner.
+++
+++DO NOT modify `reviews/v2-*.md` (history).
+++All changes must keep `python3 -m pytest tests/ -q` passing.
+++Add at least 1 test per Codex finding (target: 470+ tests).
+++
+++## Process
+++
+++This PRD runs as **3 implementation iterations**, each containing
+++multiple phases. The Reviewer (Codex) writes one review file per
+++iteration, not per phase:
+++
+++| Iter | Phases | Review file |
+++|------|--------|-------------|
+++| 1 | 8 (schema) + 3 (DAG) + 4 (review path) | `reviews/iter-1.md` |
+++| 2 | 7 (context) + 6 (reviewer YAML) | `reviews/iter-2.md` |
+++| 3 | 1 (observer) + 2 (channel) + 5 (worktree) | `reviews/iter-3.md` |
+++
+++**Per-phase acceptance is recorded inside each review**, not as
+++separate files. After Iter 3, a final 8-phase review (`reviews/final.md`)
+++verifies all phases are PASS.
+++
+++For each iteration, the Developer:
+++1. Read this PRD + tech-design.md
+++2. Read `v2-review-codex.md` (project root) for the finding details
+++3. Implement the fix in src/unison/*.py
+++4. Add tests in tests/test_*.py
+++5. Run: `python3 -m pytest tests/ -q`
+++6. Commit: `git add -A && git commit -m "fix: Phase N <one-line>"`
+++
+++Then the Reviewer (Codex) writes the iter's review file with verdict.
+++
+++## Contract constraints (revised by Planner per SEAN 2026-06-19)
+++
+++The **frozen parts** are: the user-stated functional requirements and
+++the role/loop structure (e.g. Planner→Developer↔Reviewer→Observer cycle).
+++These cannot be silently changed.
+++
+++The **modifiable parts** are: implementation details, including contract
+++fields, doc phrasing, and code organization. When the Designer or any
+++agent finds a design gap, the report path is:
+++
+++```
+++discoverer (any role) → Planner (Hermes) → update prd/tech-design.md
+++                                     and/or interfaces.py
+++```
+++
+++**Concretely for this PRD** (Planner authorized 2026-06-19):
+++
+++Three (now four) small `interfaces.py` field additions are required
+++to unblock V2 features. All are **optional with default value** —
+++they do not break any of the 461 existing tests **except** the 3
+++obsolete schema_migration tests that explicitly asserted the
+++absence of these fields. Those 3 tests are updated in Phase 8 to
+++match the new (post-authorization) behavior:
+++
+++| Field | Type | Where | Phase |
+++|-------|------|-------|-------|
+++| `PipelineSpec.parallel_dev` | `WorktreeConfig \| None` | `interfaces.py` PipelineSpec | 5 |
+++| `PipelineSpec.reviewer_config` | `ReviewerConfig \| None` | `interfaces.py` PipelineSpec | 6 |
+++| `AgentSpec.context_budget` | `int \| None` | `interfaces.py` AgentSpec | 7 |
+++| `WorktreeConfig.features` | `list[str] \| None` | `interfaces.py` WorktreeConfig | 5 |
+++
+++All four types (`WorktreeConfig`, `ReviewerConfig`) already exist in
+++`interfaces.py`. These patches are **wiring, not new types**.
+++
+++The migration function in `schema_migrate.py` (Phase 8) adds V2
+++defaults so old V1 pipeline.yaml files still load.
+++
+++## Why this resolution
+++
+++- **Phase 5** (parallel dev): env-var fallback is un-testable and
+++  creates a config path that will need to be ripped out the moment
+++  the product says yes. A typed field is cleaner.
+++- **Phase 6** (multi-reviewer): `ReviewerConfig` is already defined
+++  in interfaces.py:479 — only needs to be wired into `PipelineSpec`.
+++  This is the lowest-risk contract change.
+++- **Phase 7** (per-agent context): the global `BudgetConfig` covers
++... (truncated)
++
++
+
+diff --git a/prd/PRD.md b/prd/PRD.md
++index 9fd32f2..ae3c00f 100644
++--- a/prd/PRD.md
+++++ b/prd/PRD.md
++@@ -1,136 +1,3 @@
++-# V2 Integration Fix — PRD
+++# Phase 9: OpenClaw Model Debug Skill
++ 
++-(This file is read by the Developer agent per Orchestrator's hardcoded
++-prompt: "Read prd/PRD.md and prd/tech-design.md for requirements".)
++-
++-## Goal
++-
++-Fix the 8 phase REQUEST_CHANGES from Codex's V2 review of the Unison
++-project itself. The V2 modules are written but not integrated; this
++-loop wires them into the Orchestrator's main path.
++-
++-## Scope
++-
++-8 phases. Each must end with a Codex PASS verdict in `reviews/iter-N.md`.
++-
++-| Phase | Module | Score | File hints |
++-|-------|--------|-------|------------|
++-| 1 | Observer inotify | 5/10 | src/unison/observer.py:241,595,674,757 |
++-| 2 | SQLiteChannel | 7/10 | src/unison/channel.py:270,305 |
++-| 3 | DAG Parallel | 4/10 | src/unison/pipeline.py:145,515; orchestrator.py:207 |
++-| 4 | 4-Agent Mode | 5/10 | src/unison/orchestrator.py:222,236,674; completion.py:39 |
++-| 5 | Parallel Developer | 2/10 | src/unison/orchestrator.py:296; worktree.py:1 |
++-| 6 | Multi-Reviewer | 4/10 | src/unison/reviewer_pool.py:133; orchestrator.py:565,639 |
++-| 7 | Context Window | 3/10 | src/unison/orchestrator.py:579,604; context_deflate.py; budget.py |
++-| 8 | Schema Migrate | 6/10 | src/unison/schema_migrate.py:252; pipeline.py:138 |
++-
++-## Constraints (revised 2026-06-19)
++-
++-Four `interfaces.py` field additions are **explicitly authorized**
++-by SEAN (Planner ↔ SEAN 2026-06-19). Developer MAY modify
++-`interfaces.py` **only** to add the following four fields, each
++-with a safe default that does not break the 461 existing tests:
++-
++-| Field | Type | Default |
++-|-------|------|---------|
++-| `PipelineSpec.parallel_dev` | `WorktreeConfig \| None` | `None` |
++-| `PipelineSpec.reviewer_config` | `ReviewerConfig \| None` | `None` |
++-| `AgentSpec.context_budget` | `int \| None` | `None` |
++-| `WorktreeConfig.features` | `list[str] \| None` | `None` |
++-
++-(The 4th field — `WorktreeConfig.features` — was added per Codex
++-Round 4 finding that Phase 5 needs a concrete feature list. The
++-field has a safe `None` default and existing `WorktreeConfig(...)`
++-calls in tests still work.)
++-
++-Any **other** modification to `interfaces.py`, `ARCHITECTURE.md`,
++-or root `tech-design.md` is **not** authorized and requires an
++-explicit ask to the Planner.
++-
++-DO NOT modify `reviews/v2-*.md` (history).
++-All changes must keep `python3 -m pytest tests/ -q` passing.
++-Add at least 1 test per Codex finding (target: 470+ tests).
++-
++-## Process
++-
++-This PRD runs as **3 implementation iterations**, each containing
++-multiple phases. The Reviewer (Codex) writes one review file per
++-iteration, not per phase:
++-
++-| Iter | Phases | Review file |
++-|------|--------|-------------|
++-| 1 | 8 (schema) + 3 (DAG) + 4 (review path) | `reviews/iter-1.md` |
++-| 2 | 7 (context) + 6 (reviewer YAML) | `reviews/iter-2.md` |
++-| 3 | 1 (observer) + 2 (channel) + 5 (worktree) | `reviews/iter-3.md` |
++-
++-**Per-phase acceptance is recorded inside each review**, not as
++-separate files. After Iter 3, a final 8-phase review (`reviews/final.md`)
++-verifies all phases are PASS.
++-
++-For each iteration, the Developer:
++-1. Read this PRD + tech-design.md
++-2. Read `v2-review-codex.md` (project root) for the finding details
++-3. Implement the fix in src/unison/*.py
++-4. Add tests in tests/test_*.py
++-5. Run: `python3 -m pytest tests/ -q`
++-6. Commit: `git add -A && git commit -m "fix: Phase N <one-line>"`
++-
++-Then the Reviewer (Codex) writes the iter's review file with verdict.
++-
++-## Contract constraints (revised by Planner per SEAN 2026-06-19)
++-
++-The **frozen parts** are: the user-stated functional requirements and
++-the role/loop structure (e.g. Planner→Developer↔Reviewer→Observer cycle).
++-These cannot be silently changed.
++-
++-The **modifiable parts** are: implementation details, including contract
++-fields, doc phrasing, and code organization. When the Designer or any
++-agent finds a design gap, the report path is:
++-
++-```
++-discoverer (any role) → Planner (Hermes) → update prd/tech-design.md
++-                                     and/or interfaces.py
++-```
++-
++-**Concretely for this PRD** (Planner authorized 2026-06-19):
++-
++-Three (now four) small `interfaces.py` field additions are required
++-to unblock V2 features. All are **optional with default value** —
++-they do not break any of the 461 existing tests **except** the 3
++-obsolete schema_migration tests that explicitly asserted the
++-absence of these fields. Those 3 tests are updated in Phase 8 to
++-match the new (post-authorization) behavior:
++-
++-| Field | Type | Where | Phase |
++-|-------|------|-------|-------|
++-| `PipelineSpec.parallel_dev` | `WorktreeConfig \| None` | `interfaces.py` PipelineSpec | 5 |
++-| `PipelineSpec.reviewer_config` | `ReviewerConfig \| None` | `interfaces.py` PipelineSpec | 6 |
++-| `AgentSpec.context_budget` | `int \| None` | `interfaces.py` AgentSpec | 7 |
++-| `WorktreeConfig.features` | `list[str] \| None` | `interfaces.py` WorktreeConfig | 5 |
++-
++-All four types (`WorktreeConfig`, `ReviewerConfig`) already exist in
++-`interfaces.py`. These patches are **wiring, not new types**.
++-
++-The migration function in `schema_migrate.py` (Phase 8) adds V2
++-defaults so old V1 pipeline.yaml files still load.
++-
++-## Why this resolution
++-
++-- **Phase 5** (parallel dev): env-var fallback is un-testable and
++-  creates a config path that will need to be ripped out the moment
++-  the product says yes. A typed field is cleaner.
++-- **Phase 6** (multi-reviewer): `ReviewerConfig` is already defined
++-  in interfaces.py:479 — only needs to be wired into `PipelineSpec`.
++-  This is the lowest-risk contract change.
++-- **Phase 7** (per-agent context): the global `BudgetConfig` covers
++-  80% of the need, but per-agent override is the standard pattern
++-  for "this role is expensive, cap it". Adding it is one line.
++-
++-## What stays frozen
++-
++-- `PipelineSpec` immutable (`frozen=True`) — the new fields follow
++-  this convention.
++-- `AgentSpec` immutable — same.
++-- The role/loop structure (Planner→Developer↔Reviewer→Observer).
++-- The risk matrix design (L0/L1/L2/L3).
++-- The snapshot safety-net pattern.
+++The Planner will write the full PRD here.
++
++
++
+
+diff --git a/prd/tech-design.md b/prd/tech-design.md
++index 2ae8406..9b1ad52 100644
++--- a/prd/tech-design.md
+++++ b/prd/tech-design.md
++@@ -1,819 +1,3 @@
++-# V2 Integration Fix — Technical Design (Round 2)
+++# Phase 9: Technical Design
++ 
++-## Scope decisions (revised 2026-06-19 per SEAN authorization)
++-
++-1. **Contract is partially open.** Per SEAN's revision of the
++-   freeze policy, the **4 specific field additions** listed in
++-   `prd/PRD.md` "Constraints" section are explicitly authorized:
++-   - `PipelineSpec.parallel_dev: WorktreeConfig | None`
++-   - `PipelineSpec.reviewer_config: ReviewerConfig | None`
++-   - `AgentSpec.context_budget: int | None`
++-   - `WorktreeConfig.features: list[str] | None`
++-
++-   Everything else in `interfaces.py`, `ARCHITECTURE.md`, root
++-   `tech-design.md` remains frozen. **Do not modify anything
++-   else** without explicit Planner approval.
++-2. **Review file naming**: 3 implementation iterations → 3 review
++-   files `reviews/iter-1.md`, `reviews/iter-2.md`, `reviews/iter-3.md`.
++-   Per-phase acceptance is tracked inside each review as a
++-   sub-section, not as separate files. (Clarifies the 8-phase vs
++-   3-iter ambiguity Codex flagged.)
++-3. **Phase 1 notification sink**: file-report fallback to
++-   `observer/reports/iter-N.md` (avoid Discord webhook subsystem —
++-   would be scope creep). Hermes (Observer) can later read these
++-   files and send via `send_message`.
++-
++-## Review-path abstraction (Phase 4, foundation)
++-
++-Add a helper **inside orchestrator.py** (no `interfaces.py` change):
++-
++-```python
++-def _review_file_for_phase(self, review_phase: str, iteration: int) -> Path:
++-    if review_phase == "planning_review":
++-        return self.spec.world.reviews_dir / f"plan-iter-{iteration}.md"
++-    return self.spec.world.reviews_dir / f"iter-{iteration}.md"
++-```
++-
++-All prompts, multi-reviewer output paths, and verdict parsing call
++-this helper. Phase 4 wires the helper, Phase 6 and Phase 7 use it.
++-
++----
++-
++-## Phase 1 — Observer inotify (5/10)
++-
++-### Files
++-- `src/unison/observer.py:241` (ENOSPC fallback)
++-- `src/unison/observer.py:595` (liveness loop)
++-- `src/unison/observer.py:674,757` (notification sinks)
++-
++-### Code changes
++-
++-1. **Liveness loop (L595)**: replace `while watcher.next_event():`
++-   blocking pattern with a `select`-style wait:
++-
++-   ```python
++-   while self._running:
++-       event = self.watcher.next_event(timeout=self._poll_interval)
++-       if event is None:
++-           # Timed out — check liveness
++-           self.check_liveness()
++-           continue
++-       self._process_event(event)
++-   ```
++-
++-   `_poll_interval` defaults to `spec.observer_poll_interval` (60s).
++-
++-2. **ENOSPC fallback (L241)**: catch `OSError` from `watch()`,
++-   log a warning, set `self._use_polling = True`, and continue
++-   with the polling-only loop. **Do not** set `_running = False`.
++-
++-3. **Notification sinks (L674, L757)**:
++-   - `send_full_report()` writes to `observer/reports/iter-N.md`
++-     (creates parent dir). It is **not** a stub.
++-   - `_process_new_notifications()` calls `send_full_report()`
++-     exactly once per new state change, tracked by file offset.
++-
++-### Acceptance tests (in `tests/test_observer.py`)
++-
++-- `test_observer_runs_liveness_on_idle_state` — fake `next_event`
++-  returns `None` twice; assert `check_liveness` was called within
++-  `_poll_interval + 1s`.
++-- `test_observer_enospc_falls_back_to_polling` — fake `watch()`
++-  raises `OSError`; assert `_running` stays True and liveness
++-  checks still fire.
++-- `test_observer_notifications_write_report_file` — call
++-  `_process_new_notifications()`; assert the report file exists
++-  with the expected content.
++-- `test_observer_does_not_resend_old_offsets` — call twice; assert
++-  only the first call writes new content.
++-
++----
++-
++-## Phase 2 — SQLiteChannel (7/10)
++-
++-### Files
++-- `src/unison/channel.py:270,305`
++-
++-### Code change
++-
++-Change the WHERE clause in `read_inbox(role, ...)` to:
++-
++-```sql
++-SELECT * FROM messages
++-WHERE (recipient = ? OR recipient = 'all')
++-  AND id > ?
++-ORDER BY id
++-```
++-
++-(`role` is the bound parameter, not `'all'`.)
++-
++-### Acceptance tests (in `tests/test_channel.py`)
++-
++-- `test_broadcast_message_visible_to_role_inbox` — write with
++-  default `recipient="all"`; assert `read_inbox("developer", 0)`
++-  returns it.
++-- `test_role_specific_message_not_in_other_inbox` — write with
++-  `recipient="developer"`; assert `read_inbox("reviewer", 0)` does
++-  not return it.
++-
++----
++-
++-## Phase 3 — DAG Parallel (4/10)
++-
++-### Files
++-- `src/unison/pipeline.py:145` (loader)
++-- `src/unison/orchestrator.py:207` (state machine)
++-- `src/unison/pipeline.py:515` (DAGScheduler timeout)
++-
++-### Code changes
++-
++-1. **Loader (L145)**: extend `PipelineSpec` construction to keep
++-   `dag:` field as a `list[dict]` (raw) for now. Note: `PipelineSpec.dag`
++-   is `list[Stage] | None` in `interfaces.py`, so we parse each dict
++-   into a `Stage` using the existing `_build_stage()` helper. Add a
++-   private `_parse_dag(raw_dag)` method.
++-
++-2. **State machine (L207)**: in `_run_state_machine`, after the
++-   planning check, if `self.spec.dag is not None`, call
++-   `DAGScheduler(self.spec.dag).execute_parallel(...)` instead of
++-   the linear `dev_active ↔ dev_review` loop. Otherwise fall through
++-   to the existing linear loop (preserves V1 2-agent behavior).
++-
++-3. **DAGScheduler timeout (L515)** — replace `ThreadPoolExecutor`
++-   context manager with a **deadline-aware** lifecycle. The current
++-   `execute_parallel(executor, max_workers)` shape has
++-   `executor(stage) -> bool`, so the loop should run per stage with
++-   explicit deadline tracking, not per future with `stage.fn`/`args`
++-   (those fields don't exist on the frozen `Stage` contract).
++-
++-   **New `execute_parallel` shape (target)**:
++-
++-   ```python
++-   import time
++-   from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
++-
++-   def execute_parallel(
++-       self,
++-       executor: callable,
++-       max_workers: int = 4,
++-       pool_factory: callable = ThreadPoolExecutor,
++-   ) -> dict[str, bool]:
++-       completed: set[str] = set()
++-       failed: set[str] = set()
++-       results: dict[str, bool] = {}
++-
++-       # `pool_factory` is injectable so tests can pass a daemon pool.
++-       with pool_factory(max_workers=max_workers) as pool:
++-           # Map: future -> (stage, deadline)
++-           futures: dict = {}
++-           for stage in self._ready(completed, failed):
++-               fut = pool.submit(executor, stage)
++-               futures[fut] = (stage, time.monotonic() + stage.timeout)
++-
++-           while futures:
++-               done, _ = wait(futures, timeout=0.05,
++-                              return_when=FIRST_COMPLETED)
++-               now = time.monotonic()
++-
++-               # Process completions
++-               for f in done:
++-                   stage, _ = futures.pop(f)
++-                   try:
++-                       success = f.result()
++-                       results[stage.name] = success
++-                       (completed if success else failed).add(stage.name)
++-                   except Exception as e:
++-                       results[stage.name] = False
++-                       failed.add(stage.name)
++-
++-               # Detect overdue running stages
++-               overdue = [
++-                   (f, s) for f, (s, d) in futures.items()
++-                   if now >= d
++-               ]
++-               for f, stage in overdue:
++-                   futures.pop(f)
++-                   results[stage.name] = False
++-                   failed.add(stage.name)
++-                   # Stage thread is orphaned (Python cannot kill it);
++-                   # the daemon=True factory in tests lets the test
++-                   # process exit cleanly. Documented limitation.
++-
++-               # Submit newly-ready stages
++-               new_ready = self._ready(completed, failed)
++-               for stage in new_ready:
++-                   fut = pool.submit(executor, stage)
++-                   futures[fut] = (stage, time.monotonic() + stage.timeout)
++-
++-           # Propagate failure to descendants
++-           for stage in self.stages:
++-               if stage.name in results:
++-                   continue
++-               if any(dep in failed for dep in stage.dependencies):
++-                   results[stage.name] = False
++-                   failed.add(stage.name)
++-
++-       return results
++-   ```
++-
++-   The `pool_factory` parameter (default `ThreadPoolExecutor`) is
++-   the **injection point** for tests. Tests can pass:
++-
++-   ```python
++-   class DaemonThreadPool(ThreadPoolExecutor):
++-       def _adjust_thread_count(self):
++-           super()._adjust_thread_count()
++-           for t in self._threads:
++-               t.daemon = True
++-   ```
++-
++-   or simpler, a wrapper that patches `_threads` post-init. This
++-   keeps the production code unchanged but makes the test
++-   teardown deterministic.
++-
++-### Acceptance tests (in `tests/test_pipeline.py`)
++-
++-- `test_loader_parses_dag_field` — pipeline.yaml with `dag:`;
++-  assert loaded `spec.dag` is a non-empty `list[Stage]`.
++-- `test_orchestrator_routes_to_dag_scheduler` — set `spec.dag`;
++-  assert `_run_state_machine` calls `DAGScheduler.execute_parallel`
++-  and does not enter the linear loop.
++-- `test_dag_scheduler_returns_on_hung_stage` — fake executor
++-  `def hang(stage): time.sleep(60)`; scheduler with
++-  `stage.timeout=2`; assert returns within `2 + 1s` with the
++-  stage marked failed (recorded as `False` in `results`).
++-- `test_dag_scheduler_submits_newly_ready_after_completion` —
++-  stage A → stage B; assert B is submitted only after A's future
++-  is in `done`.
++-- `test_dag_scheduler_daemon_factory_for_tests` — pass
++-  `pool_factory=DaemonThreadPool`; after `execute_parallel`
++-  returns, assert no non-daemon threads from the pool remain
++-  in `threading.enumerate()`.
++-
++----
++-
++-## Phase 4 — 4-Agent Mode (5/10) — *MUST come before Phase 6/7*
++-
++-### Files
++-- `src/unison/orchestrator.py:222,236,674` (review path usage)
++-- `src/unison/completion.py:39` (planner artifact check)
++-
++-### Code changes
++-
++-1. **Review-path helper**: add `_review_file_for_phase()` as defined
++-   in the "Review-path abstraction" section above.
++-
++-2. **Verdict parser** (`_parse_verdict`): call
++-   `self._review_file_for_phase(review_phase, iteration)` instead of
++-   `world.review_file(iteration)`. The verdict parser needs the
++-   `review_phase` argument threaded through `_run_loop`.
++-
++-3. **Planner artifact check** (`GitCompletionDetector`): add a
++-   per-role check after the git log inspection:
++-   ```python
++-   if role == "planner":
++-       if not (workspace / "prd" / "PRD.md").is_file():
++-           return Detection(success=False, reason="PRD.md missing")
++-       if not (workspace / "prd" / "tech-design.md").is_file():
++-           return Detection(success=False, reason="tech-design.md missing")
++-   ```
++-
++-### Acceptance tests (in `tests/test_orchestrator.py`,
++-`tests/test_completion.py`)
++-
++-- `test_planning_review_uses_plan_iter_path` — run planning loop;
++-  assert verdict parser looks at `reviews/plan-iter-1.md`, not
++-  `reviews/iter-1.md`.
++-- `test_dev_review_uses_iter_path` — dev loop; assert uses
++-  `reviews/iter-1.md`.
++-- `test_planner_completion_fails_without_prd` — fake workspace
++-  with git commit but no `prd/PRD.md`; assert `detect()` returns
++-  `success=False`.
++-- `test_planner_completion_fails_without_tech_design` — same for
++-  `prd/tech-design.md`.
++-
++----
++-
++-## Phase 5 — Parallel Developer (2/10) — *Full implementation in this round*
++-
++-### Files
++-- `interfaces.py` (add `parallel_dev: WorktreeConfig | None` to
++-  `PipelineSpec` — 1 line; add `features: list[str] | None` to
++-  `WorktreeConfig` — 1 line)
++-- `src/unison/orchestrator.py:296` (route to `WorktreeManager` when
++-  `spec.parallel_dev is not None AND spec.parallel_dev.enabled is True`)
++-- `src/unison/worktree.py:1` (add `merge_reconciliation()`)
++-- `src/unison/pipeline.py:145` (loader parses `parallel_dev:` and
++-  `parallel_dev.features:`)
++-
++-### Contract changes (Planner authorized 2026-06-19)
++-
++-```python
++-# interfaces.py — PipelineSpec
++-parallel_dev: WorktreeConfig | None = None  # V2: 并行 Developer
++-
++-# interfaces.py — WorktreeConfig
++-features: list[str] | None = None  # V2: feature list to parallelize over
++-```
++-
++-Both `WorktreeConfig` (interfaces.py:228) and `PipelineSpec`
++-(interfaces.py:243) are already defined. These are **wiring +
++-new optional field with safe default**, not new types.
++-
++-### Why a 4th field was added
++-
++-Codex Round 4 review pointed out that Phase 5 needs a concrete
++-source of feature names (the `WorktreeManager.create_worktree(feature_name)`
++-API takes one name per call), but the existing `WorktreeConfig`
++-had no way to express "which features to parallelize over".
++-Two options were considered:
++-
++-A. Env var `UNISON_PARALLEL_FEATURES="feature-a,feature-b"`. Rejected
++-   because env vars are un-testable, un-auditable, and per
++-   Phase 6's lesson, we'd rip it out the moment we add real config.
++-B. Add `WorktreeConfig.features: list[str] | None = None`. Chosen —
++-   it mirrors the same wiring pattern as Phase 6/7.
++-
++-### Code changes
++-
++-1. **Loader (pipeline.py:145)**: parse `parallel_dev:` block in
++-   `PipelineLoader._build_parallel_dev()` (new private method,
++-   ≤15 lines including nested `features:` list). Returns
++-   `WorktreeConfig | None`.
++-
++-2. **Orchestrator routing (orchestrator.py:296)**: in
++-   `_invoke_agent_for_role("developer", iter)`, when
++-   `self.spec.parallel_dev is not None` and `iter == 1`:
++-
++-   **Enablement check** (Codex Round 5 finding 2):
++-   ```python
++-   pd = self.spec.parallel_dev
++-   if pd is not None and pd.enabled:
++-       # parallel-dev path
++-       feature_list = pd.features or []
++-       if not feature_list:
++-           # enabled=True but no features = misconfiguration,
++-           # not silent fallback (Codex Round 5 finding 3).
++-           raise PipelineValidationError(
++-               "parallel_dev.enabled=True but features list is empty. "
++-               "Either set features=[...] or set enabled=False."
++-           )
++-       # ... continue with worktree creation
++-   else:
++-       # Single-developer fallback (parallel_dev is None OR enabled=False)
++-       # The `enabled=False` case is the documented "kill switch" — config
++-       # is present but inactive. Tests cover this as a regression guard.
++-       pass
++-   ```
++-
++-   - `parallel_dev is None`: single-developer mode (existing V1 behavior).
++-   - `parallel_dev is not None and enabled is False`: single-developer
++-     mode (kill switch, regression guard test).
++-   - `parallel_dev is not None and enabled is True and features`:
++-     parallel-dev mode, one Developer per feature.
++-   - `parallel_dev is not None and enabled is True and not features`:
++-     **raise `PipelineValidationError`** (misconfiguration, not
++-     silent fallback — per Codex Round 5).
++-
++-   **Parallel-dev dispatch** (when enablement + features both pass):
++-   - For each `feature_name` in `feature_list`:
++-     - `mgr = WorktreeManager(config=self.spec.parallel_dev,
++-                             project_root=world.root)`
++-     - `info = mgr.create_worktree(feature_name)` → worktree path
++-     - Dispatch one Developer agent to that worktree path
++-       (prompt includes the feature name)
++-   - After all developers complete (or fail), call
++-     `WorktreeManager.merge_reconciliation(feature_list, strategy)`
++-     to consolidate branches.
++-
++-3. **WorktreeManager.merge_reconciliation(branches, strategy)**
++-   (new method in `src/unison/worktree.py`):
++-   - `branches: list[str]` — list of branch names (= feature names) to merge
++-   - `strategy: Literal["ff", "octopus", "manual"]` — default `"ff"`
++-   - Returns `MergeResult(success: bool, conflicts: list[str])`.
++-   - For `"ff"`: fast-forward each branch in order into
++-     `config.base_branch`; abort on conflict.
++-   - For `"octopus"`: git merge --octopus; report conflicts.
++-   - For `"manual"`: leave branches separate, return success=False
++-     with list of unmerged branches.
++-
++-### Acceptance tests (in `tests/test_worktree.py`,
++-`tests/test_orchestrator.py`, `tests/test_pipeline.py`)
++-
++-- `test_worktree_config_features_default` — `WorktreeConfig()`
++-  with no `features` arg; assert `features is None`.
++-- `test_loader_parses_parallel_dev_with_features` — pipeline.yaml
++-  with `parallel_dev: { features: [feature-a, feature-b] }`;
++-  assert `spec.parallel_dev.features == ["feature-a", "feature-b"]`.
++-- `test_orchestrator_creates_worktrees_for_each_feature` —
++-  set `spec.parallel_dev=WorktreeConfig(enabled=True, features=["f1", "f2"])`;
++-  mock `WorktreeManager`; assert `create_worktree("f1")` and
++-  `create_worktree("f2")` were each called.
++-- `test_orchestrator_uses_single_developer_when_parallel_dev_disabled` —
++-  `spec.parallel_dev=WorktreeConfig(enabled=False, features=["f1"])`;
++-  assert only one developer invocation (no worktree calls).
++-  (Regression guard: `enabled=False` is the kill switch, not
++-  "fire and ignore".)
++-- `test_orchestrator_raises_on_enabled_without_features` —
++-  `spec.parallel_dev=WorktreeConfig(enabled=True, features=[])`;
++-  assert raises `PipelineValidationError` with the message
++-  "parallel_dev.enabled=True but features list is empty".
++-  (Codex Round 5 finding 3: misconfiguration, not silent fallback.)
++-- `test_worktree_merge_reconciliation_ff` — two branches that
++-  fast-forward cleanly; assert `success=True, conflicts=[]`.
++-- `test_worktree_merge_reconciliation_conflict` — two branches
++-  with conflicting edits; assert `success=False, conflicts=[...]`.
++-- `test_orchestrator_uses_single_developer_when_no_parallel_dev` —
++-  `spec.parallel_dev=None`; assert no `WorktreeManager.create_worktree`
++-  call (regression guard).
++-
++-## Phase 6 — Multi-Reviewer (4/10) — *Full implementation in this round*
++-
++-### Files
++-- `interfaces.py` (add `reviewer_config: ReviewerConfig | None` to
++-  `PipelineSpec` — 1 line)
++-- `src/unison/reviewer_pool.py:133` (YAML frontmatter construction)
++-- `src/unison/orchestrator.py:639` (reviewer count source)
++-- `src/unison/pipeline.py` (loader parses `reviewer_config:` block)
++-
++-### Contract change (Planner authorized 2026-06-19)
++-
++-```python
++-# interfaces.py — PipelineSpec
++-reviewer_config: ReviewerConfig | None = None  # V2: multi-reviewer
++-```
++-
++-`ReviewerConfig` is already defined in `interfaces.py:479`. This is
++-**wiring, not new type**.
++-
++-### Code changes
++-
++-1. **Loader**: parse `reviewer_config:` block in
++-   `PipelineLoader._build_reviewer_config()`. Returns
++-   `ReviewerConfig | None`. ~10 lines. Validation: count must
++-   be ≥ 1, even count requires `reconcile_strategy="unanimous"`
++-   (already enforced in `ReviewerConfig.__post_init__`).
++-
++-2. **YAML construction (reviewer_pool.py:133)**: replace manual
++-   `f"summary: {final.summary}"` with
++-   `yaml.safe_dump({...}, default_flow_style=False, allow_unicode=True)`.
++-   This handles colons, brackets, and other special chars correctly.
++-
++-3. **Reviewer count source (orchestrator.py:639)**: change
++-   `_get_reviewer_count()`:
++-   ```python
++-   def _get_reviewer_count(self) -> int:
++-       # Prefer spec.reviewer_config (new wiring).
++-       if self.spec.reviewer_config is not None and \
++-          self.spec.reviewer_config.enabled:
++-           return self.spec.reviewer_config.count
++-       # Fallback: env var (preserved for tests / ad-hoc usage).
++-       return int(os.environ.get("UNISON_REVIEWER_COUNT", "1"))
++-   ```
++-
++-4. **Multi-reviewer output path**: when writing the reconciled
++-   review file, use `self._review_file_for_phase("dev_review", iter)`
++-   (the new helper from Phase 4) instead of `world.review_file(iter)`.
++-   Individual reviewer files keep the `iter-N-R{i}.md` suffix.
++-
++-### Acceptance tests (in `tests/test_reviewer_pool.py`,
++-`tests/test_orchestrator.py`, `tests/test_pipeline.py`)
++-
++-- `test_loader_parses_reviewer_config_block` — pipeline.yaml
++-  with `reviewer_config:`; assert `spec.reviewer_config` is a
++-  `ReviewerConfig` with the expected count/strategy.
++-- `test_loader_rejects_even_count_with_majority` — even count +
++-  majority strategy; assert raises `PipelineValidationError`.
++-- `test_reconciled_summary_with_brackets_parses` — summary is
++-  `"[R0] fix: ensure api.Endpoint.handle: idempotent"`; assert
++-  the produced YAML file's `verdict` field parses correctly.
++-- `test_reconciled_summary_with_colons_parses` — same, summary
++-  contains a colon.
++-- `test_get_reviewer_count_prefers_spec_over_env` — set
++-  `spec.reviewer_config.count=5` AND `UNISON_REVIEWER_COUNT=2`;
++-  assert returns 5.
++-- `test_get_reviewer_count_falls_back_to_env` —
++-  `spec.reviewer_config=None` AND `UNISON_REVIEWER_COUNT=3`;
++-  assert returns 3.
++-- `test_multi_reviewer_writes_to_separated_path` — run multi-reviewer;
++-  assert final review file is at `reviews/iter-1.md` (dev path),
++-  not `reviews/plan-iter-1.md`.
++-
++----
++-
++-## Phase 7 — Context Window (3/10) — *Full implementation, depends on Phase 4 helper*
++-
++-### Files
++-- `interfaces.py` (add `context_budget: int | None` to `AgentSpec` —
++-  1 line)
++-- `src/unison/orchestrator.py:579` (hand-built prompt)
++-- `src/unison/orchestrator.py:604` (no findings injection)
++-- `src/unison/context_deflate.py` (assemble_context, truncate_diff)
++-- `src/unison/budget.py` (BudgetTracker)
++-- `src/unison/pipeline.py` (loader passes `context_budget` per agent)
++-
++-### Contract change (Planner authorized 2026-06-19)
++-
++-```python
++-# interfaces.py — AgentSpec
++-context_budget: int | None = None  # V2: per-agent token budget override
++-```
++-
++-When `None`, falls back to the global `BudgetConfig.per_task_limit`.
++-When set, this agent's per-task limit is the specified value. This
++-is a **new optional field with a default** — does NOT break any
++-existing 461 tests.
++-
++-### Code changes
++-
++-1. **Prompt assembly (L579)**: replace the hand-built string in
++-   `_build_prompt` with a call to `assemble_context(...)`:
++-
++-   ```python
++-   from dataclasses import replace
++-   from unison.context_deflate import assemble_context, extract_top_findings
++-   from unison.budget import BudgetTracker
++-
++-   def _build_prompt(self, role, iteration):
++-       # Construct BudgetTracker using only existing constructor args.
++-       # No `from_config` classmethod — it does not exist on the
++-       # frozen surface.
++-       tracker = BudgetTracker(
++-           daily_limit=self.spec.budget.daily_token_limit,
++-           per_task_limit=self.spec.budget.per_task_limit,
++-           persist_path=self.spec.world.unison_dir / "budget.json",
++-       )
++-       system_prompt = (self.spec.world.root /
++-                        self.spec.agents[role].system_prompt_path).read_text()
++-       top_findings = []
++-       if iteration > 1:
++-           prev = self._review_file_for_phase(
++-               "dev_review" if role == "developer" else "planning_review",
++-               iteration - 1,
++-           )
++-           if prev.exists():
++-               top_findings = extract_top_findings(prev, n=3)
++-       diff = self._recent_diff()
++-       # Use the existing `current_usage` property; do NOT call a
++-       # non-existent `tracker.remaining()`. Remaining = limit - used.
++-       remaining = tracker.daily_limit - tracker.current_usage
++-       return assemble_context(
++-           system_prompt=system_prompt,
++-           task="read prd/PRD.md and prd/tech-design.md, fix V2 issues",
++-           top_findings=top_findings,
++-           diff=diff,
++-           budget=remaining,
++-       )
++-   ```
++-
++-2. **Downgrade runner selection** (frozen `AgentSpec` copy):
++-   The Orchestrator must NOT mutate `self.spec.agents[role]`. When
++-   the budget is over and `overflow_action="downgrade"`, build a
++-   new `AgentSpec` using `dataclasses.replace` and select the
++-   runner from that:
++-
++-   ```python
++-   from dataclasses import replace
++-
++-   def _select_runner(self, role):
++-       """Pick a runner for *role*, applying downgrade if needed."""
++-       agent_spec = self.spec.agents[role]
++-       tracker = self._budget_tracker  # shared BudgetTracker
++-       if (tracker.should_downgrade()
++-           and self.spec.budget.overflow_action == "downgrade"
++-           and role in self.spec.budget.downgrade_map):
++-           target = self.spec.budget.downgrade_map[role]["to"]
++-           # Frozen-safe copy: `replace` returns a new frozen instance
++-           # with the field swapped. The original spec is unchanged.
++-           effective_spec = replace(agent_spec, runtime=target)
++-       else:
++-           effective_spec = agent_spec
++-       runner = self._runners.get(effective_spec.runtime)
++-       if runner is None:
++-           self.halt(f"No runner for runtime: {effective_spec.runtime}")
++-           return None, None
++-       return runner, effective_spec
++-   ```
++-
++-   This is the **only** mechanism for downgrade: `dataclasses.replace`
++-   on the frozen `AgentSpec`, never mutation. Tests verify that
++-   `self.spec.agents[role].runtime` is unchanged after a downgrade
++-   run.
++-
++-2. **`assemble_context` arguments** (must be defined exactly):
++-   - `system_prompt: str` — full content of agent's prompt file
++-   - `task: str` — short task description
++-   - `top_findings: list[str]` — N most important from prior review
++-   - `diff: str` — `git diff HEAD~1 HEAD` output
++-   - `budget: int` — remaining tokens for this turn
++-   Returns: `str` (the full prompt). Truncates the diff using
++-   `truncate_diff(diff, max_lines=budget // 100)` if oversized.
++-
++-3. **`BudgetTracker` integration** (frozen contract surface — use only
++-   existing fields and methods):
++-   - `BudgetTracker.__init__(daily_limit, per_task_limit, persist_path)`
++-     accepts ints. Construct from `self.spec.budget`:
++-     ```python
++-     # Per-agent override: AgentSpec.context_budget takes precedence
++-     # over BudgetConfig.per_task_limit when set.
++-     agent_spec = self.spec.agents[role]
++-     per_task_limit = (
++-         agent_spec.context_budget
++-         if agent_spec.context_budget is not None
++-         else self.spec.budget.per_task_limit
++-     )
++-     tracker = BudgetTracker(
++-         daily_limit=self.spec.budget.daily_token_limit,
++-         per_task_limit=per_task_limit,
++-         persist_path=self.spec.world.unison_dir / "budget.json",
++-     )
++-     ```
++-   - Use **existing** `tracker.add_usage(tokens, phase=role, iter_n=iter)`
++-     to record usage after each agent call. **No new `consume()` or
++-     `from_config()` methods** — those would change the API surface.
++-   - For "remaining budget", use existing properties:
++-     `tracker.daily_limit - tracker.current_usage`.
++-   - Overflow action: respect existing `spec.budget.overflow_action`
++-     which is `Literal["downgrade", "halt"]` only. **No "warn" value.**
++-     When `"downgrade"`: read `spec.budget.downgrade_map[role]` and
++-     select the alternative runtime (e.g. `codex → claude`) when
++-     constructing the runner. The Orchestrator copies the AgentSpec
++-     into a new instance with the swapped runtime — does NOT mutate
++-     the frozen spec.
++-   - When `"halt"`: call `self.halt(f"budget overflow: {role}")`.
++-
++-### Acceptance tests (in `tests/test_orchestrator.py`,
++-`tests/test_context_deflate.py`, `tests/test_budget.py`)
++-
++-- `test_developer_prompt_includes_top_findings` — fake prior
++-  review with 3 findings; assert `assemble_context` call's
++-  `top_findings` argument contains the same 3 strings.
++-- `test_long_diff_is_truncated` — diff of 1000 lines, budget 5000;
++-  assert returned prompt contains `truncate_diff` marker.
++-- `test_budget_tracker_halts_on_overflow` — set
++-  `overflow_action="halt"`; consume past budget via `add_usage`;
++-  assert orchestrator enters halt state.
++-- `test_budget_tracker_downgrades_on_overflow` — set
++-  `overflow_action="downgrade"`; consume past budget; assert the
++-  runner constructed for that role uses the `downgrade_map[role]["to"]`
++-  runtime, not the original. (Use a fake `ClaudeRunner`/`CodexRunner`.)
++-- `test_assemble_context_uses_review_path_helper` — planning
++-  review path differs from dev path; assert correct path is
++-  consulted.
++-- `test_per_agent_context_budget_overrides_global` — set
++-  `agent_spec.context_budget=50000` and
++-  `spec.budget.per_task_limit=200000`; assert the constructed
++-  `BudgetTracker` has `per_task_limit=50000`.
++-- `test_per_agent_context_budget_none_falls_back_to_global` —
++-  `agent_spec.context_budget=None`; assert
++-  `BudgetTracker.per_task_limit == spec.budget.per_task_limit`.
++-
++----
++-
++-## Phase 8 — Schema Migrate (6/10) — *Full implementation, all V2 fields now representable*
++-
++-### Files
++-- `interfaces.py` (PipelineSpec + AgentSpec, fields already added in
++-  Phase 5/6/7 above)
++-- `src/unison/schema_migrate.py:252` (PipelineSpec migration)
++-- `src/unison/pipeline.py:138` (loader must keep V2 fields)
++-
++-### Migrated shape (all V2 fields now representable)
++-
++-`PipelineSpec` (in `interfaces.py`) after Phase 5/6/7 patches accepts:
++-- `dag: list[Stage] | None` — representable
++-- `reviewer_config: ReviewerConfig | None` — representable (added Phase 6)
++-- `parallel_dev: WorktreeConfig | None` — representable (added Phase 5)
++-- `budget: BudgetConfig` — representable (V2 already has it)
++-- `AgentSpec.context_budget: int | None` — representable (added Phase 7)
++-
++-### Resolution
++-
++-1. **Migration function** (Phase 8): for the V1 → V2 migration, add
++-   all V2 field defaults:
++-   ```python
++-   d.setdefault("dag", None)
++-   d.setdefault("reviewer_config", None)
++-   d.setdefault("parallel_dev", None)
++-   # AgentSpec.context_budget is per-agent, set in loader
++-   d["version"] = "2.0"
++-   ```
++-   **No more `PipelineValidationError` for unsupported fields** —
++-   everything V2 needs is now representable.
++-
++-2. **Loader** (`PipelineLoader.load`): preserve all V2 fields in
++-   `PipelineSpec` construction. The current code (pipeline.py:138)
++-   **silently drops** these fields; the fix is to add them to the
++-   `PipelineSpec(...)` constructor call:
++-   ```python
++-   return PipelineSpec(
++-       version=version,
++-       world=world,
++-       agents=agents,
++-       project=project_cfg,
++-       bootstrap=bootstrap_cfg,
++-       budget=budget_cfg,
++-       snapshots=snapshots_cfg,
++-       risk_matrix=risk_cfg,
++-       dag=dag_cfg,                       # Phase 3 + Phase 8
++-       reviewer_config=reviewer_cfg,      # Phase 6 + Phase 8
++-       parallel_dev=parallel_dev_cfg,     # Phase 5 + Phase 8
++-   )
++-   ```
++-   `dag_cfg`, `reviewer_cfg`, `parallel_dev_cfg` are parsed by the
++-   corresponding `_build_*` helpers in PipelineLoader.
++-
++-3. **AgentSpec.context_budget** propagation: the loader passes
++-   `context_budget` from raw YAML to the AgentSpec constructor
++-   (currently the field is dropped).
++-
++-### Migration compatibility — IMPORTANT
++-
++-The current test suite has **3 obsolete tests** in
++-`tests/test_schema_migrate.py` that explicitly assert the V1→V2
++-migration **does not** add certain fields. After Round 5/6
++-contract authorization, the resolution is:
++-
++-| Obsolete test | Lines | Resolution |
++-|---------------|-------|------------|
++-| `test_adds_dag` | 320 | **REPLACE** with `test_v2_migration_adds_dag` asserting `"dag" in result and result["dag"] is None` |
++-| `test_adds_reviewer_config` | 326 | **REPLACE** with `test_v2_migration_adds_reviewer_config` asserting `"reviewer_config" in result` |
++-| `test_adds_context_budget_to_agents` | 345 | **REMOVE** (no replacement at the migration level) — `context_budget` is per-agent, set by the loader not the migration function. Coverage moves to loader tests below. |
++-
++-**Migration adds 3 top-level PipelineSpec defaults**:
++-`dag=None`, `reviewer_config=None`, `parallel_dev=None`.
++-
++-**`AgentSpec.context_budget`** is set per-agent by the loader, not
++-by the migration function. There is no `test_v2_migration_adds_context_budget`
++-test — the obsolete `test_adds_context_budget_to_agents` is deleted
++-and replaced by `test_loader_preserves_per_agent_context_budget`
++-(see loader tests below).
++-
++-The original 461-test count will **drop by 3** (obsolete tests
++-removed) and **gain N** (new V2 acceptance tests), ending at
++-**~470+ tests passing**.
++-
++-### Acceptance tests (in `tests/test_schema_migrate.py`,
++-`tests/test_pipeline.py`)
++-
++-**Migration tests to UPDATE** (obsolete → new behavior):
++-- `test_v2_migration_adds_dag` — V1 YAML with no V2 fields
++-  migrates to V2 with `"dag" in result and result["dag"] is None`.
++-- `test_v2_migration_adds_reviewer_config` — V1 YAML migrates to
++-  V2 with `"reviewer_config" in result and result["reviewer_config"] is None`.
++-- `test_v2_migration_adds_parallel_dev` — V1 YAML migrates to V2
++-  with `"parallel_dev" in result and result["parallel_dev"] is None`.
++-- **No migration test for `context_budget`** — see loader tests
++-  below. The obsolete `test_adds_context_budget_to_agents` is
++-  deleted, not renamed.
++-
++-**Loader tests (new behavior)**:
++-- `test_loader_preserves_reviewer_config` — V2 YAML with
++-  `reviewer_config:`; assert `spec.reviewer_config` is set.
++-- `test_loader_preserves_parallel_dev` — V2 YAML with
++-  `parallel_dev:`; assert `spec.parallel_dev` is set.
++-- `test_loader_preserves_parallel_dev_features` — V2 YAML with
++-  `parallel_dev: { features: [a, b] }`; assert
++-  `spec.parallel_dev.features == ["a", "b"]`.
++-- `test_loader_preserves_per_agent_context_budget` — V2 YAML
++-  with `agents.developer.context_budget: 50000`; assert the
++-  loaded `AgentSpec.context_budget == 50000`.
++-- `test_loader_preserves_dag_field` — V2 YAML with valid
++-  `dag:` entries; assert `spec.dag` is a non-empty
++-  `list[Stage]`.
++-- `test_existing_v1_yaml_still_loads` — minimal V1 spec; assert
++-  migration + load produces a working `PipelineSpec` (all V2
++-  fields default to `None`).
++-- `test_no_validationerror_for_supported_v2_fields` — V2 YAML
++-  with all 4 new fields; assert NO `PipelineValidationError`
++-  is raised.
++-
++----
++-
++-## Iteration plan (final, after contract authorization)
++-
++-| Iter | Phases | Review file | Why this order |
++-|------|--------|-------------|----------------|
++-| 1 | **8** (schema), **3** (DAG loader + scheduler), **4** (review path helper) | `reviews/iter-1.md` | Unblocks V2 spec loading + sets up review-path helper that Phase 6/7 need |
++-| 2 | **7** (context + per-agent budget), **6** (reviewer YAML + spec.reviewer_config) | `reviews/iter-2.md` | Both depend on the review-path helper from Iter 1 |
++-| 3 | **1** (observer), **2** (channel), **5** (worktree full impl + merge_reconciliation) | `reviews/iter-3.md` | Leaf fixes; Phase 5 is now full implementation per Planner authorization 2026-06-19 |
++-
++-Reviewer (Codex) writes the corresponding `reviews/iter-N.md` at
++-the end of each iteration with verdict PASS or REQUEST_CHANGES.
++-
++----
++-
++-## What the Developer (Claude Code) commits per phase
++-
++-```
++-fix: Phase 8 — schema migrate V2 fields (dag, reviewer_config, parallel_dev, context_budget)
++-fix: Phase 3 — DAG loader + executor cancellation
++-fix: Phase 4 — review path helper + planner artifact check
++-fix: Phase 7 — context_deflate + BudgetTracker + per-agent context_budget
++-fix: Phase 6 — YAML safe_dump + spec.reviewer_config + path helper usage
++-fix: Phase 1 — observer liveness + ENOSPC fallback + report file
++-fix: Phase 2 — channel broadcast recipient
++-fix: Phase 5 — worktree.merge_reconciliation() + parallel_dev orchestrator wiring
++-```
++-
++-8 commits, 3 iter reviews, 1 final 8-phase review.
+++The Planner will write the full tech design here.
++
++
++## Design
++# Phase 9: Technical Design
++
++The Planner will write the full tech design here.
++
++
++## PRD
++# Phase 9: OpenClaw Model Debug Skill
++
++The Planner will write the full PRD here.
++
++
++=== STDOUT ===
++All three deliverables are complete. Here's what was produced:
++
++## Summary
++
++### 1. `prd/PRD.md` (78 lines)
++Product Requirements Document covering:
++- **Problem**: OpenClaw agents lack a standard diagnostic procedure for model connectivity failures
++- **Scope**: 4 diagnostic scenarios — unreachable, auth failure, timeout, 404
++- **Acceptance criteria**: Valid YAML frontmatter, ≥3 scenarios with symptom→diagnosis→fix, dual reviewer PASS
++- **Constraints**: Read-only access to other agents, no Unison code modification, snapshot safety
++
++### 2. `prd/tech-design.md` (318 lines)
++Technical design covering:
++- **SKILL.md format spec**: YAML frontmatter fields (`name`, `description`, `version`, `tags`) + markdown body
++- **Canonical scenario structure**: `症状 (Symptom)` → `诊断 (Diagnosis)` → `修复 (Fix)` with decision tree + commands
++- **Full technical detail for all 4 scenarios** including trigger patterns, diagnosis commands, decision trees, and fix paths
++- **Validation approach**: Python YAML parse + reviewer assessment
++- **Risk matrix**: L0 for reads, L2 for writes, with mitigation
++
++### 3. `~/.openclaw/agents/openclaw-model-debug/SKILL.md` (507 lines)
++The executable diagnostic skill with:
++- **Valid YAML frontmatter**: `name`, `description`, `version: 1.0.0`, `tags: [diagnostics, model, connectivity]`
++- **4 diagnostic scenarios**, each with symptom→diagnosis→fix structure:
++  - **场景 1**: Model Unreachable (DNS, TCP, HTTPS, proxy checks)
++  - **场景 2**: Authentication Failure (401, API key validation, literal vs env var)
++  - **场景 3**: Request Timeout (latency probe, timeout config, model tier)
++  - **场景 4**: Model Not Found (404, model name spelling, provider baseUrl, model list fetch)
++- **Standard repair flow** with backup-first template
++- **Escalation paths** for 5 operator-required scenarios
++- **Config file reference** table with read/write permissions
++- All commands use absolute paths and standard CLI tools (`curl`, `python3`, `jq`, `grep`, `openssl`, `dig`)
++
++
++=== STDERR ===
++
+
+diff --git a/observer/logs/reviewer_iter-1_20260619T152753Z.log b/observer/logs/reviewer_iter-1_20260619T152753Z.log
+new file mode 100644
+index 0000000..7e4361f
+--- /dev/null
++++ b/observer/logs/reviewer_iter-1_20260619T152753Z.log
+@@ -0,0 +1,416 @@
++=== COMMAND ===
++codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 1: 1. Run tests: python3 -c "import yaml; c=open('/home/sean/.openclaw/agents/openclaw-model-debug/SKILL.md').read(); p=c.split('---'); fm=yaml.safe_load(p[1]); print(f'OK: {fm.get(\"name\")} v{fm.get(\"version\")}')" 2. Write review to reviews/iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
++
++# Plan-Reviewer (Codex) — Phase 9: PRD Review
++
++Review the Planner's PRD (`prd/PRD.md`) and technical design (`prd/tech-design.md`).
++
++## Check
++
++1. **Clarity**: Does the PRD clearly state what skill to build and why?
++2. **Scope**: Are diagnostic scenarios well-defined? At least 3?
++3. **Design**: Does tech-design specify SKILL.md format, target path, validation?
++4. **Feasibility**: Can the Developer actually execute this? Are all paths correct?
++5. **Constraints**: Are constraints realistic (read-only for other agents)?
++
++## Output
++
++```
++verdict: PASS | REQUEST_CHANGES
++summary: <1-line>
++findings:
++  - <specific issue if REQUEST_CHANGES>
++```
++
++
++## Git Diff
++
+
+diff --git a/phase10-round1-pipeline.yaml b/phase10-round1-pipeline.yaml
++new file mode 100644
++index 0000000..ee97c1c
++--- /dev/null
+++++ b/phase10-round1-pipeline.yaml
++@@ -0,0 +1,24 @@
+++# Phase 10 Round 1: Plugin System Design Debate
+++# Architect(planner) ↔ Critic(reviewer) → plugin design proposal
+++version: "2.0"
+++project_root: "."
+++
+++agents:
+++  architect:
+++    role: architect
+++    runtime: claude
+++    model: deepseek-v4-pro
+++    system_prompt_path: "prompts/architect-phase10.md"
+++    pipeline_role: planner
+++    task_instruction: "Design a plugin system for Unison to support custom agent runtimes beyond the 4 hardcoded ones. Write the proposal to prd/PRD.md (as PRD) and prd/tech-design.md. Cover: plugin interface, loading, configuration, CLI flag mapping, backward compatibility, migration path. Be specific with code snippets and YAML examples."
+++
+++  critic:
+++    role: critic
+++    runtime: codex
+++    model: gpt-5.5
+++    system_prompt_path: "prompts/critic-phase10.md"
+++    pipeline_role: reviewer
++... (truncated)
++
++
+
+diff --git a/phase10-round2-pipeline.yaml b/phase10-round2-pipeline.yaml
++new file mode 100644
++index 0000000..a179f67
++--- /dev/null
+++++ b/phase10-round2-pipeline.yaml
++@@ -0,0 +1,24 @@
+++# Phase 10 Round 2: Plugin System Impact Assessment
+++# PM-Analyst(planner) ↔ Cost-Analyst(reviewer) → impact assessment
+++version: "2.0"
+++project_root: "."
+++
+++agents:
+++  pm:
+++    role: pm-analyst
+++    runtime: claude
+++    model: deepseek-v4-pro
+++    system_prompt_path: "prompts/pm-phase10.md"
+++    pipeline_role: planner
+++    task_instruction: "Read the plugin design proposal at prd/plugin-proposal.md (saved from Round 1). Write an impact assessment to prd/PRD.md and prd/tech-design.md. Evaluate: scope (LoC estimate), priority vs Phase 12/14, risk to existing tests, alternative simpler approaches, dependency on Phase 15. Be concrete with file counts and test impact estimates."
+++
+++  cost_analyst:
+++    role: cost-analyst
+++    runtime: codex
+++    model: gpt-5.5
+++    system_prompt_path: "prompts/cost-analyst-phase10.md"
+++    pipeline_role: reviewer
+++
+++project:
+++  test_command: "test -f prd/PRD.md && test -f prd/tech-design.md && echo 'assessment exists'"
+++  max_iterations: 2
++
++
++
+
+diff --git a/phase12-pipeline.yaml b/phase12-pipeline.yaml
++new file mode 100644
++index 0000000..ee71938
++--- /dev/null
+++++ b/phase12-pipeline.yaml
++@@ -0,0 +1,44 @@
+++# Phase 12: Hermes/OpenClaw Skill Auto-Maintenance (4-agent)
+++# Planner → Plan-Reviewer → Developer → Dev-Reviewer
+++version: "2.0"
+++project_root: "."
+++
+++agents:
+++  planner:
+++    role: skill-auditor
+++    runtime: claude
+++    model: deepseek-v4-pro
+++    system_prompt_path: "prompts/skill-auditor-phase12.md"
+++    pipeline_role: planner
+++    task_instruction: "Plan a skill health audit. Write PRD to prd/PRD.md: define scope (~/.hermes/skills/ and ~/.openclaw/agents/), audit dimensions (CLI validity, path validity, frontmatter, cross-refs), output format. Write technical design to prd/tech-design.md."
+++
+++  plan_reviewer:
+++    role: plan-reviewer
+++    runtime: codex
+++    model: gpt-5.5
+++    system_prompt_path: "prompts/audit-reviewer-phase12.md"
+++    pipeline_role: reviewer
+++
+++  developer:
+++    role: skill-auditor-dev
+++    runtime: claude
+++    model: deepseek-v4-pro
+++    system_prompt_path: "prompts/skill-auditor-phase12.md"
+++    task_instruction: "Execute the skill health audit per prd/PRD.md and prd/tech-design.md. Write findings to reviews/skill-audit.md. Scan ~/.hermes/skills/ and ~/.openclaw/agents/ for outdated commands, missing paths, incomplete frontmatter, broken cross-references. Do NOT modify any skill files."
+++
+++  dev_reviewer:
+++    role: dev-reviewer
+++    runtime: codex
+++    model: gpt-5.5
+++    system_prompt_path: "prompts/audit-reviewer-phase12.md"
+++    pipeline_role: reviewer
+++
+++project:
+++  test_command: "test -f reviews/skill-audit.md && echo 'audit exists'"
+++  max_iterations: 2
+++
+++snapshots:
+++  enabled: true
+++  external_paths:
+++    - "~/.hermes/skills/"
+++    - "~/.openclaw/agents/"
++
++
++
+
+diff --git a/phase14-pipeline.yaml b/phase14-pipeline.yaml
++new file mode 100644
++index 0000000..b4c953d
++--- /dev/null
+++++ b/phase14-pipeline.yaml
++@@ -0,0 +1,41 @@
+++# Phase 14: Cross-Project Knowledge Transfer (4-agent)
+++# Planner → Plan-Reviewer → Developer → Dev-Reviewer
+++version: "2.0"
+++project_root: "."
+++
+++agents:
+++  planner:
+++    role: template-migrator
+++    runtime: claude
+++    model: deepseek-v4-pro
+++    system_prompt_path: "prompts/template-migrator-phase14.md"
+++    pipeline_role: planner
+++    task_instruction: "Plan template migration from Unison project to a generic Python project. Write PRD to prd/PRD.md: define what to migrate (pipeline.yaml structure, developer/reviewer prompt patterns, risk matrix), target format, validation criteria. Write technical design to prd/tech-design.md."
+++
+++  plan_reviewer:
+++    role: plan-reviewer
+++    runtime: codex
+++    model: gpt-5.5
+++    system_prompt_path: "prompts/migrate-reviewer-phase14.md"
+++    pipeline_role: reviewer
+++
+++  developer:
+++    role: template-migrator-dev
+++    runtime: claude
+++    model: deepseek-v4-pro
+++    system_prompt_path: "prompts/template-migrator-phase14.md"
+++    task_instruction: "Execute template migration per prd/PRD.md and prd/tech-design.md. Read source files from ~/projects/unison/ (v2-fix-pipeline.yaml, prompts/developer-v2-fix.md, prompts/reviewer-v2-fix.md). Generate target project files to ~/projects/unison/target-demo/: target-pipeline.yaml, prompts/developer-target.md, prompts/reviewer-target.md. Mark user-customizable fields with <USER MUST FILL>."
+++
+++  dev_reviewer:
+++    role: dev-reviewer
+++    runtime: codex
+++    model: gpt-5.5
+++    system_prompt_path: "prompts/migrate-reviewer-phase14.md"
+++    pipeline_role: reviewer
+++
+++project:
+++  test_command: "cd ~/projects/unison && PYTHONPATH=/home/sean/projects/unison:/home/sean/projects/unison/src python3 -m unison.cli dry-run --pipeline target-demo/target-pipeline.yaml 2>&1"
+++  max_iterations: 2
+++
+++snapshots:
+++  enabled: true
++
++
++## Design
++# Phase 9: Technical Design
++
++The Planner will write the full tech design here.
++
++
++## PRD
++# Phase 9: OpenClaw Model Debug Skill
++
++The Planner will write the full PRD here.
++
++
++=== STDOUT ===
++
++
++=== STDERR ===
++Reading additional input from stdin...
++OpenAI Codex v0.141.0
++--------
++workdir: /home/sean/projects/unison
++model: gpt-5.5
++provider: openai-custom
++approval: never
++sandbox: danger-full-access
++reasoning effort: high
++reasoning summaries: none
++session id: 019ee07e-e6c7-7c82-b334-b8ba26769fb7
++--------
++user
++Review Iteration 1: 1. Run tests: python3 -c "import yaml; c=open('/home/sean/.openclaw/agents/openclaw-model-debug/SKILL.md').read(); p=c.split('---'); fm=yaml.safe_load(p[1]); print(f'OK: {fm.get(\"name\")} v{fm.get(\"version\")}')" 2. Write review to reviews/iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
++
++# Plan-Reviewer (Codex) — Phase 9: PRD Review
++
++Review the Planner's PRD (`prd/PRD.md`) and technical design (`prd/tech-design.md`).
++
++## Check
++
++1. **Clarity**: Does the PRD clearly state what skill to build and why?
++2. **Scope**: Are diagnostic scenarios well-defined? At least 3?
++3. **Design**: Does tech-design specify SKILL.md format, target path, validation?
++4. **Feasibility**: Can the Developer actually execute this? Are all paths correct?
++5. **Constraints**: Are constraints realistic (read-only for other agents)?
++
++## Output
++
++```
++verdict: PASS | REQUEST_CHANGES
++summary: <1-line>
++findings:
++  - <specific issue if REQUEST_CHANGES>
++```
++
++
++## Git Diff
++
+
+diff --git a/phase10-round1-pipeline.yaml b/phase10-round1-pipeline.yaml
++new file mode 100644
++index 0000000..ee97c1c
++--- /dev/null
+++++ b/phase10-round1-pipeline.yaml
++@@ -0,0 +1,24 @@
+++# Phase 10 Round 1: Plugin System Design Debate
+++# Architect(planner) ↔ Critic(reviewer) → plugin design proposal
+++version: "2.0"
+++project_root: "."
+++
+++agents:
+++  architect:
+++    role: architect
+++    runtime: claude
+++    model: deepseek-v4-pro
+++    system_prompt_path: "prompts/architect-phase10.md"
+++    pipeline_role: planner
+++    task_instruction: "Design a plugin system for Unison to support custom agent runtimes beyond the 4 hardcoded ones. Write the proposal to prd/PRD.md (as PRD) and prd/tech-design.md. Cover: plugin interface, loading, configuration, CLI flag mapping, backward compatibility, migration path. Be specific with code snippets and YAML examples."
+++
+++  critic:
+++    role: critic
+++    runtime: codex
+++    model: gpt-5.5
+++    system_prompt_path: "prompts/critic-phase10.md"
+++    pipeline_role: reviewer
++... (truncated)
++
++
+
+diff --git a/phase10-round2-pipeline.yaml b/phase10-round2-pipeline.yaml
++new file mode 100644
++index 0000000..a179f67
++--- /dev/null
+++++ b/phase10-round2-pipeline.yaml
++@@ -0,0 +1,24 @@
+++# Phase 10 Round 2: Plugin System Impact Assessment
+++# PM-Analyst(planner) ↔ Cost-Analyst(reviewer) → impact assessment
+++version: "2.0"
+++project_root: "."
+++
+++agents:
+++  pm:
+++    role: pm-analyst
+++    runtime: claude
+++    model: deepseek-v4-pro
+++    system_prompt_path: "prompts/pm-phase10.md"
+++    pipeline_role: planner
+++    task_instruction: "Read the plugin design proposal at prd/plugin-proposal.md (saved from Round 1). Write an impact assessment to prd/PRD.md and prd/tech-design.md. Evaluate: scope (LoC estimate), priority vs Phase 12/14, risk to existing tests, alternative simpler approaches, dependency on Phase 15. Be concrete with file counts and test impact estimates."
+++
+++  cost_analyst:
+++    role: cost-analyst
+++    runtime: codex
+++    model: gpt-5.5
+++    system_prompt_path: "prompts/cost-analyst-phase10.md"
+++    pipeline_role: reviewer
+++
+++project:
+++  test_command: "test -f prd/PRD.md && test -f prd/tech-design.md && echo 'assessment exists'"
+++  max_iterations: 2
++
++
++
+
+diff --git a/phase12-pipeline.yaml b/phase12-pipeline.yaml
++new file mode 100644
++index 0000000..ee71938
++--- /dev/null
+++++ b/phase12-pipeline.yaml
++@@ -0,0 +1,44 @@
+++# Phase 12: Hermes/OpenClaw Skill Auto-Maintenance (4-agent)
+++# Planner → Plan-Reviewer → Developer → Dev-Reviewer
+++version: "2.0"
+++project_root: "."
+++
+++agents:
+++  planner:
+++    role: skill-auditor
+++    runtime: claude
+++    model: deepseek-v4-pro
+++    system_prompt_path: "prompts/skill-auditor-phase12.md"
+++    pipeline_role: planner
+++    task_instruction: "Plan a skill health audit. Write PRD to prd/PRD.md: define scope (~/.hermes/skills/ and ~/.openclaw/agents/), audit dimensions (CLI validity, path validity, frontmatter, cross-refs), output format. Write technical design to prd/tech-design.md."
+++
+++  plan_reviewer:
+++    role: plan-reviewer
+++    runtime: codex
+++    model: gpt-5.5
+++    system_prompt_path: "prompts/audit-reviewer-phase12.md"
+++    pipeline_role: reviewer
+++
+++  developer:
+++    role: skill-auditor-dev
+++    runtime: claude
+++    model: deepseek-v4-pro
+++    system_prompt_path: "prompts/skill-auditor-phase12.md"
+++    task_instruction: "Execute the skill health audit per prd/PRD.md and prd/tech-design.md. Write findings to reviews/skill-audit.md. Scan ~/.hermes/skills/ and ~/.openclaw/agents/ for outdated commands, missing paths, incomplete frontmatter, broken cross-references. Do NOT modify any skill files."
+++
+++  dev_reviewer:
+++    role: dev-reviewer
+++    runtime: codex
+++    model: gpt-5.5
+++    system_prompt_path: "prompts/audit-reviewer-phase12.md"
+++    pipeline_role: reviewer
+++
+++project:
+++  test_command: "test -f reviews/skill-audit.md && echo 'audit exists'"
+++  max_iterations: 2
+++
+++snapshots:
+++  enabled: true
+++  external_paths:
+++    - "~/.hermes/skills/"
+++    - "~/.openclaw/agents/"
++
++
++
+
+diff --git a/phase14-pipeline.yaml b/phase14-pipeline.yaml
++new file mode 100644
++index 0000000..b4c953d
++--- /dev/null
+++++ b/phase14-pipeline.yaml
++@@ -0,0 +1,41 @@
+++# Phase 14: Cross-Project Knowledge Transfer (4-agent)
+++# Planner → Plan-Reviewer → Developer → Dev-Reviewer
+++version: "2.0"
+++project_root: "."
+++
+++agents:
+++  planner:
+++    role: template-migrator
+++    runtime: claude
+++    model: deepseek-v4-pro
+++    system_prompt_path: "prompts/template-migrator-phase14.md"
+++    pipeline_role: planner
+++    task_instruction: "Plan template migration from Unison project to a generic Python project. Write PRD to prd/PRD.md: define what to migrate (pipeline.yaml structure, developer/reviewer prompt patterns, risk matrix), target format, validation criteria. Write technical design to prd/tech-design.md."
+++
+++  plan_reviewer:
+++    role: plan-reviewer
+++    runtime: codex
+++    model: gpt-5.5
+++    system_prompt_path: "prompts/migrate-reviewer-phase14.md"
+++    pipeline_role: reviewer
+++
+++  developer:
+++    role: template-migrator-dev
+++    runtime: claude
+++    model: deepseek-v4-pro
+++    system_prompt_path: "prompts/template-migrator-phase14.md"
+++    task_instruction: "Execute template migration per prd/PRD.md and prd/tech-design.md. Read source files from ~/projects/unison/ (v2-fix-pipeline.yaml, prompts/developer-v2-fix.md, prompts/reviewer-v2-fix.md). Generate target project files to ~/projects/unison/target-demo/: target-pipeline.yaml, prompts/developer-target.md, prompts/reviewer-target.md. Mark user-customizable fields with <USER MUST FILL>."
+++
+++  dev_reviewer:
+++    role: dev-reviewer
+++    runtime: codex
+++    model: gpt-5.5
+++    system_prompt_path: "prompts/migrate-reviewer-phase14.md"
+++    pipeline_role: reviewer
+++
+++project:
+++  test_command: "cd ~/projects/unison && PYTHONPATH=/home/sean/projects/unison:/home/sean/projects/unison/src python3 -m unison.cli dry-run --pipeline target-demo/target-pipeline.yaml 2>&1"
+++  max_iterations: 2
+++
+++snapshots:
+++  enabled: true
++
++
++## Design
++# Phase 9: Technical Design
++
++The Planner will write the full tech design here.
++
++
++## PRD
++# Phase 9: OpenClaw Model Debug Skill
++
++The Planner will write the full PRD here.
++
++ERROR: Missing environment variable: `OPENAI_API_KEY`.
++ERROR: Missing environment variable: `OPENAI_API_KEY`.
++
+
+diff --git a/phase9-pipeline.yaml b/phase9-pipeline.yaml
+index 69b8473..0ff0be7 100644
+--- a/phase9-pipeline.yaml
++++ b/phase9-pipeline.yaml
+@@ -1,36 +1,20 @@
+-# Unison pipeline — Phase 9: Agent Skill Development (4-agent mode)
+-#   Planner(Claude) → Plan-Reviewer(Codex) → Developer(Claude) → Dev-Reviewer(Codex)
++# Phase 9: OpenClaw Model Debug Skill (2-agent — PRD pre-written by Hermes)
+ version: "2.0"
+ project_root: "."
+ 
+ agents:
+-  planner:
+-    role: planner
+-    runtime: claude
+-    model: deepseek-v4-pro
+-    system_prompt_path: "prompts/planner-phase9.md"
+-    task_instruction: "Create an OpenClaw agent skill 'openclaw-model-debug' at ~/.openclaw/agents/openclaw-model-debug/SKILL.md. It should diagnose model connectivity issues (unreachable, auth failure, timeout, 404). Write PRD to prd/PRD.md and technical design to prd/tech-design.md. Target: a practical, executable SKILL.md with ≥3 diagnostic scenarios."
+-
+-  plan_reviewer:
+-    role: plan-reviewer
+-    runtime: codex
+-    model: gpt-5.5
+-    system_prompt_path: "prompts/plan-reviewer-phase9.md"
+-    pipeline_role: reviewer
+-
+   developer:
+     role: developer
+     runtime: claude
+     model: deepseek-v4-pro
+     system_prompt_path: "prompts/developer-phase9.md"
+-    task_instruction: "Read prd/PRD.md and prd/tech-design.md. Create the file ~/.openclaw/agents/openclaw-model-debug/SKILL.md per the design. The SKILL.md is the primary deliverable — it lives OUTSIDE this git repo. Create any supporting files inside the repo only if needed."
++    task_instruction: "Read prd/PRD-phase9.md and prd/tech-design-phase9.md. Create ~/.openclaw/agents/openclaw-model-debug/SKILL.md — a diagnostic skill with ≥3 scenarios (unreachable, auth failure, timeout). SKILL.md is the deliverable (lives OUTSIDE this repo)."
+ 
+-  dev_reviewer:
+-    role: dev-reviewer
++  reviewer:
++    role: reviewer
+     runtime: codex
+     model: gpt-5.5
+     system_prompt_path: "prompts/reviewer-phase9.md"
+-    pipeline_role: reviewer
+ 
+ project:
+   test_command: "python3 -c \"import yaml; c=open('/home/sean/.openclaw/agents/openclaw-model-debug/SKILL.md').read(); p=c.split('---'); fm=yaml.safe_load(p[1]); print(f'OK: {fm.get(\\\"name\\\")} v{fm.get(\\\"version\\\")}')\""
+
+
+diff --git a/reviews/iter-1.md b/reviews/iter-1.md
+deleted file mode 100644
+index 50ea512..0000000
+--- a/reviews/iter-1.md
++++ /dev/null
+@@ -1,23 +0,0 @@
+----
+-verdict: PASS
+-summary: Production-path DAG timeout blocking is fixed; Iter 1 is ready for Iter 2.
+-findings: []
+----
+-
+-Iter 1 re-verification confirms the previous critical finding is fixed.
+-
+-Production-path blocking issue:
+-- `src/unison/pipeline.py` defines `_NonWaitingThreadPoolExecutor` as the default pool factory when `pool_factory` is not provided.
+-- `DAGScheduler.execute_parallel` no longer uses `with pool_factory(...) as pool:`. It creates the pool explicitly and shuts it down in `finally` with `pool.shutdown(wait=False, cancel_futures=True)`.
+-- `_NonWaitingThreadPoolExecutor` exists at module scope and is importable.
+-- `src/unison/orchestrator.py` calls `scheduler.execute_parallel(executor=exec_stage, max_workers=4)` without passing `pool_factory`, so the orchestrator production DAG path uses the new non-waiting default.
+-
+-Regression coverage:
+-- `python3 -m pytest tests/test_pipeline.py::TestDAGSchedulerV2::test_dag_scheduler_default_path_returns_on_hung_stage -v`
+-- Result: `1 passed in 1.05s`
+-
+-Focused regression subset:
+-- `python3 -m pytest tests/test_schema_migrate.py tests/test_pipeline.py tests/test_completion.py -q`
+-- Result: `119 passed in 3.58s`
+-
+-Verdict: PASS. The production-path blocking issue is fixed, the new regression test passes, and Iter 1 is complete. Ready for Iter 2: Phase 7 + Phase 6.
+
+
+## Design
+# Phase 9: Technical Design
+
+The Planner will write the full tech design here.
+
+
+## PRD
+# Phase 9: OpenClaw Model Debug Skill
+
+The Planner will write the full PRD here.
+
+
+=== STDOUT ===
+The SKILL.md already exists and is complete. Here's the validation summary:
+
+## `~/.openclaw/agents/openclaw-model-debug/SKILL.md` — Status: Complete ✅
+
+### Frontmatter (valid YAML)
+| Field | Value |
+|-------|-------|
+| `name` | `openclaw-model-debug` |
+| `description` | 诊断 OpenClaw model connectivity 问题 |
+| `version` | `1.0.0` |
+| `tags` | `[diagnostics, model, connectivity]` |
+
+### Diagnostic Scenarios (4 of ≥3 required)
+| # | Scenario | 症状 | 诊断 | 修复 |
+|---|----------|------|------|------|
+| 1 | **Model Unreachable** — DNS/TCP/HTTPS/proxy | ✅ | ✅ | ✅ |
+| 2 | **Authentication Failure** — 401 / API key | ✅ | ✅ | ✅ |
+| 3 | **Request Timeout** — latency probe / config | ✅ | ✅ | ✅ |
+| 4 | **Model Not Found** — 404 / model name | ✅ | ✅ | ✅ |
+
+### Additional content
+- Trigger conditions (5 error patterns)
+- Config file reference table (read/write permissions)
+- Standard repair flow with backup-before-edit
+- Escalation paths for 5 operator-required scenarios
+- Cross-references to related Hermes skills
+
+**Total**: 507 lines, 432 non-empty. The file was previously created by the Planner/Developer and is already a complete, production-ready deliverable. No modifications needed.
+
+
+=== STDERR ===
+

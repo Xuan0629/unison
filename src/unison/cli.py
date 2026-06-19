@@ -21,6 +21,24 @@ from unison.pipeline import PipelineLoader, PipelineValidationError
 from unison.state import State
 
 
+def _load_api_keys() -> None:
+    """Load API keys from ~/.hermes/.env into os.environ for subprocess agents."""
+    import os
+    env_path = Path.home() / ".hermes" / ".env"
+    if not env_path.exists():
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip("\"'")
+            if key and val and key not in os.environ:
+                os.environ[key] = val
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="unison",
@@ -67,6 +85,8 @@ def _load(spec_path: Path) -> tuple:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    # Load API keys from ~/.hermes/.env before subprocess agents run
+    _load_api_keys()
     spec, _ = _load(args.pipeline)
     if args.project is not None:
         # Override project_root from CLI flag
