@@ -24,6 +24,7 @@ agents:
     runtime: claude
     model: deepseek-v4-pro
     system_prompt_path: "prompts/skill-auditor-phase12.md"
+    pipeline_role: developer
     task_instruction: "Execute the skill health audit per prd/PRD.md and prd/tech-design.md. Write findings to reviews/skill-audit.md. Scan ~/.hermes/skills/ and ~/.openclaw/agents/ for outdated commands, missing paths, incomplete frontmatter, broken cross-references. Do NOT modify any skill files."
 
   dev_reviewer:
