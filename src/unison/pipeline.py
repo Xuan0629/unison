@@ -519,13 +519,30 @@ class DAGScheduler:
 
         return result
 
-    def _ready(self, completed: set[str], failed: set[str]) -> list[Stage]:
+    def _ready(self, completed: set[str], failed: set[str],
+               in_flight: set[str] | None = None) -> list[Stage]:
         """Return stages whose dependencies are all in *completed* and none
-        are in *failed*, excluding stages already in *completed* or *failed*.
+        are in *failed*, excluding stages already in *completed*, *failed*,
+        or *in_flight*.
+
+        Args:
+            completed: Successfully completed stage names.
+            failed: Failed stage names.
+            in_flight: Stage names whose futures are still active in
+                the executor (not yet completed or failed). These
+                should not be re-submitted even if they are not yet
+                in *completed* — a race where `wait` returned
+                multiple done futures at once but only one was
+                processed before `_ready` ran again would otherwise
+                cause duplicate dispatch.
         """
+        if in_flight is None:
+            in_flight = set()
         ready: list[Stage] = []
         for stage in self.stages:
-            if stage.name in completed or stage.name in failed:
+            if (stage.name in completed
+                    or stage.name in failed
+                    or stage.name in in_flight):
                 continue
             if all(dep in completed for dep in stage.dependencies):
                 if not any(dep in failed for dep in stage.dependencies):
@@ -582,12 +599,18 @@ class DAGScheduler:
         with pool_factory(max_workers=max_workers) as pool:
             # Map: future -> (stage, deadline)
             futures: dict = {}
-            for stage in self._ready(completed, failed):
+            in_flight: set[str] = set()
+            for stage in self._ready(completed, failed, in_flight):
                 fut = pool.submit(executor, stage)
                 futures[fut] = (stage, time.monotonic() + stage.timeout)
+                in_flight.add(stage.name)
 
             while futures:
-                done, _ = wait(futures, timeout=0.05,
+                # Poll interval: 10ms (was 50ms) to keep latency low
+                # for normal completion. Hung stages are still detected
+                # by the deadline check below; the only cost is
+                # ~100 wakeups/sec when stages are running.
+                done, _ = wait(futures, timeout=0.01,
                                return_when=FIRST_COMPLETED)
                 now = time.monotonic()
 
@@ -601,6 +624,7 @@ class DAGScheduler:
                     except Exception:
                         results[stage.name] = False
                         failed.add(stage.name)
+                    in_flight.discard(stage.name)
 
                 # Detect overdue running stages
                 overdue = [
@@ -611,12 +635,16 @@ class DAGScheduler:
                     futures.pop(f)
                     results[stage.name] = False
                     failed.add(stage.name)
+                    in_flight.discard(stage.name)
 
-                # Submit newly-ready stages
-                new_ready = self._ready(completed, failed)
+                # Submit newly-ready stages (excluding in_flight to
+                # avoid re-dispatching a stage whose future we haven't
+                # processed yet — the `_ready` race fix).
+                new_ready = self._ready(completed, failed, in_flight)
                 for stage in new_ready:
                     fut = pool.submit(executor, stage)
                     futures[fut] = (stage, time.monotonic() + stage.timeout)
+                    in_flight.add(stage.name)
 
             # Propagate failure to descendants
             for stage in self.stages:
