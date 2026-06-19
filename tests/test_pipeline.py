@@ -1165,6 +1165,46 @@ class TestDAGSchedulerV2:
         assert abs(after_count - before_count) <= 2, \
             f"Expected ~{before_count} threads, got {after_count}"
 
+    def test_dag_scheduler_default_path_returns_on_hung_stage(self):
+        """Production default path (no pool_factory injected) must
+        return within timeout + grace even when a stage hangs.
+
+        Codex Iter 1 review found that the previous default used
+        ``with ThreadPoolExecutor(...) as pool:`` which calls
+        ``shutdown(wait=True)`` on exit, blocking until the hung
+        worker finishes. The fix is the explicit
+        ``pool.shutdown(wait=False, cancel_futures=True)`` in the
+        finally block, combined with the
+        ``_NonWaitingThreadPoolExecutor`` default factory.
+
+        This test exercises the production default by NOT passing
+        ``pool_factory`` — it must still return promptly.
+        """
+        stages = [
+            Stage(name="hung", timeout=1),
+            Stage(name="fast"),
+        ]
+        scheduler = DAGScheduler(stages)
+
+        def executor(stage: Stage) -> bool:
+            if stage.name == "hung":
+                time.sleep(2.0)  # way past the 1s timeout
+            return True
+
+        start = time.monotonic()
+        results = scheduler.execute_parallel(executor, max_workers=2)
+        elapsed = time.monotonic() - start
+
+        assert results["hung"] is False
+        assert results["fast"] is True
+        # Default path must return within timeout + small grace.
+        # We allow 1.6s (timeout=1.0s + 0.5s grace + 0.1s CI noise).
+        assert elapsed < 1.6, (
+            f"Default path returned in {elapsed:.3f}s — "
+            f"the production path is blocking on hung workers. "
+            f"Codex Iter 1 review finding."
+        )
+
 
 # ============================================================================
 # TestV2LoaderPreservation — V2 field preservation in loader
