@@ -327,9 +327,9 @@ class WorktreeManager:
                     self._git("merge", "--abort")
 
         elif strategy == "octopus":
-            # git merge --octopus <branch1> <branch2> ...
+            # git merge -s octopus <branch1> <branch2> ...
             result = self._git(
-                "merge", "--octopus", *branches,
+                "merge", "-s", "octopus", *branches,
                 timeout=120,
             )
             if result.returncode == 0:
