@@ -61,15 +61,56 @@ For each iteration, the Developer:
 
 Then the Reviewer (Codex) writes the iter's review file with verdict.
 
-## Contract constraints (frozen)
+## Contract constraints (revised by Planner per SEAN 2026-06-19)
 
-The V2 contract is **frozen**: `interfaces.py`, `ARCHITECTURE.md`,
-root `tech-design.md` (the 18-module design) cannot be modified.
-Phase 5 (parallel dev) and parts of Phase 6/7/8 require contract
-fields (`parallel_dev`, `reviewer_config`, per-agent `context_budget`)
-that the frozen contract does not provide.
+The **frozen parts** are: the user-stated functional requirements and
+the role/loop structure (e.g. Planner→Developer↔Reviewer→Observer cycle).
+These cannot be silently changed.
 
-**Resolution**: those phases implement the maximum subset that
-fits the frozen contract, raise `PipelineValidationError` for
-unsupported fields, and surface the gap to SEAN. This is
-explicitly documented in `tech-design.md` Phase 5, 6, 7, 8.
+The **modifiable parts** are: implementation details, including contract
+fields, doc phrasing, and code organization. When the Designer or any
+agent finds a design gap, the report path is:
+
+```
+discoverer (any role) → Planner (Hermes) → update prd/tech-design.md
+                                     and/or interfaces.py
+```
+
+**Concretely for this PRD** (Planner authorized 2026-06-19):
+
+Three small `interfaces.py` field additions are required to unblock
+V2 features. All are **optional with default value** — they do not
+break any of the 461 existing tests:
+
+| Field | Type | Where | Phase |
+|-------|------|-------|-------|
+| `PipelineSpec.parallel_dev` | `WorktreeConfig \| None` | `interfaces.py` PipelineSpec | 5 |
+| `PipelineSpec.reviewer_config` | `ReviewerConfig \| None` | `interfaces.py` PipelineSpec | 6 |
+| `AgentSpec.context_budget` | `int \| None` | `interfaces.py` AgentSpec | 7 |
+
+All three types (`WorktreeConfig`, `ReviewerConfig`) already exist in
+`interfaces.py`. These patches are **wiring, not new types**.
+
+The migration function in `schema_migrate.py` (Phase 8) adds V2
+defaults so old V1 pipeline.yaml files still load.
+
+## Why this resolution
+
+- **Phase 5** (parallel dev): env-var fallback is un-testable and
+  creates a config path that will need to be ripped out the moment
+  the product says yes. A typed field is cleaner.
+- **Phase 6** (multi-reviewer): `ReviewerConfig` is already defined
+  in interfaces.py:479 — only needs to be wired into `PipelineSpec`.
+  This is the lowest-risk contract change.
+- **Phase 7** (per-agent context): the global `BudgetConfig` covers
+  80% of the need, but per-agent override is the standard pattern
+  for "this role is expensive, cap it". Adding it is one line.
+
+## What stays frozen
+
+- `PipelineSpec` immutable (`frozen=True`) — the new fields follow
+  this convention.
+- `AgentSpec` immutable — same.
+- The role/loop structure (Planner→Developer↔Reviewer→Observer).
+- The risk matrix design (L0/L1/L2/L3).
+- The snapshot safety-net pattern.
