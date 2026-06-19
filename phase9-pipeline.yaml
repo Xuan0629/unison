@@ -1,0 +1,42 @@
+# Unison pipeline — Phase 9: Agent Skill Development (4-agent mode)
+#   Planner(Claude) → Plan-Reviewer(Codex) → Developer(Claude) → Dev-Reviewer(Codex)
+version: "2.0"
+project_root: "."
+
+agents:
+  planner:
+    role: planner
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/planner-phase9.md"
+    task_instruction: "Create an OpenClaw agent skill 'openclaw-model-debug' at ~/.openclaw/agents/openclaw-model-debug/SKILL.md. It should diagnose model connectivity issues (unreachable, auth failure, timeout, 404). Write PRD to prd/PRD.md and technical design to prd/tech-design.md. Target: a practical, executable SKILL.md with ≥3 diagnostic scenarios."
+
+  plan_reviewer:
+    role: plan-reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/plan-reviewer-phase9.md"
+    pipeline_role: reviewer
+
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer-phase9.md"
+    task_instruction: "Read prd/PRD.md and prd/tech-design.md. Create the file ~/.openclaw/agents/openclaw-model-debug/SKILL.md per the design. Do NOT modify any files inside ~/projects/unison/. Do NOT commit to git — just create the SKILL.md."
+
+  dev_reviewer:
+    role: dev-reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer-phase9.md"
+    pipeline_role: reviewer
+
+project:
+  test_command: "python3 -c \"import yaml; c=open('/home/sean/.openclaw/agents/openclaw-model-debug/SKILL.md').read(); p=c.split('---'); fm=yaml.safe_load(p[1]); print(f'OK: {fm.get(\\\"name\\\")} v{fm.get(\\\"version\\\")}')\""
+  max_iterations: 3
+
+snapshots:
+  enabled: true
+  external_paths:
+    - "~/.openclaw/agents/openclaw-model-debug/"
