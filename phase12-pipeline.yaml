@@ -10,7 +10,7 @@ agents:
     model: deepseek-v4-pro
     system_prompt_path: "prompts/skill-auditor-phase12.md"
     pipeline_role: planner
-    task_instruction: "Plan a skill health audit. Write PRD to prd/PRD.md: define scope (~/.hermes/skills/ and ~/.openclaw/agents/), audit dimensions (CLI validity, path validity, frontmatter, cross-refs), output format. Write technical design to prd/tech-design.md."
+    task_instruction: "WRITE A COMPLETE PRD NOW. Do not write placeholders, stubs, or 'TBD'. Write at least 400 words covering: (1) scope: scan ~/.hermes/skills/ and ~/.openclaw/agents/, (2) audit dimensions: CLI command validity, file path validity, YAML frontmatter completeness, cross-reference integrity, (3) output format: a table with file/line/type/severity/details/fix columns, (4) constraints: read-only, no modifications. Start writing immediately."
 
   plan_reviewer:
     role: plan-reviewer
