@@ -11,6 +11,8 @@ from __future__ import annotations
 import itertools
 import os
 import subprocess
+import yaml
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,6 +22,8 @@ from unison.lock import FileLockManager
 from unison.checkpoint import FileCheckpointManager
 from unison.completion import GitCompletionDetector
 from unison.verdict import YamlFrontmatterParser
+from unison.context_deflate import assemble_context, extract_top_findings
+from unison.budget import BudgetTracker
 from unison.runners.claude import ClaudeRunner
 from unison.runners.codex import CodexRunner
 from unison.runners.hermes import HermesRunner
@@ -81,6 +85,9 @@ class Orchestrator:
         # -- completion detection + verdict parsing ----------------------------
         self._detector = GitCompletionDetector()
         self._verdict_parser = YamlFrontmatterParser()
+
+        # -- budget tracking (V2, lazy-init) -----------------------------------
+        self._budget_tracker: BudgetTracker | None = None
 
     # ==================================================================
     # Public API
@@ -378,52 +385,63 @@ class Orchestrator:
         """Invoke an agent subprocess for *role* at *iteration*.
 
         Steps:
-          1. Pre-invoke cleanup (git reset/clean)
-          2. Build role-specific prompt
-          3. Route to correct runner (claude / codex / hermes)
-          4. Run subprocess with timeout
-          5. Post-invoke completion detection via git log
+          1. Select runner (with budget-aware downgrade)
+          2. Check budget overflow BEFORE building prompt (halt if over)
+          3. Pre-invoke cleanup (git reset/clean)
+          4. Build token-budgeted prompt via assemble_context
+          5. Run subprocess with timeout
+          6. Track token usage via BudgetTracker
+          7. Post-invoke completion detection via git log
 
         Args:
             role: Agent role ("planner", "developer", "reviewer").
             iteration: Current iteration number.
         """
-        agent_spec = self.spec.agents.get(role)
-        if agent_spec is None:
-            self.halt(f"No agent spec for role: {role}")
-            return
-
         world = self.spec.world
 
-        # 1. Pre-invoke cleanup
+        # 1. Select runner with budget-aware downgrade
+        runner, effective_spec = self._select_runner(role)
+        if runner is None or effective_spec is None:
+            return
+
+        # 2. Check budget overflow BEFORE invoking agent
+        tracker = self._get_budget_tracker(role)
+        if not tracker.check_budget():
+            if self.spec.budget.overflow_action == "halt":
+                self.halt(
+                    f"budget overflow: {role} "
+                    f"(daily={tracker.current_usage}/{tracker.daily_limit})"
+                )
+                return
+            # overflow_action == "downgrade" — already handled in _select_runner
+
+        # 3. Pre-invoke cleanup
         self.pre_invoke_cleanup()
 
         if self._state.halt_signal:
             return
 
-        # 2. Build prompt
+        # 4. Build prompt (uses BudgetTracker for token budget)
         prompt = self._build_prompt(role, iteration)
 
-        # 3. Route to runner
-        runner = self._runners.get(agent_spec.runtime)
-        if runner is None:
-            self.halt(f"No runner for runtime: {agent_spec.runtime}")
-            return
-
-        # 4. Build log path
+        # 5. Build log path
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         log_path = world.agent_log(role, iteration, timestamp)  # type: ignore[arg-type]
 
-        # 5. Run agent subprocess
+        # 6. Run agent subprocess
         result = runner.run(
-            spec=agent_spec,
+            spec=effective_spec,
             prompt=prompt,
             workdir=world.root,
             timeout=self.spec.per_agent_timeout,
             log_path=log_path,
         )
 
-        # 6. Post-invoke completion detection (§5)
+        # 7. Track token usage (estimate from prompt length)
+        estimated_tokens = max(1, len(prompt) // 4)
+        tracker.add_usage(estimated_tokens, phase=role, iter_n=iteration)
+
+        # 8. Post-invoke completion detection (§5)
         detected = self._detector.detect(
             workspace=world.root,
             expected_iter=iteration,
@@ -608,62 +626,165 @@ class Orchestrator:
     def _build_prompt(self, role: str, iteration: int) -> str:
         """Build the agent prompt for *role* at *iteration*.
 
-        Prompts follow ARCHITECTURE.md §5 conventions:
-          - Developer: inject PRD refs + previous findings + test command
-          - Reviewer: inject review format requirements + test command
-          - Planner: write PRD + tech-design
-
-        Context deflation (§5): only the last review's findings are
-        injected, not full history.
+        V2: uses :func:`assemble_context` for token-budgeted prompt assembly
+        with smart diff truncation and top-findings extraction.
         """
         world = self.spec.world
-        parts: list[str] = []
+        agent_spec = self.spec.agents.get(role)
+        tracker = self._get_budget_tracker(role)
 
+        # Read system prompt from the agent's configured path
+        sp_path = world.root / agent_spec.system_prompt_path if agent_spec else None
+        system_prompt = (
+            sp_path.read_text(encoding="utf-8")
+            if sp_path and sp_path.exists()
+            else f"You are the {role} agent."
+        )
+
+        # Read PRD + tech-design content for context assembly
+        prd_content = ""
+        design_content = ""
+        if world.prd.exists():
+            prd_content = world.prd.read_text(encoding="utf-8")
+        if world.tech_design.exists():
+            design_content = world.tech_design.read_text(encoding="utf-8")
+
+        # Extract top findings from the previous review (context deflation)
+        top_findings = ""
+        if iteration > 1:
+            review_phase = (
+                "dev_review" if role == "developer" else "planning_review"
+            )
+            prev = self._review_file_for_phase(review_phase, iteration - 1)
+            if prev.exists():
+                top_findings = extract_top_findings(
+                    prev.read_text(encoding="utf-8"), limit=3
+                )
+
+        # Get recent git diff
+        diff = self._recent_diff()
+
+        # Compute remaining budget (clamp to >= 1 to avoid ContextBudgetError
+        # when the tracker is already over the daily limit)
+        remaining = max(1, tracker.daily_limit - tracker.current_usage)
+
+        # Build role-specific task instruction
         if role == "planner":
-            parts.append(
+            task = (
                 "Write the Product Requirements Document to prd/PRD.md "
                 "and the technical design to prd/tech-design.md."
             )
-
         elif role == "developer":
-            parts.append(
-                f"=== Iteration {iteration} ===\n"
-                f"Read prd/PRD.md and prd/tech-design.md for requirements."
-            )
-            # Inject previous review findings (context deflation: last N only)
-            if iteration > 1:
-                prev_review = world.review_file(iteration - 1)
-                if prev_review.exists():
-                    parts.append(
-                        f"Address ALL findings from "
-                        f"reviews/iter-{iteration - 1}.md."
-                    )
-            parts.append(
+            task = (
+                f"Iteration {iteration}: Read prd/PRD.md and prd/tech-design.md. "
                 f"Write code in src/, tests in tests/. "
-                f"Run: {self.spec.project.test_command}\n"
-                f"Commit your changes with: git add -A && git commit -m '...'"
+                f"Run: {self.spec.project.test_command}. "
+                f"Commit with: git add -A && git commit -m '...'"
             )
-
         elif role == "reviewer":
-            parts.append(
-                f"=== Review Iteration {iteration} ===\n"
-                f"1. Run tests: {self.spec.project.test_command}\n"
-                f"2. Write review to reviews/iter-{iteration}.md\n"
-                f"3. Use YAML frontmatter format:\n"
-                f"   ---\n"
-                f"   verdict: PASS | REQUEST_CHANGES\n"
-                f"   summary: ...\n"
-                f"   findings:\n"
-                f"     - [severity] description\n"
-                f"   ---\n"
+            task = (
+                f"Review Iteration {iteration}: "
+                f"1. Run tests: {self.spec.project.test_command} "
+                f"2. Write review to reviews/iter-{iteration}.md "
+                f"3. Use YAML frontmatter: verdict, summary, findings. "
                 f"4. Do NOT modify src/"
             )
+        else:
+            task = f"Perform {role} duties for iteration {iteration}."
 
-        return "\n".join(parts)
+        # Prepend the task to system_prompt so the LLM sees it first
+        full_system = f"{task}\n\n{system_prompt}"
+
+        assembled = assemble_context(
+            system_prompt=full_system,
+            prd_content=prd_content,
+            design_content=design_content,
+            last_review_findings=top_findings,
+            git_diff=diff,
+            token_budget=remaining,
+        )
+        return assembled.prompt
 
     # ==================================================================
     # Internal: helpers
     # ==================================================================
+
+    def _get_budget_tracker(self, role: str = "") -> BudgetTracker:
+        """Return the shared BudgetTracker, creating it lazily.
+
+        Per-agent ``context_budget`` overrides the global
+        ``BudgetConfig.per_task_limit`` when set on the agent's spec.
+
+        Args:
+            role: Agent role for per-agent context_budget lookup.
+        """
+        if self._budget_tracker is not None:
+            return self._budget_tracker
+
+        # Determine per_task_limit: per-agent override takes precedence
+        per_task_limit = self.spec.budget.per_task_limit
+        if role and role in self.spec.agents:
+            agent_spec = self.spec.agents[role]
+            if agent_spec.context_budget is not None:
+                per_task_limit = agent_spec.context_budget
+
+        self._budget_tracker = BudgetTracker(
+            daily_limit=self.spec.budget.daily_token_limit,
+            per_task_limit=per_task_limit,
+            persist_path=self.spec.world.unison_dir / "budget.json",
+        )
+        return self._budget_tracker
+
+    def _recent_diff(self) -> str:
+        """Return ``git diff HEAD~1 HEAD`` output, or ``""`` on failure."""
+        try:
+            result = subprocess.run(
+                ["git", "diff", "HEAD~1", "HEAD"],
+                cwd=str(self.spec.world.root),
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+            if result.returncode == 0:
+                return result.stdout.decode("utf-8", errors="replace")
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
+            pass
+        return ""
+
+    def _select_runner(self, role: str) -> tuple:
+        """Pick a runner for *role*, applying downgrade if budget is tight.
+
+        When the budget tracker reports ``should_downgrade()`` and
+        ``overflow_action`` is ``"downgrade"``, the agent spec's runtime
+        is swapped via :func:`dataclasses.replace` (never mutating the
+        frozen original).
+
+        Returns:
+            ``(runner, effective_agent_spec)`` — or calls ``self.halt()``
+            and returns ``(None, None)`` when no runner is found.
+        """
+        agent_spec = self.spec.agents.get(role)
+        if agent_spec is None:
+            self.halt(f"No agent spec for role: {role}")
+            return None, None
+
+        tracker = self._get_budget_tracker(role)
+
+        if (
+            tracker.should_downgrade()
+            and self.spec.budget.overflow_action == "downgrade"
+            and role in self.spec.budget.downgrade_map
+        ):
+            target = self.spec.budget.downgrade_map[role]["to"]
+            effective_spec = replace(agent_spec, runtime=target)
+        else:
+            effective_spec = agent_spec
+
+        runner = self._runners.get(effective_spec.runtime)
+        if runner is None:
+            self.halt(f"No runner for runtime: {effective_spec.runtime}")
+            return None, None
+        return runner, effective_spec
 
     def _get_reviewer_count(self) -> int:
         """Read reviewer count from UNISON_REVIEWER_COUNT env var (default 1).
