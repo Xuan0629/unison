@@ -1,0 +1,19 @@
+{
+  "date": "2026-06-19",
+  "daily_used": 23500,
+  "task_used": 23500,
+  "phases": [
+    {
+      "phase": "developer",
+      "iter_n": 1,
+      "tokens_used": 11026,
+      "timestamp": "2026-06-19T14:46:30.980187+00:00"
+    },
+    {
+      "phase": "reviewer",
+      "iter_n": 1,
+      "tokens_used": 12474,
+      "timestamp": "2026-06-19T14:46:32.227598+00:00"
+    }
+  ]
+}
