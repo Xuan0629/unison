@@ -10,6 +10,7 @@ check for prompt-file existence.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -518,14 +519,23 @@ class DAGScheduler:
 
         return result
 
+    def _ready(self, completed: set[str], failed: set[str]) -> list[Stage]:
+        """Return stages whose dependencies are all in *completed* and none
+        are in *failed*, excluding stages already in *completed* or *failed*.
+        """
+        ready: list[Stage] = []
+        for stage in self.stages:
+            if stage.name in completed or stage.name in failed:
+                continue
+            if all(dep in completed for dep in stage.dependencies):
+                if not any(dep in failed for dep in stage.dependencies):
+                    ready.append(stage)
+        return ready
+
     def ready_stages(self, completed: set[str]) -> list[Stage]:
-        """返回依赖已满足、可执行的 Stage 列表。
+        """Return stages whose dependencies are all in *completed*.
 
-        Args:
-            completed: 已成功完成的 Stage name 集合。
-
-        Returns:
-            可立即执行的 Stage 列表（所有依赖都在 *completed* 中）。
+        (Public API preserved for backward compatibility.)
         """
         ready: list[Stage] = []
         for stage in self.stages:
@@ -539,71 +549,81 @@ class DAGScheduler:
         self,
         executor: callable,
         max_workers: int = 4,
+        pool_factory: callable = None,
     ) -> dict[str, bool]:
         """并行执行 DAG。
 
         无依赖的 Stage 同时提交到线程池。每完成一个 Stage 即检查是否有
         新的 Stage 变得可执行。依赖失败 Stage 的后续 Stage 自动标记失败。
 
+        Uses a deadline-aware loop with ``wait(FIRST_COMPLETED)`` so
+        overdue stages are marked failed without blocking on their
+        underlying thread.
+
         Args:
             executor: 执行单个 Stage 的可调用对象
                 ``(stage: Stage) -> bool``。
             max_workers: 最大并行数。
+            pool_factory: Thread pool factory callable (injectable for tests).
+                Defaults to ``ThreadPoolExecutor``.
 
         Returns:
             ``{stage_name: success}`` 的映射。
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+
+        if pool_factory is None:
+            pool_factory = ThreadPoolExecutor
 
         completed: set[str] = set()
         failed: set[str] = set()
         results: dict[str, bool] = {}
 
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            while len(completed) + len(failed) < len(self.stages):
-                ready = self.ready_stages(completed)
-                
-                # 过滤掉已经在 completed 或 failed 中的 Stage
-                ready = [
-                    s for s in ready
-                    if s.name not in completed and s.name not in failed
-                ]
+        with pool_factory(max_workers=max_workers) as pool:
+            # Map: future -> (stage, deadline)
+            futures: dict = {}
+            for stage in self._ready(completed, failed):
+                fut = pool.submit(executor, stage)
+                futures[fut] = (stage, time.monotonic() + stage.timeout)
 
-                # 过滤掉依赖已失败 Stage 的 ready stages（失败传播）
-                ready = [
-                    s for s in ready
-                    if not any(dep in failed for dep in s.dependencies)
-                ]
+            while futures:
+                done, _ = wait(futures, timeout=0.05,
+                               return_when=FIRST_COMPLETED)
+                now = time.monotonic()
 
-                if not ready:
-                    # 没有可执行的 Stage，但有未完成的
-                    # → 死锁或所有剩余 Stage 的依赖都已失败
-                    remaining = [
-                        s.name for s in self.stages
-                        if s.name not in completed and s.name not in failed
-                    ]
-                    for name in remaining:
-                        results[name] = False
-                        failed.add(name)
-                    break
-
-                futures = {
-                    pool.submit(executor, stage): stage
-                    for stage in ready
-                }
-
-                # 不使用 as_completed，直接对每个 future 调用 result(timeout)
-                # 这样可以正确触发超时
-                for future, stage in futures.items():
+                # Process completions
+                for f in done:
+                    stage, _ = futures.pop(f)
                     try:
-                        success = future.result(timeout=stage.timeout)
+                        success = f.result()
                         results[stage.name] = success
-                        if success:
-                            completed.add(stage.name)
-                        else:
-                            failed.add(stage.name)
+                        (completed if success else failed).add(stage.name)
                     except Exception:
                         results[stage.name] = False
                         failed.add(stage.name)
+
+                # Detect overdue running stages
+                overdue = [
+                    (f, s) for f, (s, d) in futures.items()
+                    if now >= d
+                ]
+                for f, stage in overdue:
+                    futures.pop(f)
+                    results[stage.name] = False
+                    failed.add(stage.name)
+
+                # Submit newly-ready stages
+                new_ready = self._ready(completed, failed)
+                for stage in new_ready:
+                    fut = pool.submit(executor, stage)
+                    futures[fut] = (stage, time.monotonic() + stage.timeout)
+
+            # Propagate failure to descendants
+            for stage in self.stages:
+                if stage.name in results:
+                    continue
+                if any(dep in failed for dep in stage.dependencies):
+                    results[stage.name] = False
+                    failed.add(stage.name)
 
         return results
