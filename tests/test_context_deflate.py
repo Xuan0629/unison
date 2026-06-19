@@ -505,12 +505,11 @@ class TestAssembleContext:
             system_prompt="system",
             design_content="design_content_goes_here " * 5,  # moderate size
             prd_content="prd_content_text " * 100,  # large
-            token_budget=20,  # tight: system + design fits, prd doesn't
+            token_budget=40,  # tight enough: system + design fits with header, prd doesn't
         )
         # design should be preserved (possibly truncated), prd should be absent
         assert "design" in result.prompt
         # prd_content should either be truncated or not appear at all
-        # (lowest priority means it's dropped when budget runs out)
         assert "prd_content" in result.truncated_sections or "PRD" not in result.prompt
 
     def test_no_sections_prompt_still_valid(self):
