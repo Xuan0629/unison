@@ -23,7 +23,7 @@ agents:
     runtime: claude
     model: deepseek-v4-pro
     system_prompt_path: "prompts/developer-phase9.md"
-    task_instruction: "Read prd/PRD.md and prd/tech-design.md. Create the file ~/.openclaw/agents/openclaw-model-debug/SKILL.md per the design. Do NOT modify any files inside ~/projects/unison/. Do NOT commit to git — just create the SKILL.md."
+    task_instruction: "Read prd/PRD.md and prd/tech-design.md. Create the file ~/.openclaw/agents/openclaw-model-debug/SKILL.md per the design. The SKILL.md is the primary deliverable — it lives OUTSIDE this git repo. Create any supporting files inside the repo only if needed."
 
   dev_reviewer:
     role: dev-reviewer

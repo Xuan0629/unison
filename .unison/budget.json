@@ -1,7 +1,7 @@
 {
   "date": "2026-06-19",
-  "daily_used": 23500,
-  "task_used": 23500,
+  "daily_used": 101733,
+  "task_used": 101733,
   "phases": [
     {
       "phase": "developer",
@@ -14,6 +14,30 @@
       "iter_n": 1,
       "tokens_used": 12474,
       "timestamp": "2026-06-19T14:46:32.227598+00:00"
+    },
+    {
+      "phase": "developer",
+      "iter_n": 1,
+      "tokens_used": 12441,
+      "timestamp": "2026-06-19T15:02:13.907071+00:00"
+    },
+    {
+      "phase": "reviewer",
+      "iter_n": 1,
+      "tokens_used": 23745,
+      "timestamp": "2026-06-19T15:02:15.390477+00:00"
+    },
+    {
+      "phase": "developer",
+      "iter_n": 1,
+      "tokens_used": 12240,
+      "timestamp": "2026-06-19T15:12:37.191752+00:00"
+    },
+    {
+      "phase": "reviewer",
+      "iter_n": 1,
+      "tokens_used": 29807,
+      "timestamp": "2026-06-19T15:12:38.015928+00:00"
     }
   ]
 }

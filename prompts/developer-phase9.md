@@ -16,6 +16,5 @@ Read `prd/PRD.md` and `prd/tech-design.md`, then create the diagnostic skill.
    `python3 -c "import yaml; c=open('...').read(); yaml.safe_load(c.split('---')[1])"`
 
 ## Rules
-- Do NOT modify files in ~/projects/unison/
-- Do NOT commit to git
-- Only create/modify ~/.openclaw/agents/openclaw-model-debug/SKILL.md
+- The SKILL.md is the primary deliverable — it lives OUTSIDE this git repo
+- You may create supporting files in the repo if needed
