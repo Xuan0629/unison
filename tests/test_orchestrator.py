@@ -648,3 +648,118 @@ budget:
 
         runner, effective_spec = orch._select_runner("reviewer")
         assert effective_spec.runtime == "codex"
+
+    # ------------------------------------------------------------------
+    # Phase 3: DAG scheduler routing
+    # ------------------------------------------------------------------
+
+    def test_orchestrator_routes_to_dag_scheduler(self, tmp_path, monkeypatch):
+        """Phase 3: spec.dag set → _run_state_machine calls DAG path, not linear."""
+        world_root = tmp_path / "project"
+        world_root.mkdir()
+        (world_root / "prd").mkdir()
+        (world_root / "reviews").mkdir()
+        (world_root / ".unison").mkdir(parents=True, exist_ok=True)
+        (world_root / "prompts").mkdir()
+        (world_root / "prd" / "PRD.md").write_text("# PRD")
+        (world_root / "prd" / "tech-design.md").write_text("# Design")
+        (world_root / "prompts" / "developer.md").write_text("Dev prompt")
+        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f"""
+version: "1.0"
+project_root: "{world_root}"
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/reviewer.md"
+dag:
+  - name: stage-a
+    dependencies: []
+    timeout: 10
+  - name: stage-b
+    dependencies: [stage-a]
+    timeout: 10
+""")
+
+        from unison.pipeline import PipelineLoader
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.dag is not None, "dag should be loaded"
+
+        orch = Orchestrator(spec=spec)
+
+        # Track which development path was taken
+        dag_called = []
+        linear_called = []
+
+        monkeypatch.setattr(orch, "_run_dag_development",
+                           lambda: dag_called.append(True))
+        monkeypatch.setattr(orch, "_run_linear_development",
+                           lambda: linear_called.append(True))
+        # Also stub _save_checkpoint to avoid filesystem writes
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda: None)
+
+        orch._run_state_machine()
+
+        assert dag_called, "DAG path should be called when spec.dag is set"
+        assert not linear_called, "linear path should NOT be called when spec.dag is set"
+
+    def test_orchestrator_routes_to_linear_when_no_dag(self, tmp_path, monkeypatch):
+        """Phase 3: spec.dag=None → _run_state_machine calls linear path, not DAG."""
+        world_root = tmp_path / "project"
+        world_root.mkdir()
+        (world_root / "prd").mkdir()
+        (world_root / "reviews").mkdir()
+        (world_root / ".unison").mkdir(parents=True, exist_ok=True)
+        (world_root / "prompts").mkdir()
+        (world_root / "prd" / "PRD.md").write_text("# PRD")
+        (world_root / "prd" / "tech-design.md").write_text("# Design")
+        (world_root / "prompts" / "developer.md").write_text("Dev prompt")
+        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f"""
+version: "1.0"
+project_root: "{world_root}"
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/reviewer.md"
+""")
+
+        from unison.pipeline import PipelineLoader
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.dag is None, "dag should be None when not specified"
+
+        orch = Orchestrator(spec=spec)
+
+        dag_called = []
+        linear_called = []
+
+        monkeypatch.setattr(orch, "_run_dag_development",
+                           lambda: dag_called.append(True))
+        monkeypatch.setattr(orch, "_run_linear_development",
+                           lambda: linear_called.append(True))
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda: None)
+
+        orch._run_state_machine()
+
+        assert not dag_called, "DAG path should NOT be called when spec.dag is None"
+        assert linear_called, "linear path should be called when spec.dag is None"
