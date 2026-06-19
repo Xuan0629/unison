@@ -344,7 +344,7 @@ class Orchestrator:
 
             reviewer_count = self._get_reviewer_count()
             if reviewer_count > 1:
-                self._invoke_multi_reviewer(iteration)
+                self._invoke_multi_reviewer(iteration, review_phase)
             else:
                 self._invoke_agent_for_role("reviewer", iteration)
 
@@ -459,7 +459,9 @@ class Orchestrator:
             # Consecutive failure tracking is a V2 feature.
             pass
 
-    def _invoke_multi_reviewer(self, iteration: int) -> None:
+    def _invoke_multi_reviewer(
+        self, iteration: int, review_phase: str = "dev_review"
+    ) -> None:
         """Invoke multiple reviewers in parallel via ReviewerPool.
 
         Each reviewer writes to a unique path ``reviews/iter-{N}-R{i}.md``.
@@ -608,8 +610,7 @@ class Orchestrator:
         final = pool.reconcile_verdicts(verdicts, iter_n=iteration)
 
         # Write reconciled verdict to the review-path helper location
-        # (Phase 6: uses _review_file_for_phase, not world.review_file)
-        review_path = self._review_file_for_phase("dev_review", iteration)
+        review_path = self._review_file_for_phase(review_phase, iteration)
         review_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Use yaml.safe_dump for reliable special-character handling
@@ -674,8 +675,13 @@ class Orchestrator:
         diff = self._recent_diff()
 
         # Compute remaining budget (clamp to >= 1 to avoid ContextBudgetError
-        # when the tracker is already over the daily limit)
-        remaining = max(1, tracker.daily_limit - tracker.current_usage)
+        # when the tracker is already over the daily limit).
+        # Per-task cap takes precedence over daily cap — a per-agent
+        # context_budget=50000 is meaningless if assemble_context gets
+        # the full 1M daily budget (Codex Iter 2 finding).
+        daily_remaining = tracker.daily_limit - tracker.current_usage
+        per_task_remaining = tracker.per_task_limit - tracker._per_task_used
+        remaining = max(1, min(daily_remaining, per_task_remaining))
 
         # Build role-specific task instruction
         if role == "planner":

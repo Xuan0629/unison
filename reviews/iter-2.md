@@ -1,39 +1,47 @@
 ---
-verdict: PASS
-summary: world.py 实现完整，frozen dataclass，18 个路径属性 + 5 个参数化方法 + ensure_directories()，28/28 测试通过。
+verdict: REQUEST_CHANGES
+summary: "Iter 2 adds the expected Phase 6/7 symbols and focused tests pass, but multi-reviewer planning verdicts are written to the wrong path and per-agent context_budget is not actually used as the prompt assembly budget."
 findings:
-  - [轻微] `agent_log()` 的 `timestamp` 参数类型是 `str`，但未校验格式（如 ISO 8601）。当前实现依赖调用者传入正确格式，可接受。
-  - [轻微] `ensure_directories()` 创建的目录列表硬编码，如果未来 World 增加新目录属性，需要同步更新此列表。可考虑用 `__annotations__` 自动发现，但当前实现满足 V1 需求。
+  - "[HIGH] src/unison/orchestrator.py:345 calls _invoke_multi_reviewer() without the active review phase, and src/unison/orchestrator.py:612 hardcodes _review_file_for_phase(\"dev_review\", iteration). In the planning loop, _parse_verdict() reads reviews/plan-iter-N.md, so a pipeline with spec.reviewer_config.enabled=true and count>1 will write the reconciled planning verdict to reviews/iter-N.md and then halt with a parse failure. Pass review_phase into _invoke_multi_reviewer() and use it for the reconciled output path and reviewer instructions."
+  - "[MEDIUM] src/unison/orchestrator.py:676-714 computes assemble_context(token_budget=tracker.daily_limit - tracker.current_usage), while src/unison/orchestrator.py:730-743 stores one cached BudgetTracker whose per_task_limit is based only on the first role that asks for it. AgentSpec.context_budget therefore does not cap prompt assembly, and a later role cannot get its own override. Compute the turn context budget from the current role, for example min(daily remaining, agent.context_budget or spec.budget.per_task_limit), or keep per-role trackers."
 ---
 
-## 审查详情
+## Verification
 
-### 1. 类型一致性 ✅
-- `World` frozen dataclass 与 interfaces.py 完全匹配
-- 单一字段 `root: Path`
-- 所有属性返回 `Path` 对象
-- `agent_log()` 的 `role` 参数使用 `Literal["planner", "developer", "reviewer"]`，与 interfaces.py 一致
+### Phase 7
 
-### 2. 功能完整性 ✅
-- 28/28 测试通过
-- 18 个路径属性（prd, tech_design, src, tests, reviews_dir, inbox_dir, outbox_dir, observer_dir, reports_dir, logs_dir, unison_dir, state_file, policy_file, needs_system_deps_file, notifications_file, audit_file, dead_letter_file, discord_brief_file）
-- 5 个参数化方法（review_file, halt_signal, report_file, optimizer_report, agent_log）
-- ensure_directories() 创建 10 个必需目录
+Partial pass:
 
-### 3. 代码质量 ✅
-- frozen dataclass（不可变）✓
-- 所有路径基于 `root` 计算 ✓
-- `ensure_directories()` 幂等（`mkdir(parents=True, exist_ok=True)`）✓
-- 文档完整（每个属性/方法都有 docstring）✓
+- `_build_prompt()` now loads the configured system prompt, reads PRD/design context, extracts prior review findings with `extract_top_findings()`, includes recent diff, and calls `assemble_context()`.
+- `BudgetTracker` is constructed from `spec.budget` and uses `AgentSpec.context_budget` when the tracker is first created.
+- Usage is recorded after runner invocation with a prompt-length token estimate.
 
-### 4. 测试覆盖 ✅
-- `TestWorld`: 26 个测试（所有路径属性 + 参数化方法 + frozen + absolute）
-- `TestWorldDirectoryCreation`: 2 个测试（ensure_directories + idempotent）
+Blocking gap:
 
-### 5. 安全性 ✅
-- 无路径遍历风险（Path 对象操作）
-- 无命令注入风险（无 subprocess 调用）
-- 无权限提升风险（无 sudo）
+- The per-agent context budget is not used as the `assemble_context()` budget. The current budget passed to context assembly is only daily remaining tokens, and the single cached tracker keeps whichever role initialized it first.
 
-### 改进建议
-上述 2 个轻微改进不影响功能，可在后续迭代中优化。当前实现满足 V1 要求。
+### Phase 6
+
+Partial pass:
+
+- `_get_reviewer_count()` prefers enabled `spec.reviewer_config.count` over `UNISON_REVIEWER_COUNT`.
+- Multi-reviewer reconciliation writes YAML frontmatter through `yaml.safe_dump()`.
+- `_invoke_multi_reviewer()` builds its `ReviewerConfig` from `spec.reviewer_config` when enabled.
+
+Blocking gap:
+
+- Multi-reviewer mode is not phase-aware, so planning reviews write the final reconciled verdict to the development review path.
+
+## Tests
+
+Focused tests run:
+
+```bash
+pytest tests/test_orchestrator.py tests/test_context_deflate.py tests/test_budget.py tests/test_pipeline.py -q
+```
+
+Result:
+
+```text
+157 passed in 3.55s
+```
