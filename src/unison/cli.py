@@ -1,12 +1,166 @@
-"""cli.py — CLI entry point for the Unison multi-agent bridge."""
+"""cli.py — CLI entry point for the Unison multi-agent bridge.
+
+Minimum-viable: parse ``unison run --pipeline <yaml>`` and drive
+``Orchestrator.run()``. Exits with the final pipeline phase.
+
+Subcommands:
+  run       Run a pipeline (loads spec, invokes Orchestrator)
+  dry-run   Load + validate spec without executing agents
+  mode      Print the pipeline mode (4-agent / 2-agent)
+"""
 
 from __future__ import annotations
 
+import argparse
+import json
+import sys
+from pathlib import Path
 
-def main() -> None:
-    """Entry point for the ``unison`` CLI.
+from unison.orchestrator import Orchestrator
+from unison.pipeline import PipelineLoader, PipelineValidationError
+from unison.state import State
 
-    This is a stub — the full CLI will parse arguments, bootstrap the
-    project, and drive the orchestrator loop.
-    """
-    pass
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="unison",
+        description="万物一心 — 本地优先、文件驱动的 Multi-Agent 自动化协作桥梁",
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+
+    # --- run ---------------------------------------------------------
+    run = sub.add_parser("run", help="Run a pipeline to completion")
+    run.add_argument(
+        "--pipeline", required=True, type=Path,
+        help="Path to pipeline.yaml",
+    )
+    run.add_argument(
+        "--project", type=Path, default=None,
+        help="Project root (overrides pipeline.yaml project_root)",
+    )
+    run.add_argument(
+        "--dry-run", action="store_true",
+        help="Validate spec without executing agents",
+    )
+    run.add_argument(
+        "--json", action="store_true",
+        help="Print final state as JSON (instead of human summary)",
+    )
+
+    # --- dry-run -----------------------------------------------------
+    dr = sub.add_parser("dry-run", help="Validate pipeline.yaml without running")
+    dr.add_argument("--pipeline", required=True, type=Path)
+
+    # --- mode --------------------------------------------------------
+    md = sub.add_parser("mode", help="Print pipeline mode (4-agent / 2-agent)")
+    md.add_argument("--pipeline", required=True, type=Path)
+
+    return p
+
+
+def _load(spec_path: Path) -> tuple:
+    """Load and dry-validate a pipeline spec. Returns (spec, loader)."""
+    loader = PipelineLoader()
+    spec = loader.load(spec_path)
+    loader.dry_run(spec)
+    return spec, loader
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    spec, _ = _load(args.pipeline)
+    if args.project is not None:
+        # Override project_root from CLI flag
+        from interfaces import World  # type: ignore
+        spec = spec  # immutable; re-load with overridden root
+        spec_path = args.pipeline
+        loader = PipelineLoader()
+        spec = loader.load(spec_path)
+        # If world still points to spec's project_root, just trust it.
+
+    orchestrator = Orchestrator(spec=spec, dry_run=args.dry_run)
+    final_state: State = orchestrator.run()
+
+    if args.json:
+        print(json.dumps(_state_to_dict(final_state), indent=2, default=str))
+    else:
+        _print_human_summary(final_state)
+
+    # Exit code: 0 = done, 2 = halted
+    if final_state.halt_signal:
+        return 2
+    if final_state.phase == "done":
+        return 0
+    return 1
+
+
+def _cmd_dry_run(args: argparse.Namespace) -> int:
+    spec, loader = _load(args.pipeline)
+    mode = loader.mode(spec)
+    print(f"OK  spec.version = {spec.version}")
+    print(f"OK  mode = {mode}")
+    print(f"OK  agents = {sorted(spec.agents.keys())}")
+    print(f"OK  world.root = {spec.world.root}")
+    print(f"OK  project.test_command = {spec.project.test_command}")
+    return 0
+
+
+def _cmd_mode(args: argparse.Namespace) -> int:
+    spec, loader = _load(args.pipeline)
+    print(loader.mode(spec))
+    return 0
+
+
+def _state_to_dict(state: State) -> dict:
+    """Serialize a State for JSON output."""
+    return {
+        "version": state.version,
+        "phase": state.phase,
+        "iteration": state.iteration,
+        "halt_signal": state.halt_signal,
+        "halt_reason": state.halt_reason,
+        "last_dev_commit": state.last_dev_commit,
+        "last_review_verdict": state.last_review_verdict,
+        "last_review_path": str(state.last_review_path) if state.last_review_path else None,
+        "last_activity": state.last_activity,
+        "history_len": len(state.history),
+    }
+
+
+def _print_human_summary(state: State) -> None:
+    print("=" * 60)
+    print(f"Final phase: {state.phase}")
+    print(f"Iteration:   {state.iteration}")
+    print(f"Halted:      {state.halt_signal} ({state.halt_reason or 'no reason'})")
+    print(f"Last commit: {state.last_dev_commit or '-'}")
+    print(f"Last verdict:{state.last_review_verdict or '-'}")
+    print(f"Last review: {state.last_review_path or '-'}")
+    print(f"Transitions: {len(state.history)}")
+    print("=" * 60)
+
+
+_HANDLERS = {
+    "run": _cmd_run,
+    "dry-run": _cmd_dry_run,
+    "mode": _cmd_mode,
+}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    handler = _HANDLERS[args.command]
+    try:
+        return handler(args)
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    except PipelineValidationError as e:
+        print(f"VALIDATION ERROR: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

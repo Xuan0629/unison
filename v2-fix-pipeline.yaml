@@ -1,0 +1,53 @@
+# Unison pipeline — V2 integration fix
+# Task: process Codex review of 8 phases (all REQUEST_CHANGES), integrate V2
+# modules (DAG/Worktree/ReviewerPool/context_deflate/budget/schema_migrate) into
+# the Orchestrator, run tests, get all 8 phases to PASS.
+#
+# Roles:
+#   - planner:  Claude Code (deepseek-v4-pro) — design integration approach
+#   - developer: Claude Code (deepseek-v4-pro) — implement fixes per phase
+#   - reviewer: Codex (gpt-5.5 @ 987xyz) — verify each phase integration
+#   - observer: Hermes (qwen3.7-plus) — out-of-band, watches pipeline state
+#
+# Codex review of 8 phases is in:
+#   /tmp/codex-final-verdict.md
+# and archived here for agents to read:
+#   prd/v2-review-codex.md (created before this pipeline runs)
+
+version: "2.0"
+project_root: "."
+
+agents:
+  planner:
+    role: planner
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/planner.md"
+
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer-v2-fix.md"
+
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer-v2-fix.md"
+
+project:
+  test_command: "python3 -m pytest tests/ -q"
+  max_iterations: 5
+
+budget:
+  max_tokens_per_agent: 200000
+  max_total_tokens: 1500000
+
+snapshots:
+  enabled: true
+  base_dir: "~/.unison/snapshots"
+
+risk_matrix:
+  enabled: true
+  l2_audit_log: "observer/audit.jsonl"
