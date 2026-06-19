@@ -21,9 +21,11 @@ from interfaces import (
     BudgetConfig,
     PipelineSpec,
     ProjectConfig,
+    ReviewerConfig,
     RiskMatrixConfig,
     SnapshotConfig,
     Stage,
+    WorktreeConfig,
     World,
 )
 
@@ -142,6 +144,11 @@ class PipelineLoader:
         snapshots_cfg = self._build_snapshots(raw.get("snapshots"))
         risk_cfg = self._build_risk_matrix(raw.get("risk_matrix"))
 
+        # ---- V2 fields ----
+        dag_cfg = self._build_dag(raw.get("dag"))
+        reviewer_cfg = self._build_reviewer_config(raw.get("reviewer_config"))
+        parallel_dev_cfg = self._build_parallel_dev(raw.get("parallel_dev"))
+
         return PipelineSpec(
             version=version,
             world=world,
@@ -151,6 +158,9 @@ class PipelineLoader:
             budget=budget_cfg,
             snapshots=snapshots_cfg,
             risk_matrix=risk_cfg,
+            dag=dag_cfg,
+            reviewer_config=reviewer_cfg,
+            parallel_dev=parallel_dev_cfg,
         )
 
     # ------------------------------------------------------------------
@@ -236,6 +246,7 @@ class PipelineLoader:
                 runtime=runtime,
                 model=ad.get("model", ""),
                 system_prompt_path=Path(ad.get("system_prompt_path", "")),
+                context_budget=ad.get("context_budget"),
             )
         return result
 
@@ -308,6 +319,77 @@ class PipelineLoader:
             if key in raw:
                 kwargs[key] = raw[key]
         return RiskMatrixConfig(**kwargs)
+
+    # -- V2 builders ----------------------------------------------------
+
+    def _build_dag(self, raw: list[dict] | None) -> list[Stage] | None:
+        """Build a list of Stage objects from raw YAML dag entries.
+
+        Args:
+            raw: Raw YAML list of dag stage dicts, or None.
+
+        Returns:
+            A list of Stage objects, or None if *raw* is None.
+        """
+        if not raw:
+            return None
+        stages: list[Stage] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                raise PipelineValidationError(
+                    f"dag entry must be a mapping, got {type(entry).__name__}"
+                )
+            name = entry.get("name", "")
+            if not name:
+                raise PipelineValidationError("dag entry missing required field: name")
+            stages.append(Stage(
+                name=name,
+                dependencies=entry.get("dependencies", []),
+                timeout=entry.get("timeout", 600),
+                parallel_group=entry.get("parallel_group"),
+            ))
+        return stages
+
+    def _build_reviewer_config(
+        self, raw: dict[str, Any] | None
+    ) -> ReviewerConfig | None:
+        """Build ReviewerConfig from raw YAML, falling back to None.
+
+        Args:
+            raw: Raw YAML mapping for reviewer_config, or None.
+
+        Returns:
+            A ReviewerConfig instance, or None if *raw* is None.
+        """
+        if not raw:
+            return None
+        kwargs: dict[str, Any] = {}
+        for key in ("enabled", "count", "reconcile_strategy"):
+            if key in raw:
+                kwargs[key] = raw[key]
+        return ReviewerConfig(**kwargs)
+
+    def _build_parallel_dev(
+        self, raw: dict[str, Any] | None
+    ) -> WorktreeConfig | None:
+        """Build WorktreeConfig from raw YAML, falling back to None.
+
+        Args:
+            raw: Raw YAML mapping for parallel_dev, or None.
+
+        Returns:
+            A WorktreeConfig instance, or None if *raw* is None.
+        """
+        if not raw:
+            return None
+        kwargs: dict[str, Any] = {}
+        for key in ("enabled", "base_branch", "features"):
+            if key in raw:
+                kwargs[key] = raw[key]
+        if "worktree_root" in raw:
+            val = raw["worktree_root"]
+            kwargs["worktree_root"] = Path(val) if isinstance(val, str) else val
+        return WorktreeConfig(**kwargs)
 
 
 # ============================================================================

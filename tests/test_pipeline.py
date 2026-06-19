@@ -1066,3 +1066,217 @@ class TestDAGSchedulerExecuteParallel:
         assert all(results.values())
         # 并行执行：总耗时 < 0.3（串行）且 < 0.2（3 个并行）
         assert elapsed < 0.25, f"Expected parallel execution, got {elapsed:.2f}s"
+
+
+# ============================================================================
+# TestV2LoaderPreservation — V2 field preservation in loader
+# ============================================================================
+
+
+class TestV2LoaderPreservation:
+    """Tests that PipelineLoader preserves V2 fields in PipelineSpec."""
+
+    def test_loader_preserves_dag_field(self, tmp_path):
+        """V2 YAML with dag: entries loads spec.dag as a non-empty list[Stage]."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "2.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+dag:
+  - name: feature-a
+    timeout: 300
+  - name: feature-b
+    dependencies: [feature-a]
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.dag is not None
+        assert len(spec.dag) == 2
+        assert spec.dag[0].name == "feature-a"
+        assert spec.dag[0].timeout == 300
+        assert spec.dag[1].name == "feature-b"
+        assert spec.dag[1].dependencies == ["feature-a"]
+
+    def test_loader_preserves_reviewer_config(self, tmp_path):
+        """V2 YAML with reviewer_config: loads spec.reviewer_config."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "2.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+reviewer_config:
+  enabled: true
+  count: 3
+  reconcile_strategy: unanimous
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.reviewer_config is not None
+        assert spec.reviewer_config.enabled is True
+        assert spec.reviewer_config.count == 3
+        assert spec.reviewer_config.reconcile_strategy == "unanimous"
+
+    def test_loader_preserves_parallel_dev(self, tmp_path):
+        """V2 YAML with parallel_dev: loads spec.parallel_dev."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "2.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+parallel_dev:
+  enabled: true
+  base_branch: main
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.parallel_dev is not None
+        assert spec.parallel_dev.enabled is True
+        assert spec.parallel_dev.base_branch == "main"
+
+    def test_loader_preserves_parallel_dev_features(self, tmp_path):
+        """V2 YAML with parallel_dev.features loads correctly."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "2.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+parallel_dev:
+  enabled: true
+  features:
+    - feature-a
+    - feature-b
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.parallel_dev is not None
+        assert spec.parallel_dev.features == ["feature-a", "feature-b"]
+
+    def test_loader_preserves_per_agent_context_budget(self, tmp_path):
+        """V2 YAML with agents.<role>.context_budget loads into AgentSpec."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "2.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+    context_budget: 50000
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.agents["developer"].context_budget == 50000
+        # reviewer has no context_budget, should default to None
+        assert spec.agents["reviewer"].context_budget is None
+
+    def test_existing_v1_yaml_still_loads(self, tmp_path):
+        """Minimal V1 spec migrates and loads with V2 fields defaulting to None."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.version == "2.0"
+        assert spec.dag is None
+        assert spec.reviewer_config is None
+        assert spec.parallel_dev is None
+        assert "developer" in spec.agents
+        assert spec.agents["developer"].context_budget is None
+
+    def test_no_validationerror_for_supported_v2_fields(self, tmp_path):
+        """V2 YAML with all 4 new fields loads without PipelineValidationError."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "2.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+    context_budget: 100000
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+dag:
+  - name: feature-a
+reviewer_config:
+  enabled: true
+  count: 3
+  reconcile_strategy: majority
+parallel_dev:
+  enabled: false
+  features:
+    - feat1
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.version == "2.0"
+        assert spec.dag is not None
+        assert spec.reviewer_config is not None
+        assert spec.parallel_dev is not None
+        assert spec.agents["developer"].context_budget == 100000
