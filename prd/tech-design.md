@@ -301,7 +301,7 @@ ORDER BY id
   `PipelineSpec` — 1 line; add `features: list[str] | None` to
   `WorktreeConfig` — 1 line)
 - `src/unison/orchestrator.py:296` (route to `WorktreeManager` when
-  `spec.parallel_dev is not None`)
+  `spec.parallel_dev is not None AND spec.parallel_dev.enabled is True`)
 - `src/unison/worktree.py:1` (add `merge_reconciliation()`)
 - `src/unison/pipeline.py:145` (loader parses `parallel_dev:` and
   `parallel_dev.features:`)
