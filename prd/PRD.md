@@ -24,16 +24,32 @@ loop wires them into the Orchestrator's main path.
 | 7 | Context Window | 3/10 | src/unison/orchestrator.py:579,604; context_deflate.py; budget.py |
 | 8 | Schema Migrate | 6/10 | src/unison/schema_migrate.py:252; pipeline.py:138 |
 
-## Constraints
+## Constraints (revised 2026-06-19)
 
-- DO NOT modify `interfaces.py`, `ARCHITECTURE.md`,
-  `tech-design.md`. These are the V2 contract.
-- This PRD (`prd/PRD.md`) is the task description, not the contract —
-  it CAN be revised during planning if the Planner + Reviewer agree
-  the design needs to change.
-- DO NOT modify `reviews/v2-*.md` (history).
-- All changes must keep `python3 -m pytest tests/ -q` passing.
-- Add at least 1 test per Codex finding (target: 470+ tests).
+Four `interfaces.py` field additions are **explicitly authorized**
+by SEAN (Planner ↔ SEAN 2026-06-19). Developer MAY modify
+`interfaces.py` **only** to add the following four fields, each
+with a safe default that does not break the 461 existing tests:
+
+| Field | Type | Default |
+|-------|------|---------|
+| `PipelineSpec.parallel_dev` | `WorktreeConfig \| None` | `None` |
+| `PipelineSpec.reviewer_config` | `ReviewerConfig \| None` | `None` |
+| `AgentSpec.context_budget` | `int \| None` | `None` |
+| `WorktreeConfig.features` | `list[str] \| None` | `None` |
+
+(The 4th field — `WorktreeConfig.features` — was added per Codex
+Round 4 finding that Phase 5 needs a concrete feature list. The
+field has a safe `None` default and existing `WorktreeConfig(...)`
+calls in tests still work.)
+
+Any **other** modification to `interfaces.py`, `ARCHITECTURE.md`,
+or root `tech-design.md` is **not** authorized and requires an
+explicit ask to the Planner.
+
+DO NOT modify `reviews/v2-*.md` (history).
+All changes must keep `python3 -m pytest tests/ -q` passing.
+Add at least 1 test per Codex finding (target: 470+ tests).
 
 ## Process
 
@@ -78,17 +94,21 @@ discoverer (any role) → Planner (Hermes) → update prd/tech-design.md
 
 **Concretely for this PRD** (Planner authorized 2026-06-19):
 
-Three small `interfaces.py` field additions are required to unblock
-V2 features. All are **optional with default value** — they do not
-break any of the 461 existing tests:
+Three (now four) small `interfaces.py` field additions are required
+to unblock V2 features. All are **optional with default value** —
+they do not break any of the 461 existing tests **except** the 3
+obsolete schema_migration tests that explicitly asserted the
+absence of these fields. Those 3 tests are updated in Phase 8 to
+match the new (post-authorization) behavior:
 
 | Field | Type | Where | Phase |
 |-------|------|-------|-------|
 | `PipelineSpec.parallel_dev` | `WorktreeConfig \| None` | `interfaces.py` PipelineSpec | 5 |
 | `PipelineSpec.reviewer_config` | `ReviewerConfig \| None` | `interfaces.py` PipelineSpec | 6 |
 | `AgentSpec.context_budget` | `int \| None` | `interfaces.py` AgentSpec | 7 |
+| `WorktreeConfig.features` | `list[str] \| None` | `interfaces.py` WorktreeConfig | 5 |
 
-All three types (`WorktreeConfig`, `ReviewerConfig`) already exist in
+All four types (`WorktreeConfig`, `ReviewerConfig`) already exist in
 `interfaces.py`. These patches are **wiring, not new types**.
 
 The migration function in `schema_migrate.py` (Phase 8) adds V2

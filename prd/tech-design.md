@@ -1,11 +1,14 @@
 # V2 Integration Fix — Technical Design (Round 2)
 
-## Scope decisions (resolved from Round 1 review)
+## Scope decisions (revised 2026-06-19 per SEAN authorization)
 
-1. **Contract is frozen.** All fixes must use only fields already
-   defined in `interfaces.py`. New env vars and config paths are
-   acceptable additions. **Do not modify `interfaces.py`** under
-   any circumstance.
+1. **Contract is partially open.** Per SEAN's revision of the
+   freeze policy, the 3 specific field additions listed in
+   `prd/PRD.md` "Constraints" section are explicitly authorized
+   (parallel_dev, reviewer_config, context_budget). Everything
+   else in `interfaces.py`, `ARCHITECTURE.md`, root
+   `tech-design.md` remains frozen. **Do not modify anything
+   else** without explicit Planner approval.
 2. **Review file naming**: 3 implementation iterations → 3 review
    files `reviews/iter-1.md`, `reviews/iter-2.md`, `reviews/iter-3.md`.
    Per-phase acceptance is tracked inside each review as a
@@ -291,69 +294,99 @@ ORDER BY id
 
 ### Files
 - `interfaces.py` (add `parallel_dev: WorktreeConfig | None` to
-  `PipelineSpec` — 1 line)
+  `PipelineSpec` — 1 line; add `features: list[str] | None` to
+  `WorktreeConfig` — 1 line)
 - `src/unison/orchestrator.py:296` (route to `WorktreeManager` when
   `spec.parallel_dev is not None`)
 - `src/unison/worktree.py:1` (add `merge_reconciliation()`)
-- `src/unison/pipeline.py:145` (loader parses `parallel_dev:` block)
+- `src/unison/pipeline.py:145` (loader parses `parallel_dev:` and
+  `parallel_dev.features:`)
 
-### Contract change (Planner authorized 2026-06-19)
+### Contract changes (Planner authorized 2026-06-19)
 
 ```python
 # interfaces.py — PipelineSpec
 parallel_dev: WorktreeConfig | None = None  # V2: 并行 Developer
+
+# interfaces.py — WorktreeConfig
+features: list[str] | None = None  # V2: feature list to parallelize over
 ```
 
-`WorktreeConfig` is already defined in `interfaces.py:228` (before
-`PipelineSpec`). The new field is **wiring, not new type**.
+Both `WorktreeConfig` (interfaces.py:228) and `PipelineSpec`
+(interfaces.py:243) are already defined. These are **wiring +
+new optional field with safe default**, not new types.
+
+### Why a 4th field was added
+
+Codex Round 4 review pointed out that Phase 5 needs a concrete
+source of feature names (the `WorktreeManager.create_worktree(feature_name)`
+API takes one name per call), but the existing `WorktreeConfig`
+had no way to express "which features to parallelize over".
+Two options were considered:
+
+A. Env var `UNISON_PARALLEL_FEATURES="feature-a,feature-b"`. Rejected
+   because env vars are un-testable, un-auditable, and per
+   Phase 6's lesson, we'd rip it out the moment we add real config.
+B. Add `WorktreeConfig.features: list[str] | None = None`. Chosen —
+   it mirrors the same wiring pattern as Phase 6/7.
 
 ### Code changes
 
 1. **Loader (pipeline.py:145)**: parse `parallel_dev:` block in
    `PipelineLoader._build_parallel_dev()` (new private method,
-   ≤10 lines). Returns `WorktreeConfig | None`.
+   ≤15 lines including nested `features:` list). Returns
+   `WorktreeConfig | None`.
 
 2. **Orchestrator routing (orchestrator.py:296)**: in
    `_invoke_agent_for_role("developer", iter)`, when
    `self.spec.parallel_dev is not None` and `iter == 1`:
-   - Create N worktrees via `WorktreeManager.create(spec.parallel_dev)`
-     where N = number of `WorktreeConfig.worktree_paths` or features
-     (capped by max_workers; default 3).
-   - Dispatch N developer agents in parallel, one per worktree.
+   - Read `feature_list = self.spec.parallel_dev.features or []`.
+   - If `feature_list` is empty: fall back to single-developer
+     (existing behavior, with a log line "parallel_dev enabled
+     but no features specified").
+   - If non-empty: for each `feature_name` in `feature_list`:
+     - `mgr = WorktreeManager(config=self.spec.parallel_dev,
+                             project_root=world.root)`
+     - `info = mgr.create_worktree(feature_name)` → worktree path
+     - Dispatch one Developer agent to that worktree path
+       (prompt includes the feature name)
    - After all developers complete (or fail), call
-     `WorktreeManager.merge_reconciliation()` to consolidate
-     branches.
+     `WorktreeManager.merge_reconciliation(feature_list, strategy)`
+     to consolidate branches.
 
 3. **WorktreeManager.merge_reconciliation(branches, strategy)**
    (new method in `src/unison/worktree.py`):
-   - `branches: list[str]` — list of branch names to merge
+   - `branches: list[str]` — list of branch names (= feature names) to merge
    - `strategy: Literal["ff", "octopus", "manual"]` — default `"ff"`
    - Returns `MergeResult(success: bool, conflicts: list[str])`.
-   - For `"ff"`: fast-forward each branch in order; abort on
-     conflict.
+   - For `"ff"`: fast-forward each branch in order into
+     `config.base_branch`; abort on conflict.
    - For `"octopus"`: git merge --octopus; report conflicts.
    - For `"manual"`: leave branches separate, return success=False
      with list of unmerged branches.
 
 ### Acceptance tests (in `tests/test_worktree.py`,
-`tests/test_orchestrator.py`)
+`tests/test_orchestrator.py`, `tests/test_pipeline.py`)
 
-- `test_loader_parses_parallel_dev_block` — pipeline.yaml with
-  `parallel_dev:` block; assert loaded `spec.parallel_dev` is a
-  `WorktreeConfig`.
-- `test_orchestrator_creates_worktrees_when_parallel_dev` —
-  set `spec.parallel_dev=WorktreeConfig(...)`; mock
-  `WorktreeManager`; assert `create()` was called with the
-  config.
+- `test_worktree_config_features_default` — `WorktreeConfig()`
+  with no `features` arg; assert `features is None`.
+- `test_loader_parses_parallel_dev_with_features` — pipeline.yaml
+  with `parallel_dev: { features: [feature-a, feature-b] }`;
+  assert `spec.parallel_dev.features == ["feature-a", "feature-b"]`.
+- `test_orchestrator_creates_worktrees_for_each_feature` —
+  set `spec.parallel_dev=WorktreeConfig(features=["f1", "f2"])`;
+  mock `WorktreeManager`; assert `create_worktree("f1")` and
+  `create_worktree("f2")` were each called.
+- `test_orchestrator_falls_back_to_single_when_features_empty` —
+  `spec.parallel_dev=WorktreeConfig(features=[])`; assert only
+  one developer invocation (no worktree calls).
 - `test_worktree_merge_reconciliation_ff` — two branches that
   fast-forward cleanly; assert `success=True, conflicts=[]`.
 - `test_worktree_merge_reconciliation_conflict` — two branches
   with conflicting edits; assert `success=False, conflicts=[...]`.
 - `test_orchestrator_uses_single_developer_when_no_parallel_dev` —
-  `spec.parallel_dev=None`; assert no `WorktreeManager.create()`
+  `spec.parallel_dev=None`; assert no `WorktreeManager.create_worktree`
   call (regression guard).
-
----
 
 ## Phase 6 — Multi-Reviewer (4/10) — *Full implementation in this round*
 
@@ -655,15 +688,50 @@ existing 461 tests.
    `context_budget` from raw YAML to the AgentSpec constructor
    (currently the field is dropped).
 
+### Migration compatibility — IMPORTANT
+
+The current test suite has **3 obsolete tests** in
+`tests/test_schema_migrate.py` that explicitly assert migration
+**does not** add `dag`, `reviewer_config`, or `context_budget`:
+- `test_adds_dag` (line 320): asserts `"dag" not in result`
+- `test_adds_reviewer_config` (line 326): asserts `"reviewer_config" not in result`
+- `test_adds_context_budget_to_agents` (line 345): asserts
+  `context_budget` is not added
+
+These tests are now **obsolete** because the contract authorization
+in `prd/PRD.md` makes these fields first-class V2 fields. Phase 8
+**MUST update these 3 tests** to assert the new behavior (i.e.
+flip the assertion: `"dag" in result`, etc.). The Developer
+should also rename them to `test_v2_migration_adds_dag`,
+`test_v2_migration_adds_reviewer_config`,
+`test_v2_migration_adds_context_budget` to reflect the new intent.
+
+The original 461-test count will **drop by 3** (obsolete tests
+removed) and **gain N** (new V2 acceptance tests), ending at
+**~470+ tests passing**.
+
 ### Acceptance tests (in `tests/test_schema_migrate.py`,
 `tests/test_pipeline.py`)
 
-- `test_migration_adds_v2_defaults` — V1 YAML with no V2 fields
-  migrates to V2 with `dag=None, reviewer_config=None, parallel_dev=None`.
+**Migration tests to UPDATE** (obsolete → new behavior):
+- `test_v2_migration_adds_dag` — V1 YAML with no V2 fields
+  migrates to V2 with `"dag" in result and result["dag"] is None`.
+- `test_v2_migration_adds_reviewer_config` — V1 YAML migrates to
+  V2 with `"reviewer_config" in result and result["reviewer_config"] is None`.
+- `test_v2_migration_adds_parallel_dev` — V1 YAML migrates to V2
+  with `"parallel_dev" in result and result["parallel_dev"] is None`.
+- (AgentSpec.context_budget default is per-agent, set by loader
+  not migration function — the obsolete test_adds_context_budget_to_agents
+  is removed and replaced by a loader-side test below.)
+
+**Loader tests (new behavior)**:
 - `test_loader_preserves_reviewer_config` — V2 YAML with
   `reviewer_config:`; assert `spec.reviewer_config` is set.
 - `test_loader_preserves_parallel_dev` — V2 YAML with
   `parallel_dev:`; assert `spec.parallel_dev` is set.
+- `test_loader_preserves_parallel_dev_features` — V2 YAML with
+  `parallel_dev: { features: [a, b] }`; assert
+  `spec.parallel_dev.features == ["a", "b"]`.
 - `test_loader_preserves_per_agent_context_budget` — V2 YAML
   with `agents.developer.context_budget: 50000`; assert the
   loaded `AgentSpec.context_budget == 50000`.
@@ -671,11 +739,11 @@ existing 461 tests.
   `dag:` entries; assert `spec.dag` is a non-empty
   `list[Stage]`.
 - `test_existing_v1_yaml_still_loads` — minimal V1 spec; assert
-  migration + load produces a working `PipelineSpec`.
+  migration + load produces a working `PipelineSpec` (all V2
+  fields default to `None`).
 - `test_no_validationerror_for_supported_v2_fields` — V2 YAML
   with all 4 new fields; assert NO `PipelineValidationError`
-  is raised (regression guard against old "frozen contract"
-  error messages).
+  is raised.
 
 ---
 
