@@ -730,18 +730,30 @@ class Orchestrator:
         Per-agent ``context_budget`` overrides the global
         ``BudgetConfig.per_task_limit`` when set on the agent's spec.
 
+        If the tracker already exists but the requested role has a
+        different per-task limit (e.g. planner ran first with the
+        global 200K, then developer with context_budget=50K is
+        invoked), the old tracker is discarded and a new one is
+        created so the tighter cap takes effect.
+
         Args:
             role: Agent role for per-agent context_budget lookup.
         """
-        if self._budget_tracker is not None:
-            return self._budget_tracker
-
         # Determine per_task_limit: per-agent override takes precedence
         per_task_limit = self.spec.budget.per_task_limit
         if role and role in self.spec.agents:
             agent_spec = self.spec.agents[role]
             if agent_spec.context_budget is not None:
                 per_task_limit = agent_spec.context_budget
+
+        # If tracker exists but per-task limit changed for this role,
+        # invalidate so the new cap takes effect (Codex Iter 2 re-review).
+        if (self._budget_tracker is not None
+                and self._budget_tracker.per_task_limit != per_task_limit):
+            self._budget_tracker = None
+
+        if self._budget_tracker is not None:
+            return self._budget_tracker
 
         self._budget_tracker = BudgetTracker(
             daily_limit=self.spec.budget.daily_token_limit,
