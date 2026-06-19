@@ -24,6 +24,7 @@ agents:
     runtime: claude
     model: deepseek-v4-pro
     system_prompt_path: "prompts/template-migrator-phase14.md"
+    pipeline_role: developer
     task_instruction: "Execute template migration per prd/PRD.md and prd/tech-design.md. Read source files from ~/projects/unison/ (v2-fix-pipeline.yaml, prompts/developer-v2-fix.md, prompts/reviewer-v2-fix.md). Generate target project files to ~/projects/unison/target-demo/: target-pipeline.yaml, prompts/developer-target.md, prompts/reviewer-target.md. Mark user-customizable fields with <USER MUST FILL>."
 
   dev_reviewer:
