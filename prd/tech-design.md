@@ -132,23 +132,54 @@ ORDER BY id
    the linear `dev_active ↔ dev_review` loop. Otherwise fall through
    to the existing linear loop (preserves V1 2-agent behavior).
 
-3. **DAGScheduler timeout (L515)**: replace `ThreadPoolExecutor`
-   context manager pattern with manual lifecycle:
+3. **DAGScheduler timeout (L515)** — deadline-aware scheduler loop:
    ```python
+   import time
+   from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+
    self._executor = ThreadPoolExecutor(max_workers=N)
-   futures = {ex.submit(...): stage for stage in ready}
+   # Map: future -> (stage, submit_time, deadline)
+   futures: dict = {}
+   for stage in ready:
+       fut = self._executor.submit(stage.fn, *stage.args)
+       deadline = time.monotonic() + stage.timeout
+       futures[fut] = (stage, time.monotonic(), deadline)
+
    try:
        while futures:
-           done, _ = wait(futures, timeout=0.1,
-                          return_when=FIRST_COMPLETED)
+           # Brief wait for any completion
+           done, _ = wait(futures, timeout=0.05, return_when=FIRST_COMPLETED)
+           now = time.monotonic()
+           # Handle completed
            for f in done:
-               stage = futures.pop(f)
-               # ... handle result, submit newly-ready stages
+               stage, _, _ = futures.pop(f)
+               self._record_result(stage, f.result())
+           # Handle overdue (running but past deadline)
+           overdue = [
+               (f, s, t, d) for f, (s, t, d) in futures.items()
+               if now >= d
+           ]
+           for f, stage, _, _ in overdue:
+               futures.pop(f)
+               # Python cannot kill a running thread, but the future
+               # is removed from the active map so the scheduler
+               # returns. The orphan thread will eventually finish
+               # (or hit daemon-thread teardown at process exit).
+               self._record_result(stage, TimeoutError(f"stage {stage.name} exceeded {stage.timeout}s"))
+           # Submit newly-ready stages
+           for stage in self._newly_ready(completed):
+               fut = self._executor.submit(stage.fn, *stage.args)
+               futures[fut] = (stage, time.monotonic(), time.monotonic() + stage.timeout)
    finally:
+       # cancel_futures cancels PENDING (not yet started) futures;
+       # running threads are orphaned and may continue in the
+       # background. Use a daemon executor or accept the leak in
+       # test environments.
        self._executor.shutdown(wait=False, cancel_futures=True)
    ```
-   `cancel_futures=True` (Python 3.9+) cancels pending futures so
-   the executor returns promptly even if a stage is hung.
+   **Key insight**: the scheduler returns within `max(stage.timeout)`
+   + small grace, regardless of how long any individual thread takes
+   to actually die. Running threads are orphaned, not killed.
 
 ### Acceptance tests (in `tests/test_pipeline.py`)
 
@@ -158,8 +189,18 @@ ORDER BY id
   assert `_run_state_machine` calls `DAGScheduler.execute_parallel`
   and does not enter the linear loop.
 - `test_dag_scheduler_returns_on_hung_stage` — fake stage
-  `sleep(60)`; execute_parallel with `timeout=2`; assert returns
-  within `2 + 1s` with the stage marked failed.
+  `def hang(): time.sleep(60)`; execute_parallel with
+  `timeout=2`; assert returns within `2 + 1s` with the stage
+  marked failed (recording a `TimeoutError`).
+- `test_dag_scheduler_does_not_hang_test_process` — same setup;
+  after the test, assert no non-daemon threads from the executor
+  remain in `threading.enumerate()`. (Use
+  `executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="dag")`
+  with a custom factory that sets `thread.daemon = True` for the
+  test, to make the test deterministic.)
+- `test_dag_scheduler_submits_newly_ready_after_completion` —
+  stage A → stage B (A's output feeds B); assert B is submitted
+  only after A's future is in `done`.
 
 ---
 
@@ -318,12 +359,30 @@ helper can land in Iter 1 as a standalone module.
    Returns: `str` (the full prompt). Truncates the diff using
    `truncate_diff(diff, max_lines=budget // 100)` if oversized.
 
-3. **`BudgetTracker` integration**:
-   - Initialize once per `Orchestrator.run()` from `spec.budget`.
-   - `tracker.consume(role, n_tokens)` after each agent call.
-   - `tracker.overflow_action` from `spec.budget.overflow_action`:
-     `"halt"` | `"downgrade"` | `"warn"`.
-   - Tests must cover all three actions.
+3. **`BudgetTracker` integration** (frozen contract surface — use only
+   existing fields and methods):
+   - `BudgetTracker.__init__(daily_limit, per_task_limit, persist_path)`
+     accepts ints. Construct from `self.spec.budget`:
+     ```python
+     tracker = BudgetTracker(
+         daily_limit=self.spec.budget.daily_token_limit,
+         per_task_limit=self.spec.budget.per_task_limit,
+         persist_path=self.spec.world.unison_dir / "budget.json",
+     )
+     ```
+   - Use **existing** `tracker.add_usage(tokens, phase=role, iter_n=iter)`
+     to record usage after each agent call. **No new `consume()` or
+     `from_config()` methods** — those would change the API surface.
+   - For "remaining budget", use existing properties:
+     `tracker.daily_limit - tracker.current_usage`.
+   - Overflow action: respect existing `spec.budget.overflow_action`
+     which is `Literal["downgrade", "halt"]` only. **No "warn" value.**
+     When `"downgrade"`: read `spec.budget.downgrade_map[role]` and
+     select the alternative runtime (e.g. `codex → claude`) when
+     constructing the runner. The Orchestrator copies the AgentSpec
+     into a new instance with the swapped runtime — does NOT mutate
+     the frozen spec.
+   - When `"halt"`: call `self.halt(f"budget overflow: {role}")`.
 
 ### Acceptance tests (in `tests/test_orchestrator.py`,
 `tests/test_context_deflate.py`, `tests/test_budget.py`)
@@ -334,11 +393,12 @@ helper can land in Iter 1 as a standalone module.
 - `test_long_diff_is_truncated` — diff of 1000 lines, budget 5000;
   assert returned prompt contains `truncate_diff` marker.
 - `test_budget_tracker_halts_on_overflow` — set
-  `overflow_action="halt"`; consume past budget; assert
-  orchestrator enters halt state.
-- `test_budget_tracker_downgrades_on_overflow` — same with
-  `"downgrade"`; assert agent spec is downgraded (per-agent
-  model swap or removal, per `BudgetTracker` API).
+  `overflow_action="halt"`; consume past budget via `add_usage`;
+  assert orchestrator enters halt state.
+- `test_budget_tracker_downgrades_on_overflow` — set
+  `overflow_action="downgrade"`; consume past budget; assert the
+  runner constructed for that role uses the `downgrade_map[role]["to"]`
+  runtime, not the original. (Use a fake `ClaudeRunner`/`CodexRunner`.)
 - `test_assemble_context_uses_review_path_helper` — planning
   review path differs from dev path; assert correct path is
   consulted.
