@@ -287,79 +287,170 @@ ORDER BY id
 
 ---
 
-## Phase 5 — Parallel Developer (2/10) — *DEFERRED, contract conflict*
-
-### Status
-**Cannot implement without contract change.** `interfaces.py` has
-`WorktreeConfig` but `PipelineSpec` does not carry it. The original
-V2 design intent is not realizable inside the frozen contract.
-
-### Resolution path
-1. Run the **other 7 phases first** to unblock the project.
-2. After Iter 1 + 2 land, surface Phase 5 to SEAN as a contract
-   change request: "Add `parallel_dev: WorktreeConfig | None` to
-   `PipelineSpec`, or accept env-var-only config (`UNISON_PARALLEL_DEV=1`)."
-3. Implement Phase 5 only after SEAN's decision.
-
-### Worktree module interim
-`src/unison/worktree.py` may need to grow
-`merge_reconciliation(branches, strategy) -> MergeResult` in
-preparation, even if the orchestrator wiring waits. Tests for the
-helper can land in Iter 1 as a standalone module.
-
----
-
-## Phase 6 — Multi-Reviewer (4/10)
+## Phase 5 — Parallel Developer (2/10) — *Full implementation in this round*
 
 ### Files
-- `src/unison/reviewer_pool.py:133` (YAML frontmatter construction)
-- `src/unison/orchestrator.py:639` (reviewer count source)
+- `interfaces.py` (add `parallel_dev: WorktreeConfig | None` to
+  `PipelineSpec` — 1 line)
+- `src/unison/orchestrator.py:296` (route to `WorktreeManager` when
+  `spec.parallel_dev is not None`)
+- `src/unison/worktree.py:1` (add `merge_reconciliation()`)
+- `src/unison/pipeline.py:145` (loader parses `parallel_dev:` block)
+
+### Contract change (Planner authorized 2026-06-19)
+
+```python
+# interfaces.py — PipelineSpec
+parallel_dev: WorktreeConfig | None = None  # V2: 并行 Developer
+```
+
+`WorktreeConfig` is already defined in `interfaces.py:228` (before
+`PipelineSpec`). The new field is **wiring, not new type**.
 
 ### Code changes
 
-1. **YAML construction (L133)**: replace manual `f"summary: {final.summary}"`
-   with `yaml.safe_dump({...}, default_flow_style=False, allow_unicode=True)`.
+1. **Loader (pipeline.py:145)**: parse `parallel_dev:` block in
+   `PipelineLoader._build_parallel_dev()` (new private method,
+   ≤10 lines). Returns `WorktreeConfig | None`.
+
+2. **Orchestrator routing (orchestrator.py:296)**: in
+   `_invoke_agent_for_role("developer", iter)`, when
+   `self.spec.parallel_dev is not None` and `iter == 1`:
+   - Create N worktrees via `WorktreeManager.create(spec.parallel_dev)`
+     where N = number of `WorktreeConfig.worktree_paths` or features
+     (capped by max_workers; default 3).
+   - Dispatch N developer agents in parallel, one per worktree.
+   - After all developers complete (or fail), call
+     `WorktreeManager.merge_reconciliation()` to consolidate
+     branches.
+
+3. **WorktreeManager.merge_reconciliation(branches, strategy)**
+   (new method in `src/unison/worktree.py`):
+   - `branches: list[str]` — list of branch names to merge
+   - `strategy: Literal["ff", "octopus", "manual"]` — default `"ff"`
+   - Returns `MergeResult(success: bool, conflicts: list[str])`.
+   - For `"ff"`: fast-forward each branch in order; abort on
+     conflict.
+   - For `"octopus"`: git merge --octopus; report conflicts.
+   - For `"manual"`: leave branches separate, return success=False
+     with list of unmerged branches.
+
+### Acceptance tests (in `tests/test_worktree.py`,
+`tests/test_orchestrator.py`)
+
+- `test_loader_parses_parallel_dev_block` — pipeline.yaml with
+  `parallel_dev:` block; assert loaded `spec.parallel_dev` is a
+  `WorktreeConfig`.
+- `test_orchestrator_creates_worktrees_when_parallel_dev` —
+  set `spec.parallel_dev=WorktreeConfig(...)`; mock
+  `WorktreeManager`; assert `create()` was called with the
+  config.
+- `test_worktree_merge_reconciliation_ff` — two branches that
+  fast-forward cleanly; assert `success=True, conflicts=[]`.
+- `test_worktree_merge_reconciliation_conflict` — two branches
+  with conflicting edits; assert `success=False, conflicts=[...]`.
+- `test_orchestrator_uses_single_developer_when_no_parallel_dev` —
+  `spec.parallel_dev=None`; assert no `WorktreeManager.create()`
+  call (regression guard).
+
+---
+
+## Phase 6 — Multi-Reviewer (4/10) — *Full implementation in this round*
+
+### Files
+- `interfaces.py` (add `reviewer_config: ReviewerConfig | None` to
+  `PipelineSpec` — 1 line)
+- `src/unison/reviewer_pool.py:133` (YAML frontmatter construction)
+- `src/unison/orchestrator.py:639` (reviewer count source)
+- `src/unison/pipeline.py` (loader parses `reviewer_config:` block)
+
+### Contract change (Planner authorized 2026-06-19)
+
+```python
+# interfaces.py — PipelineSpec
+reviewer_config: ReviewerConfig | None = None  # V2: multi-reviewer
+```
+
+`ReviewerConfig` is already defined in `interfaces.py:479`. This is
+**wiring, not new type**.
+
+### Code changes
+
+1. **Loader**: parse `reviewer_config:` block in
+   `PipelineLoader._build_reviewer_config()`. Returns
+   `ReviewerConfig | None`. ~10 lines. Validation: count must
+   be ≥ 1, even count requires `reconcile_strategy="unanimous"`
+   (already enforced in `ReviewerConfig.__post_init__`).
+
+2. **YAML construction (reviewer_pool.py:133)**: replace manual
+   `f"summary: {final.summary}"` with
+   `yaml.safe_dump({...}, default_flow_style=False, allow_unicode=True)`.
    This handles colons, brackets, and other special chars correctly.
 
-2. **Reviewer count source (L639)**: change `_get_reviewer_count()`:
+3. **Reviewer count source (orchestrator.py:639)**: change
+   `_get_reviewer_count()`:
    ```python
    def _get_reviewer_count(self) -> int:
-       # Future: when contract permits, prefer spec.reviewer_config.count.
-       # For now (frozen contract): env var only.
+       # Prefer spec.reviewer_config (new wiring).
+       if self.spec.reviewer_config is not None and \
+          self.spec.reviewer_config.enabled:
+           return self.spec.reviewer_config.count
+       # Fallback: env var (preserved for tests / ad-hoc usage).
        return int(os.environ.get("UNISON_REVIEWER_COUNT", "1"))
    ```
-   The "future" line documents the migration path; the current
-   implementation stays env-var-only because `PipelineSpec` has no
-   `reviewer_config` field.
 
-3. **Multi-reviewer output path**: when writing the reconciled
+4. **Multi-reviewer output path**: when writing the reconciled
    review file, use `self._review_file_for_phase("dev_review", iter)`
    (the new helper from Phase 4) instead of `world.review_file(iter)`.
    Individual reviewer files keep the `iter-N-R{i}.md` suffix.
 
 ### Acceptance tests (in `tests/test_reviewer_pool.py`,
-`tests/test_orchestrator.py`)
+`tests/test_orchestrator.py`, `tests/test_pipeline.py`)
 
+- `test_loader_parses_reviewer_config_block` — pipeline.yaml
+  with `reviewer_config:`; assert `spec.reviewer_config` is a
+  `ReviewerConfig` with the expected count/strategy.
+- `test_loader_rejects_even_count_with_majority` — even count +
+  majority strategy; assert raises `PipelineValidationError`.
 - `test_reconciled_summary_with_brackets_parses` — summary is
   `"[R0] fix: ensure api.Endpoint.handle: idempotent"`; assert
   the produced YAML file's `verdict` field parses correctly.
 - `test_reconciled_summary_with_colons_parses` — same, summary
   contains a colon.
-- `test_get_reviewer_count_uses_env_var` — set
-  `UNISON_REVIEWER_COUNT=3`; assert returns 3.
+- `test_get_reviewer_count_prefers_spec_over_env` — set
+  `spec.reviewer_config.count=5` AND `UNISON_REVIEWER_COUNT=2`;
+  assert returns 5.
+- `test_get_reviewer_count_falls_back_to_env` —
+  `spec.reviewer_config=None` AND `UNISON_REVIEWER_COUNT=3`;
+  assert returns 3.
 - `test_multi_reviewer_writes_to_separated_path` — run multi-reviewer;
   assert final review file is at `reviews/iter-1.md` (dev path),
   not `reviews/plan-iter-1.md`.
 
 ---
 
-## Phase 7 — Context Window (3/10) — *depends on Phase 4 helper*
+## Phase 7 — Context Window (3/10) — *Full implementation, depends on Phase 4 helper*
 
 ### Files
+- `interfaces.py` (add `context_budget: int | None` to `AgentSpec` —
+  1 line)
 - `src/unison/orchestrator.py:579` (hand-built prompt)
 - `src/unison/orchestrator.py:604` (no findings injection)
 - `src/unison/context_deflate.py` (assemble_context, truncate_diff)
 - `src/unison/budget.py` (BudgetTracker)
+- `src/unison/pipeline.py` (loader passes `context_budget` per agent)
+
+### Contract change (Planner authorized 2026-06-19)
+
+```python
+# interfaces.py — AgentSpec
+context_budget: int | None = None  # V2: per-agent token budget override
+```
+
+When `None`, falls back to the global `BudgetConfig.per_task_limit`.
+When set, this agent's per-task limit is the specified value. This
+is a **new optional field with a default** — does NOT break any
+existing 461 tests.
 
 ### Code changes
 
@@ -451,9 +542,17 @@ helper can land in Iter 1 as a standalone module.
    - `BudgetTracker.__init__(daily_limit, per_task_limit, persist_path)`
      accepts ints. Construct from `self.spec.budget`:
      ```python
+     # Per-agent override: AgentSpec.context_budget takes precedence
+     # over BudgetConfig.per_task_limit when set.
+     agent_spec = self.spec.agents[role]
+     per_task_limit = (
+         agent_spec.context_budget
+         if agent_spec.context_budget is not None
+         else self.spec.budget.per_task_limit
+     )
      tracker = BudgetTracker(
          daily_limit=self.spec.budget.daily_token_limit,
-         per_task_limit=self.spec.budget.per_task_limit,
+         per_task_limit=per_task_limit,
          persist_path=self.spec.world.unison_dir / "budget.json",
      )
      ```
@@ -489,70 +588,104 @@ helper can land in Iter 1 as a standalone module.
 - `test_assemble_context_uses_review_path_helper` — planning
   review path differs from dev path; assert correct path is
   consulted.
+- `test_per_agent_context_budget_overrides_global` — set
+  `agent_spec.context_budget=50000` and
+  `spec.budget.per_task_limit=200000`; assert the constructed
+  `BudgetTracker` has `per_task_limit=50000`.
+- `test_per_agent_context_budget_none_falls_back_to_global` —
+  `agent_spec.context_budget=None`; assert
+  `BudgetTracker.per_task_limit == spec.budget.per_task_limit`.
 
 ---
 
-## Phase 8 — Schema Migrate (6/10) — *contract conflict, partial fix*
+## Phase 8 — Schema Migrate (6/10) — *Full implementation, all V2 fields now representable*
 
 ### Files
+- `interfaces.py` (PipelineSpec + AgentSpec, fields already added in
+  Phase 5/6/7 above)
 - `src/unison/schema_migrate.py:252` (PipelineSpec migration)
 - `src/unison/pipeline.py:138` (loader must keep V2 fields)
 
-### Migrated shape (default values for V2 fields that the frozen
-contract CAN represent)
+### Migrated shape (all V2 fields now representable)
 
-The frozen `PipelineSpec` (in `interfaces.py`) accepts:
+`PipelineSpec` (in `interfaces.py`) after Phase 5/6/7 patches accepts:
 - `dag: list[Stage] | None` — representable
+- `reviewer_config: ReviewerConfig | None` — representable (added Phase 6)
+- `parallel_dev: WorktreeConfig | None` — representable (added Phase 5)
 - `budget: BudgetConfig` — representable (V2 already has it)
-- **NOT** `reviewer_config` — NOT representable on `PipelineSpec`
-- **NOT** `context_budget` per-agent — NOT representable on
-  `AgentSpec` (only `BudgetConfig` is global)
+- `AgentSpec.context_budget: int | None` — representable (added Phase 7)
 
 ### Resolution
 
-1. **Migration function** (Phase 8): for the V1 → V2 migration,
-   add:
+1. **Migration function** (Phase 8): for the V1 → V2 migration, add
+   all V2 field defaults:
    ```python
-   d.setdefault("dag", None)  # list[Stage] or None
-   # NOTE: reviewer_config and per-agent context_budget are NOT
-   # representable under the frozen contract. If found in the
-   # raw YAML, the loader will emit a PipelineValidationError
-   # with a clear message: "field X requires V2.x contract".
+   d.setdefault("dag", None)
+   d.setdefault("reviewer_config", None)
+   d.setdefault("parallel_dev", None)
+   # AgentSpec.context_budget is per-agent, set in loader
    d["version"] = "2.0"
    ```
-   This is an **explicit partial migration**. It does what it
-   can within the frozen contract and refuses what it cannot.
+   **No more `PipelineValidationError` for unsupported fields** —
+   everything V2 needs is now representable.
 
-2. **Loader** (`PipelineLoader.load`): add validation that
-   raises `PipelineValidationError("reviewer_config requires
-   V2.x contract; current contract is frozen at 2.0")` when
-   the raw YAML has `reviewer_config:` or per-agent
-   `context_budget:` keys. The current code does not check,
-   so silent loss is the bug.
+2. **Loader** (`PipelineLoader.load`): preserve all V2 fields in
+   `PipelineSpec` construction. The current code (pipeline.py:138)
+   **silently drops** these fields; the fix is to add them to the
+   `PipelineSpec(...)` constructor call:
+   ```python
+   return PipelineSpec(
+       version=version,
+       world=world,
+       agents=agents,
+       project=project_cfg,
+       bootstrap=bootstrap_cfg,
+       budget=budget_cfg,
+       snapshots=snapshots_cfg,
+       risk_matrix=risk_cfg,
+       dag=dag_cfg,                       # Phase 3 + Phase 8
+       reviewer_config=reviewer_cfg,      # Phase 6 + Phase 8
+       parallel_dev=parallel_dev_cfg,     # Phase 5 + Phase 8
+   )
+   ```
+   `dag_cfg`, `reviewer_cfg`, `parallel_dev_cfg` are parsed by the
+   corresponding `_build_*` helpers in PipelineLoader.
+
+3. **AgentSpec.context_budget** propagation: the loader passes
+   `context_budget` from raw YAML to the AgentSpec constructor
+   (currently the field is dropped).
 
 ### Acceptance tests (in `tests/test_schema_migrate.py`,
 `tests/test_pipeline.py`)
 
-- `test_migration_adds_dag_default` — V1 YAML with no `dag:`
-  migrates to V2 with `dag=None`.
-- `test_loader_rejects_unsupported_v2_fields` — V2 YAML with
-  `reviewer_config:`; assert raises `PipelineValidationError`
-  with a clear message.
+- `test_migration_adds_v2_defaults` — V1 YAML with no V2 fields
+  migrates to V2 with `dag=None, reviewer_config=None, parallel_dev=None`.
+- `test_loader_preserves_reviewer_config` — V2 YAML with
+  `reviewer_config:`; assert `spec.reviewer_config` is set.
+- `test_loader_preserves_parallel_dev` — V2 YAML with
+  `parallel_dev:`; assert `spec.parallel_dev` is set.
+- `test_loader_preserves_per_agent_context_budget` — V2 YAML
+  with `agents.developer.context_budget: 50000`; assert the
+  loaded `AgentSpec.context_budget == 50000`.
 - `test_loader_preserves_dag_field` — V2 YAML with valid
   `dag:` entries; assert `spec.dag` is a non-empty
   `list[Stage]`.
 - `test_existing_v1_yaml_still_loads` — minimal V1 spec; assert
   migration + load produces a working `PipelineSpec`.
+- `test_no_validationerror_for_supported_v2_fields` — V2 YAML
+  with all 4 new fields; assert NO `PipelineValidationError`
+  is raised (regression guard against old "frozen contract"
+  error messages).
 
 ---
 
-## Iteration plan (revised per Codex ordering suggestion)
+## Iteration plan (final, after contract authorization)
 
 | Iter | Phases | Review file | Why this order |
 |------|--------|-------------|----------------|
-| 1 | **8** (schema partial), **3** (DAG loader + scheduler), **4** (review path helper) | `reviews/iter-1.md` | Unblocks V2 spec loading + sets up review-path helper that Phase 6/7 need |
-| 2 | **7** (context), **6** (reviewer YAML) | `reviews/iter-2.md` | Both depend on the review-path helper from Iter 1 |
-| 3 | **1** (observer), **2** (channel), **5** (worktree interim) | `reviews/iter-3.md` | Leaf fixes; Phase 5 is a partial delivery pending SEAN's contract decision |
+| 1 | **8** (schema), **3** (DAG loader + scheduler), **4** (review path helper) | `reviews/iter-1.md` | Unblocks V2 spec loading + sets up review-path helper that Phase 6/7 need |
+| 2 | **7** (context + per-agent budget), **6** (reviewer YAML + spec.reviewer_config) | `reviews/iter-2.md` | Both depend on the review-path helper from Iter 1 |
+| 3 | **1** (observer), **2** (channel), **5** (worktree full impl + merge_reconciliation) | `reviews/iter-3.md` | Leaf fixes; Phase 5 is now full implementation per Planner authorization 2026-06-19 |
 
 Reviewer (Codex) writes the corresponding `reviews/iter-N.md` at
 the end of each iteration with verdict PASS or REQUEST_CHANGES.
@@ -562,14 +695,14 @@ the end of each iteration with verdict PASS or REQUEST_CHANGES.
 ## What the Developer (Claude Code) commits per phase
 
 ```
-fix: Phase 8 — schema migrate V2 fields (partial: dag only)
+fix: Phase 8 — schema migrate V2 fields (dag, reviewer_config, parallel_dev, context_budget)
 fix: Phase 3 — DAG loader + executor cancellation
 fix: Phase 4 — review path helper + planner artifact check
-fix: Phase 7 — context_deflate + BudgetTracker integration
-fix: Phase 6 — YAML safe_dump + reviewer path helper usage
+fix: Phase 7 — context_deflate + BudgetTracker + per-agent context_budget
+fix: Phase 6 — YAML safe_dump + spec.reviewer_config + path helper usage
 fix: Phase 1 — observer liveness + ENOSPC fallback + report file
 fix: Phase 2 — channel broadcast recipient
-fix: Phase 5 — worktree.merge_reconciliation() (interim, no orchestrator wiring)
+fix: Phase 5 — worktree.merge_reconciliation() + parallel_dev orchestrator wiring
 ```
 
 8 commits, 3 iter reviews, 1 final 8-phase review.
