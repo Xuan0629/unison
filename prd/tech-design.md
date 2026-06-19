@@ -3,10 +3,14 @@
 ## Scope decisions (revised 2026-06-19 per SEAN authorization)
 
 1. **Contract is partially open.** Per SEAN's revision of the
-   freeze policy, the 3 specific field additions listed in
-   `prd/PRD.md` "Constraints" section are explicitly authorized
-   (parallel_dev, reviewer_config, context_budget). Everything
-   else in `interfaces.py`, `ARCHITECTURE.md`, root
+   freeze policy, the **4 specific field additions** listed in
+   `prd/PRD.md` "Constraints" section are explicitly authorized:
+   - `PipelineSpec.parallel_dev: WorktreeConfig | None`
+   - `PipelineSpec.reviewer_config: ReviewerConfig | None`
+   - `AgentSpec.context_budget: int | None`
+   - `WorktreeConfig.features: list[str] | None`
+
+   Everything else in `interfaces.py`, `ARCHITECTURE.md`, root
    `tech-design.md` remains frozen. **Do not modify anything
    else** without explicit Planner approval.
 2. **Review file naming**: 3 implementation iterations → 3 review
@@ -340,11 +344,39 @@ B. Add `WorktreeConfig.features: list[str] | None = None`. Chosen —
 2. **Orchestrator routing (orchestrator.py:296)**: in
    `_invoke_agent_for_role("developer", iter)`, when
    `self.spec.parallel_dev is not None` and `iter == 1`:
-   - Read `feature_list = self.spec.parallel_dev.features or []`.
-   - If `feature_list` is empty: fall back to single-developer
-     (existing behavior, with a log line "parallel_dev enabled
-     but no features specified").
-   - If non-empty: for each `feature_name` in `feature_list`:
+
+   **Enablement check** (Codex Round 5 finding 2):
+   ```python
+   pd = self.spec.parallel_dev
+   if pd is not None and pd.enabled:
+       # parallel-dev path
+       feature_list = pd.features or []
+       if not feature_list:
+           # enabled=True but no features = misconfiguration,
+           # not silent fallback (Codex Round 5 finding 3).
+           raise PipelineValidationError(
+               "parallel_dev.enabled=True but features list is empty. "
+               "Either set features=[...] or set enabled=False."
+           )
+       # ... continue with worktree creation
+   else:
+       # Single-developer fallback (parallel_dev is None OR enabled=False)
+       # The `enabled=False` case is the documented "kill switch" — config
+       # is present but inactive. Tests cover this as a regression guard.
+       pass
+   ```
+
+   - `parallel_dev is None`: single-developer mode (existing V1 behavior).
+   - `parallel_dev is not None and enabled is False`: single-developer
+     mode (kill switch, regression guard test).
+   - `parallel_dev is not None and enabled is True and features`:
+     parallel-dev mode, one Developer per feature.
+   - `parallel_dev is not None and enabled is True and not features`:
+     **raise `PipelineValidationError`** (misconfiguration, not
+     silent fallback — per Codex Round 5).
+
+   **Parallel-dev dispatch** (when enablement + features both pass):
+   - For each `feature_name` in `feature_list`:
      - `mgr = WorktreeManager(config=self.spec.parallel_dev,
                              project_root=world.root)`
      - `info = mgr.create_worktree(feature_name)` → worktree path
@@ -374,12 +406,19 @@ B. Add `WorktreeConfig.features: list[str] | None = None`. Chosen —
   with `parallel_dev: { features: [feature-a, feature-b] }`;
   assert `spec.parallel_dev.features == ["feature-a", "feature-b"]`.
 - `test_orchestrator_creates_worktrees_for_each_feature` —
-  set `spec.parallel_dev=WorktreeConfig(features=["f1", "f2"])`;
+  set `spec.parallel_dev=WorktreeConfig(enabled=True, features=["f1", "f2"])`;
   mock `WorktreeManager`; assert `create_worktree("f1")` and
   `create_worktree("f2")` were each called.
-- `test_orchestrator_falls_back_to_single_when_features_empty` —
-  `spec.parallel_dev=WorktreeConfig(features=[])`; assert only
-  one developer invocation (no worktree calls).
+- `test_orchestrator_uses_single_developer_when_parallel_dev_disabled` —
+  `spec.parallel_dev=WorktreeConfig(enabled=False, features=["f1"])`;
+  assert only one developer invocation (no worktree calls).
+  (Regression guard: `enabled=False` is the kill switch, not
+  "fire and ignore".)
+- `test_orchestrator_raises_on_enabled_without_features` —
+  `spec.parallel_dev=WorktreeConfig(enabled=True, features=[])`;
+  assert raises `PipelineValidationError` with the message
+  "parallel_dev.enabled=True but features list is empty".
+  (Codex Round 5 finding 3: misconfiguration, not silent fallback.)
 - `test_worktree_merge_reconciliation_ff` — two branches that
   fast-forward cleanly; assert `success=True, conflicts=[]`.
 - `test_worktree_merge_reconciliation_conflict` — two branches
@@ -691,20 +730,24 @@ existing 461 tests.
 ### Migration compatibility — IMPORTANT
 
 The current test suite has **3 obsolete tests** in
-`tests/test_schema_migrate.py` that explicitly assert migration
-**does not** add `dag`, `reviewer_config`, or `context_budget`:
-- `test_adds_dag` (line 320): asserts `"dag" not in result`
-- `test_adds_reviewer_config` (line 326): asserts `"reviewer_config" not in result`
-- `test_adds_context_budget_to_agents` (line 345): asserts
-  `context_budget` is not added
+`tests/test_schema_migrate.py` that explicitly assert the V1→V2
+migration **does not** add certain fields. After Round 5/6
+contract authorization, the resolution is:
 
-These tests are now **obsolete** because the contract authorization
-in `prd/PRD.md` makes these fields first-class V2 fields. Phase 8
-**MUST update these 3 tests** to assert the new behavior (i.e.
-flip the assertion: `"dag" in result`, etc.). The Developer
-should also rename them to `test_v2_migration_adds_dag`,
-`test_v2_migration_adds_reviewer_config`,
-`test_v2_migration_adds_context_budget` to reflect the new intent.
+| Obsolete test | Lines | Resolution |
+|---------------|-------|------------|
+| `test_adds_dag` | 320 | **REPLACE** with `test_v2_migration_adds_dag` asserting `"dag" in result and result["dag"] is None` |
+| `test_adds_reviewer_config` | 326 | **REPLACE** with `test_v2_migration_adds_reviewer_config` asserting `"reviewer_config" in result` |
+| `test_adds_context_budget_to_agents` | 345 | **REMOVE** (no replacement at the migration level) — `context_budget` is per-agent, set by the loader not the migration function. Coverage moves to loader tests below. |
+
+**Migration adds 3 top-level PipelineSpec defaults**:
+`dag=None`, `reviewer_config=None`, `parallel_dev=None`.
+
+**`AgentSpec.context_budget`** is set per-agent by the loader, not
+by the migration function. There is no `test_v2_migration_adds_context_budget`
+test — the obsolete `test_adds_context_budget_to_agents` is deleted
+and replaced by `test_loader_preserves_per_agent_context_budget`
+(see loader tests below).
 
 The original 461-test count will **drop by 3** (obsolete tests
 removed) and **gain N** (new V2 acceptance tests), ending at
@@ -720,9 +763,9 @@ removed) and **gain N** (new V2 acceptance tests), ending at
   V2 with `"reviewer_config" in result and result["reviewer_config"] is None`.
 - `test_v2_migration_adds_parallel_dev` — V1 YAML migrates to V2
   with `"parallel_dev" in result and result["parallel_dev"] is None`.
-- (AgentSpec.context_budget default is per-agent, set by loader
-  not migration function — the obsolete test_adds_context_budget_to_agents
-  is removed and replaced by a loader-side test below.)
+- **No migration test for `context_budget`** — see loader tests
+  below. The obsolete `test_adds_context_budget_to_agents` is
+  deleted, not renamed.
 
 **Loader tests (new behavior)**:
 - `test_loader_preserves_reviewer_config` — V2 YAML with
