@@ -9,6 +9,7 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from interfaces import WorktreeConfig
 
@@ -19,6 +20,18 @@ class WorktreeInfo:
     path: Path
     branch: str
     hash: str
+
+
+@dataclass
+class MergeResult:
+    """merge_reconciliation 的结果。"""
+    success: bool
+    conflicts: list[str]  # 冲突的分支名列表
+    merged_branches: list[str] = None  # 成功合并的分支
+
+    def __post_init__(self):
+        if self.merged_branches is None:
+            self.merged_branches = []
 
 
 @dataclass
@@ -241,3 +254,96 @@ class WorktreeManager:
                 ))
 
         return worktrees
+
+    # ==================================================================
+    # merge_reconciliation — consolidate parallel feature branches
+    # ==================================================================
+
+    def merge_reconciliation(
+        self,
+        branches: list[str],
+        strategy: Literal["ff", "octopus", "manual"] = "ff",
+    ) -> MergeResult:
+        """Merge feature branches back to ``config.base_branch``.
+
+        Args:
+            branches: List of branch names (= feature names) to merge.
+            strategy: Merge strategy:
+                ``"ff"`` — fast-forward each branch in order; abort on
+                    conflict.
+                ``"octopus"`` — ``git merge --octopus``; report conflicts.
+                ``"manual"`` — leave branches separate, return
+                    ``success=False`` with the unmerged branch list.
+
+        Returns:
+            MergeResult with success flag and conflict list.
+        """
+        if not self.config.enabled:
+            return MergeResult(success=False, conflicts=branches)
+
+        if not self._is_git_repo():
+            return MergeResult(success=False, conflicts=branches)
+
+        if not branches:
+            return MergeResult(success=True, conflicts=[])
+
+        if strategy == "manual":
+            return MergeResult(
+                success=False,
+                conflicts=branches,
+                merged_branches=[],
+            )
+
+        # Save current branch so we can restore it after merge
+        current_branch = self._git("rev-parse", "--abbrev-ref", "HEAD")
+        current_branch_name = (
+            current_branch.stdout.strip()
+            if current_branch.returncode == 0
+            else self.config.base_branch
+        )
+
+        # Check out the base branch
+        checkout = self._git("checkout", self.config.base_branch)
+        if checkout.returncode != 0:
+            # Try to restore original branch before returning
+            self._git("checkout", current_branch_name)
+            return MergeResult(success=False, conflicts=branches)
+
+        conflicts: list[str] = []
+        merged: list[str] = []
+
+        if strategy == "ff":
+            for branch in branches:
+                # Attempt to fast-forward merge the branch
+                result = self._git(
+                    "merge", "--ff-only", branch,
+                    timeout=120,
+                )
+                if result.returncode == 0:
+                    merged.append(branch)
+                else:
+                    conflicts.append(branch)
+                    # Abort any in-progress merge before trying next
+                    self._git("merge", "--abort")
+
+        elif strategy == "octopus":
+            # git merge --octopus <branch1> <branch2> ...
+            result = self._git(
+                "merge", "--octopus", *branches,
+                timeout=120,
+            )
+            if result.returncode == 0:
+                merged = list(branches)
+            else:
+                # Octopus merge failure — all branches are conflicted
+                conflicts = list(branches)
+                self._git("merge", "--abort")
+
+        # Restore original branch (best-effort)
+        self._git("checkout", current_branch_name)
+
+        return MergeResult(
+            success=len(conflicts) == 0,
+            conflicts=conflicts,
+            merged_branches=merged,
+        )

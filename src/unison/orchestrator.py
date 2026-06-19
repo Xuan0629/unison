@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from interfaces import PipelineSpec, ReviewVerdict
+from unison.pipeline import PipelineValidationError
 from unison.state import State
 from unison.lock import FileLockManager
 from unison.checkpoint import FileCheckpointManager
@@ -385,6 +386,7 @@ class Orchestrator:
         """Invoke an agent subprocess for *role* at *iteration*.
 
         Steps:
+          0. V2: Route to parallel-dev dispatcher when applicable
           1. Select runner (with budget-aware downgrade)
           2. Check budget overflow BEFORE building prompt (halt if over)
           3. Pre-invoke cleanup (git reset/clean)
@@ -397,6 +399,22 @@ class Orchestrator:
             role: Agent role ("planner", "developer", "reviewer").
             iteration: Current iteration number.
         """
+        # 0. V2: parallel-dev routing
+        if role == "developer":
+            pd = self.spec.parallel_dev
+            if pd is not None:
+                if pd.enabled:
+                    feature_list = pd.features or []
+                    if not feature_list:
+                        raise PipelineValidationError(
+                            "parallel_dev.enabled=True but features list is empty. "
+                            "Either set features=[...] or set enabled=False."
+                        )
+                    self._invoke_parallel_developers(iteration, pd, feature_list)
+                    return
+                # enabled=False → fall through to single-developer path
+                # (documented kill switch, tested as regression guard)
+
         world = self.spec.world
 
         # 1. Select runner with budget-aware downgrade
@@ -458,6 +476,108 @@ class Orchestrator:
             # may have produced useful output before crashing.
             # Consecutive failure tracking is a V2 feature.
             pass
+
+    def _invoke_parallel_developers(
+        self, iteration: int, pd, feature_list: list[str]
+    ) -> None:
+        """Dispatch one Developer agent per feature via worktree isolation.
+
+        Creates a git worktree for each feature name, runs the developer
+        agent in that worktree, then merges all feature branches back
+        via ``WorktreeManager.merge_reconciliation``.
+
+        Args:
+            iteration: Current iteration number.
+            pd: ``WorktreeConfig`` from ``spec.parallel_dev``.
+            feature_list: Feature names to parallelize over.
+        """
+        from unison.worktree import WorktreeManager, WorktreeInfo
+
+        world = self.spec.world
+
+        # Pre-invoke cleanup once (not per-feature)
+        self.pre_invoke_cleanup()
+        if self._state.halt_signal:
+            return
+
+        mgr = WorktreeManager(config=pd, project_root=world.root)
+        worktree_infos: list[WorktreeInfo | None] = []
+
+        # Create worktrees for each feature
+        for feature_name in feature_list:
+            info = mgr.create_worktree(feature_name)
+            worktree_infos.append(info)
+            if info is None:
+                self._state.transition(
+                    "dev_active", "orchestrator",
+                    iter_n=iteration,
+                    note=f"Worktree creation failed for {feature_name}",
+                )
+
+        # Dispatch one Developer to each created worktree
+        for feature_name, info in zip(feature_list, worktree_infos):
+            if info is None:
+                continue
+
+            if self._state.halt_signal:
+                break
+
+            # Get runner for developer
+            runner, effective_spec = self._select_runner("developer")
+            if runner is None or effective_spec is None:
+                continue
+
+            # Build feature-specific prompt
+            prompt = (
+                f"=== Parallel Developer: {feature_name} ===\n"
+                f"Iteration {iteration}\n"
+                f"Feature: {feature_name}\n"
+                f"Worktree: {info.path}\n"
+                f"1. Read prd/PRD.md and prd/tech-design.md\n"
+                f"2. Implement {feature_name} in src/\n"
+                f"3. Write tests in tests/\n"
+                f"4. Run: {self.spec.project.test_command}\n"
+                f"5. Commit with: git add -A && git commit -m '{feature_name}: ...'"
+            )
+
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            log_path = world.agent_log("developer", iteration, f"{timestamp}_{feature_name}")  # type: ignore[arg-type]
+
+            runner.run(
+                spec=effective_spec,
+                prompt=prompt,
+                workdir=info.path,
+                timeout=self.spec.per_agent_timeout,
+                log_path=log_path,
+            )
+
+            # Track token usage
+            tracker = self._get_budget_tracker("developer")
+            estimated_tokens = max(1, len(prompt) // 4)
+            tracker.add_usage(estimated_tokens, phase=f"developer_{feature_name}", iter_n=iteration)
+
+            # Completion detection
+            detected = self._detector.detect(
+                workspace=info.path,
+                expected_iter=iteration,
+                role="developer",
+                log_path=log_path,
+            )
+            if detected.commit:
+                self._state.last_dev_commit = detected.commit
+
+        # Merge all feature branches
+        branch_names = [
+            info.branch for info in worktree_infos
+            if info is not None
+        ]
+        if branch_names:
+            merge_result = mgr.merge_reconciliation(branch_names, strategy="ff")
+            if not merge_result.success:
+                logger = __import__("logging").getLogger(__name__)
+                logger.warning(
+                    "merge_reconciliation conflicts: %s", merge_result.conflicts
+                )
 
     def _invoke_multi_reviewer(
         self, iteration: int, review_phase: str = "dev_review"
