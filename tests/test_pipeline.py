@@ -1064,11 +1064,11 @@ class TestDAGSchedulerExecuteParallel:
 
         # 全部成功
         assert all(results.values())
-        # 并行执行：3 个 0.1s stage 在 ~0.1-0.2s 完成。
-        # V2 deadline-aware loop 引入了额外的 poll overhead（每 0.05s
-        # 一次 wait()），所以阈值从 0.25s 放宽到 0.5s。
-        # 仍然显著 < 串行 0.3s，验证并行性。
-        assert elapsed < 0.5, f"Expected parallel execution, got {elapsed:.2f}s"
+        # 并行执行：3 个 0.1s stage 必须在 0.25s 内完成。
+        # V2 deadline-aware loop poll interval = 10ms（见
+        # pipeline.py `_run_dag_development` 注释），所以 3 个
+        # 0.1s stage 在 ~0.1-0.2s 完成。
+        assert elapsed < 0.25, f"Expected parallel execution, got {elapsed:.2f}s"
 
 
 # ============================================================================
