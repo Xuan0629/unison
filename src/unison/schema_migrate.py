@@ -253,10 +253,11 @@ def _migrate_state_1_to_2(d: dict) -> dict:
 def _migrate_pipeline_1_to_2(d: dict) -> dict:
     """V1 → V2 PipelineSpec migration.
 
-    V2 fields (dag, reviewer_config, context_budget) require PipelineSpec
-    schema changes.  Until PipelineSpec supports them, this migration is a
-    no-op that only bumps the version.  The fields will be added by a
-    future V2.x migration when their storage path is defined.
+    Adds V2 field defaults so that migrated V1 specs are loadable as V2.
+    AgentSpec.context_budget is per-agent and set by the loader, not here.
     """
+    d.setdefault("dag", None)
+    d.setdefault("reviewer_config", None)
+    d.setdefault("parallel_dev", None)
     d["version"] = "2.0"
     return d

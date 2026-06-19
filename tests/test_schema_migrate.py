@@ -316,39 +316,35 @@ class TestStateV1ToV2:
 class TestPipelineV1ToV2:
     """Tests for _migrate_pipeline_1_to_2."""
 
-    def test_adds_dag(self):
-        """V2 migration bumps version only (dag deferred to PipelineSpec upgrade)."""
+    def test_v2_migration_adds_dag(self):
+        """V1 → V2 migration adds dag=None default."""
         d = {"version": "1.0", "agents": {}}
         result = migrate(d, PIPELINE_MIGRATIONS, "2.0")
         assert result["version"] == "2.0"
-        assert "dag" not in result  # not added until PipelineSpec supports it
+        assert "dag" in result
+        assert result["dag"] is None
 
-    def test_adds_reviewer_config(self):
-        """reviewer_config deferred to PipelineSpec schema upgrade."""
+    def test_v2_migration_adds_reviewer_config(self):
+        """V1 → V2 migration adds reviewer_config=None default."""
         d = {"version": "1.0", "agents": {}}
         result = migrate(d, PIPELINE_MIGRATIONS, "2.0")
         assert result["version"] == "2.0"
-        assert "reviewer_config" not in result
+        assert "reviewer_config" in result
+        assert result["reviewer_config"] is None
+
+    def test_v2_migration_adds_parallel_dev(self):
+        """V1 → V2 migration adds parallel_dev=None default."""
+        d = {"version": "1.0", "agents": {}}
+        result = migrate(d, PIPELINE_MIGRATIONS, "2.0")
+        assert result["version"] == "2.0"
+        assert "parallel_dev" in result
+        assert result["parallel_dev"] is None
 
     def test_updates_version(self):
         """V1 → V2 updates version to "2.0"."""
         d = {"version": "1.0", "agents": {}}
         result = migrate(d, PIPELINE_MIGRATIONS, "2.0")
         assert result["version"] == "2.0"
-
-    def test_adds_context_budget_to_agents(self):
-        """context_budget deferred until PipelineSpec supports per-agent fields."""
-        d = {
-            "version": "1.0",
-            "agents": {
-                "planner": {"role": "planner", "runtime": "hermes"},
-                "developer": {"role": "developer", "runtime": "claude"},
-            },
-        }
-        result = migrate(d, PIPELINE_MIGRATIONS, "2.0")
-        assert result["version"] == "2.0"
-        # Agents preserved but no context_budget added
-        assert result["agents"]["planner"]["role"] == "planner"
 
     def test_preserves_existing_agent_fields(self):
         """Existing agent fields survive migration."""

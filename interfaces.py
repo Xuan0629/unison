@@ -145,6 +145,7 @@ class AgentSpec:
     runtime: Runtime
     model: str
     system_prompt_path: Path  # 路径指向 prompt 模板文件
+    context_budget: int | None = None  # V2: per-agent token budget override
 
     @property
     def cli_flags(self) -> list[str]:
@@ -237,6 +238,7 @@ class WorktreeConfig:
     enabled: bool = False
     base_branch: str = "main"
     worktree_root: Path = Path(".worktrees")
+    features: list[str] | None = None  # V2: feature list to parallelize over
 
 
 @dataclass(frozen=True)
@@ -251,6 +253,8 @@ class PipelineSpec:
     snapshots: SnapshotConfig = field(default_factory=SnapshotConfig)
     risk_matrix: RiskMatrixConfig = field(default_factory=RiskMatrixConfig)
     dag: list[Stage] | None = None  # V2: DAG 多 phase 并行（None → V1 线性模式）
+    parallel_dev: WorktreeConfig | None = None  # V2: 并行 Developer
+    reviewer_config: ReviewerConfig | None = None  # V2: multi-reviewer
     max_iterations: int = 5
     per_agent_timeout: int = 600    # 秒。Codex 慢需 300s+
     context_deflation_limit: int = 5  # 每次迭代只注入最近 5 条 findings
