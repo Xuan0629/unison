@@ -354,7 +354,7 @@ class Orchestrator:
             if reviewer_count > 1:
                 self._invoke_multi_reviewer(iteration, review_phase)
             else:
-                self._invoke_agent_for_role("reviewer", iteration)
+                self._invoke_agent_for_role("reviewer", iteration, review_phase=review_phase)
 
             if self._state.halt_signal:
                 return
@@ -368,9 +368,10 @@ class Orchestrator:
 
             if verdict is None:
                 # Verdict parse error — halt
+                review_path = self._review_file_for_phase(review_phase, iteration)
                 self.halt(
                     f"Could not parse verdict from "
-                    f"{self.spec.world.review_file(iteration)} "
+                    f"{review_path} "
                     f"({review_of} loop, iter {iteration})"
                 )
                 return
@@ -389,22 +390,13 @@ class Orchestrator:
     # Internal: agent invocation
     # ==================================================================
 
-    def _invoke_agent_for_role(self, role: str, iteration: int) -> None:
+    def _invoke_agent_for_role(self, role: str, iteration: int, review_phase: str = "dev_review") -> None:
         """Invoke an agent subprocess for *role* at *iteration*.
-
-        Steps:
-          0. V2: Route to parallel-dev dispatcher when applicable
-          1. Select runner (with budget-aware downgrade)
-          2. Check budget overflow BEFORE building prompt (halt if over)
-          3. Pre-invoke cleanup (git reset/clean)
-          4. Build token-budgeted prompt via assemble_context
-          5. Run subprocess with timeout
-          6. Track token usage via BudgetTracker
-          7. Post-invoke completion detection via git log
 
         Args:
             role: Agent role ("planner", "developer", "reviewer").
             iteration: Current iteration number.
+            review_phase: "planning_review" or "dev_review" (for correct review file path).
         """
         # 0. V2: parallel-dev routing
         if role == "developer":
@@ -447,7 +439,7 @@ class Orchestrator:
             return
 
         # 4. Build prompt (uses BudgetTracker for token budget)
-        prompt = self._build_prompt(role, iteration)
+        prompt = self._build_prompt(role, iteration, review_phase=review_phase)
 
         # 5. Build log path
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -767,11 +759,16 @@ class Orchestrator:
         self._state.last_review_verdict = final.verdict
         self._state.last_review_path = review_path
 
-    def _build_prompt(self, role: str, iteration: int) -> str:
+    def _build_prompt(self, role: str, iteration: int, review_phase: str = "dev_review") -> str:
         """Build the agent prompt for *role* at *iteration*.
 
         V2: uses :func:`assemble_context` for token-budgeted prompt assembly
         with smart diff truncation and top-findings extraction.
+
+        Args:
+            role: Agent role.
+            iteration: Current iteration.
+            review_phase: "planning_review" or "dev_review" — for correct review path.
         """
         world = self.spec.world
         agent_spec = self._resolve_agent(role)
@@ -796,10 +793,10 @@ class Orchestrator:
         # Extract top findings from the previous review (context deflation)
         top_findings = ""
         if iteration > 1:
-            review_phase = (
+            prev_review_kind = (
                 "dev_review" if role == "developer" else "planning_review"
             )
-            prev = self._review_file_for_phase(review_phase, iteration - 1)
+            prev = self._review_file_for_phase(prev_review_kind, iteration - 1)
             if prev.exists():
                 top_findings = extract_top_findings(
                     prev.read_text(encoding="utf-8"), limit=3
@@ -833,10 +830,11 @@ class Orchestrator:
                 f"Commit with: git add -A && git commit -m '...'"
             )
         elif role == "reviewer":
+            review_file = self._review_file_for_phase(review_phase, iteration)
             task = (
                 f"Review Iteration {iteration}: "
                 f"1. Run tests: {self.spec.project.test_command} "
-                f"2. Write review to reviews/iter-{iteration}.md "
+                f"2. Write review to {review_file} "
                 f"3. Use YAML frontmatter: verdict, summary, findings. "
                 f"4. Do NOT modify src/"
             )
