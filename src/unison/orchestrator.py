@@ -8,11 +8,13 @@ Architecture reference: ARCHITECTURE.md §3.
 
 from __future__ import annotations
 
+import itertools
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from interfaces import PipelineSpec
+from interfaces import PipelineSpec, ReviewVerdict
 from unison.state import State
 from unison.lock import FileLockManager
 from unison.checkpoint import FileCheckpointManager
@@ -304,7 +306,11 @@ class Orchestrator:
             )
             self._save_checkpoint()
 
-            self._invoke_agent_for_role("reviewer", iteration)
+            reviewer_count = self._get_reviewer_count()
+            if reviewer_count > 1:
+                self._invoke_multi_reviewer(iteration)
+            else:
+                self._invoke_agent_for_role("reviewer", iteration)
 
             if self._state.halt_signal:
                 return
@@ -406,6 +412,170 @@ class Orchestrator:
             # Consecutive failure tracking is a V2 feature.
             pass
 
+    def _invoke_multi_reviewer(self, iteration: int) -> None:
+        """Invoke multiple reviewers in parallel via ReviewerPool.
+
+        Each reviewer writes to a unique path ``reviews/iter-{N}-R{i}.md``.
+        After all reviewers complete, verdicts are reconciled
+        (majority or unanimous) and the final verdict is written to
+        ``reviews/iter-{N}.md`` for the standard verdict routing path.
+
+        Individual reviewer verdicts are stored in
+        ``self._state.reviewer_verdicts`` for V2 multi-reviewer tracking.
+
+        Args:
+            iteration: Current iteration number.
+        """
+        from interfaces import ReviewerConfig
+        from unison.reviewer_pool import ReviewerPool
+
+        world = self.spec.world
+        agent_spec = self.spec.agents.get("reviewer")
+        if agent_spec is None:
+            self.halt("No agent spec for role: reviewer")
+            return
+
+        reviewer_count = self._get_reviewer_count()
+        if reviewer_count < 2:
+            return  # Safety: shouldn't be called for single reviewer
+
+        # Pre-invoke cleanup once (not per-reviewer)
+        self.pre_invoke_cleanup()
+        if self._state.halt_signal:
+            return
+
+        runner = self._runners.get(agent_spec.runtime)
+        if runner is None:
+            self.halt(f"No runner for runtime: {agent_spec.runtime}")
+            return
+
+        # Thread-safe index counter for reviewer identity
+        reviewer_idx = itertools.count()
+
+        def review_one(code_path: Path) -> ReviewVerdict:
+            """Run a single reviewer agent and return its parsed verdict."""
+            idx = next(reviewer_idx)
+            review_path = world.reviews_dir / f"iter-{iteration}-R{idx}.md"
+
+            # Build reviewer-specific prompt
+            prompt = (
+                f"=== Review Iteration {iteration} "
+                f"(Reviewer {idx + 1} of {reviewer_count}) ===\n"
+                f"1. Run tests: {self.spec.project.test_command}\n"
+                f"2. Write review to reviews/iter-{iteration}-R{idx}.md\n"
+                f"3. Use YAML frontmatter format:\n"
+                f"   ---\n"
+                f"   verdict: PASS | REQUEST_CHANGES\n"
+                f"   summary: ...\n"
+                f"   findings:\n"
+                f"     - [severity] description\n"
+                f"   ---\n"
+                f"4. Do NOT modify src/"
+            )
+
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            log_path = world.agent_log(
+                "reviewer", iteration,  # type: ignore[arg-type]
+                f"{timestamp}_R{idx}",
+            )
+
+            # Run the agent subprocess
+            runner.run(
+                spec=agent_spec,
+                prompt=prompt,
+                workdir=world.root,
+                timeout=self.spec.per_agent_timeout,
+                log_path=log_path,
+            )
+
+            # Post-invoke completion detection
+            self._detector.detect(
+                workspace=world.root,
+                expected_iter=iteration,
+                role="reviewer",
+                log_path=log_path,
+            )
+
+            # Parse verdict from individual reviewer output file
+            if review_path.exists():
+                try:
+                    return self._verdict_parser.parse(review_path, iteration)
+                except Exception:
+                    return ReviewVerdict(
+                        iter_n=iteration,
+                        verdict="REQUEST_CHANGES",
+                        summary=f"Parse error for reviewer {idx}",
+                        findings=[],
+                        raw_path=review_path,
+                    )
+            else:
+                return ReviewVerdict(
+                    iter_n=iteration,
+                    verdict="REQUEST_CHANGES",
+                    summary=f"Reviewer {idx} produced no output",
+                    findings=[],
+                    raw_path=review_path,
+                )
+
+        # Build ReviewerConfig
+        reconcile_strategy = os.environ.get(
+            "UNISON_REVIEWER_STRATEGY", "majority"
+        )
+        if reconcile_strategy not in ("majority", "unanimous"):
+            reconcile_strategy = "majority"
+
+        try:
+            config = ReviewerConfig(
+                enabled=True,
+                count=reviewer_count,
+                reconcile_strategy=reconcile_strategy,  # type: ignore[arg-type]
+            )
+        except ValueError:
+            # Even count + majority → fall back to unanimous
+            config = ReviewerConfig(
+                enabled=True,
+                count=reviewer_count,
+                reconcile_strategy="unanimous",
+            )
+
+        pool = ReviewerPool(config)
+
+        verdicts = pool.execute_parallel(world.root, review_fn=review_one)
+
+        # Store individual verdicts in state for V2 tracking
+        self._state.reviewer_verdicts = [
+            {
+                "iter_n": v.iter_n,
+                "verdict": v.verdict,
+                "summary": v.summary,
+                "findings": v.findings,
+                "raw_path": str(v.raw_path),
+                "suspicious": v.suspicious,
+            }
+            for v in verdicts
+        ]
+
+        final = pool.reconcile_verdicts(verdicts, iter_n=iteration)
+
+        # Write reconciled verdict to main review file so _parse_verdict()
+        # finds it on the standard verdict routing path
+        review_path = world.review_file(iteration)
+        review_path.parent.mkdir(parents=True, exist_ok=True)
+        yaml_findings = "\n".join(f"  - {f}" for f in final.findings)
+        review_path.write_text(
+            f"---\n"
+            f"verdict: {final.verdict}\n"
+            f"summary: {final.summary}\n"
+            f"findings:\n"
+            f"{yaml_findings}\n"
+            f"---\n",
+            encoding="utf-8",
+        )
+
+        # Update state so verdict routing can proceed
+        self._state.last_review_verdict = final.verdict
+        self._state.last_review_path = review_path
+
     def _build_prompt(self, role: str, iteration: int) -> str:
         """Build the agent prompt for *role* at *iteration*.
 
@@ -465,6 +635,14 @@ class Orchestrator:
     # ==================================================================
     # Internal: helpers
     # ==================================================================
+
+    def _get_reviewer_count(self) -> int:
+        """Read reviewer count from UNISON_REVIEWER_COUNT env var (default 1).
+
+        Returns:
+            Number of parallel reviewers to use.
+        """
+        return int(os.environ.get("UNISON_REVIEWER_COUNT", "1"))
 
     def _run_bootstrap(self) -> None:
         """Execute bootstrap commands in local shell (§12).
