@@ -1,3 +1,3 @@
-# Phase 10: Technical Design
+# Phase 12: Technical Design
 
-The Architect will write the full tech design here.
+The Skill-Auditor will write the full tech design here.

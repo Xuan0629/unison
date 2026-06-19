@@ -1,3 +1,3 @@
-# Phase 10: Plugin System Design
+# Phase 12: Skill Health Audit
 
-The Architect will write the full design proposal here.
+The Skill-Auditor will write the full audit plan here.
