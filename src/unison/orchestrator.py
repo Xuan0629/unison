@@ -229,6 +229,35 @@ class Orchestrator:
             return
 
         # ---- Phase 2: Development --------------------------------------------
+        # V2: route to DAG scheduler when dag is configured
+        if self.spec.dag is not None:
+            self._run_dag_development()
+        else:
+            self._run_linear_development()
+
+        if not self._state.halt_signal:
+            self._state.transition("done", "orchestrator",
+                                   note="pipeline complete")
+            self._save_checkpoint()
+
+    def _run_dag_development(self) -> None:
+        """Run development via DAGScheduler when spec.dag is configured."""
+        from unison.pipeline import DAGScheduler
+
+        self._state.transition("dev_active", "orchestrator",
+                               iter_n=1, note="starting DAG development")
+        self._save_checkpoint()
+
+        scheduler = DAGScheduler(self.spec.dag)
+
+        def exec_stage(stage):
+            self._invoke_agent_for_role("developer", 1)
+            return self._state.last_dev_commit is not None
+
+        scheduler.execute_parallel(executor=exec_stage, max_workers=4)
+
+    def _run_linear_development(self) -> None:
+        """Run the standard linear dev_active ↔ dev_review loop (V1 mode)."""
         self._state.transition("dev_active", "orchestrator",
                                iter_n=1, note="starting development loop")
         self._save_checkpoint()
