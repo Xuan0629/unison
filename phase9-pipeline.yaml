@@ -1,36 +1,20 @@
-# Unison pipeline — Phase 9: Agent Skill Development (4-agent mode)
-#   Planner(Claude) → Plan-Reviewer(Codex) → Developer(Claude) → Dev-Reviewer(Codex)
+# Phase 9: OpenClaw Model Debug Skill (2-agent — PRD pre-written by Hermes)
 version: "2.0"
 project_root: "."
 
 agents:
-  planner:
-    role: planner
-    runtime: claude
-    model: deepseek-v4-pro
-    system_prompt_path: "prompts/planner-phase9.md"
-    task_instruction: "Create an OpenClaw agent skill 'openclaw-model-debug' at ~/.openclaw/agents/openclaw-model-debug/SKILL.md. It should diagnose model connectivity issues (unreachable, auth failure, timeout, 404). Write PRD to prd/PRD.md and technical design to prd/tech-design.md. Target: a practical, executable SKILL.md with ≥3 diagnostic scenarios."
-
-  plan_reviewer:
-    role: plan-reviewer
-    runtime: codex
-    model: gpt-5.5
-    system_prompt_path: "prompts/plan-reviewer-phase9.md"
-    pipeline_role: reviewer
-
   developer:
     role: developer
     runtime: claude
     model: deepseek-v4-pro
     system_prompt_path: "prompts/developer-phase9.md"
-    task_instruction: "Read prd/PRD.md and prd/tech-design.md. Create the file ~/.openclaw/agents/openclaw-model-debug/SKILL.md per the design. The SKILL.md is the primary deliverable — it lives OUTSIDE this git repo. Create any supporting files inside the repo only if needed."
+    task_instruction: "Read prd/PRD-phase9.md and prd/tech-design-phase9.md. Create ~/.openclaw/agents/openclaw-model-debug/SKILL.md — a diagnostic skill with ≥3 scenarios (unreachable, auth failure, timeout). SKILL.md is the deliverable (lives OUTSIDE this repo)."
 
-  dev_reviewer:
-    role: dev-reviewer
+  reviewer:
+    role: reviewer
     runtime: codex
     model: gpt-5.5
     system_prompt_path: "prompts/reviewer-phase9.md"
-    pipeline_role: reviewer
 
 project:
   test_command: "python3 -c \"import yaml; c=open('/home/sean/.openclaw/agents/openclaw-model-debug/SKILL.md').read(); p=c.split('---'); fm=yaml.safe_load(p[1]); print(f'OK: {fm.get(\\\"name\\\")} v{fm.get(\\\"version\\\")}')\""
