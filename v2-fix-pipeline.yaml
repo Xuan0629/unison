@@ -1,29 +1,28 @@
-# Unison pipeline — V2 integration fix
+# Unison pipeline — V2 integration fix (2-agent mode)
 # Task: process Codex review of 8 phases (all REQUEST_CHANGES), integrate V2
-# modules (DAG/Worktree/ReviewerPool/context_deflate/budget/schema_migrate) into
-# the Orchestrator, run tests, get all 8 phases to PASS.
+# modules into Orchestrator, run tests, get all 8 phases to PASS.
 #
-# Roles:
-#   - planner:  Claude Code (deepseek-v4-pro) — design integration approach
-#   - developer: Claude Code (deepseek-v4-pro) — implement fixes per phase
-#   - reviewer: Codex (gpt-5.5 @ 987xyz) — verify each phase integration
-#   - observer: Hermes (qwen3.7-plus) — out-of-band, watches pipeline state
+# We use 2-agent mode (Developer + Reviewer) instead of 4-agent because:
+#   1. The "Planner" role has already been done by Hermes (wrote prd/PRD.md
+#      and prd/tech-design.md from Codex's review findings).
+#   2. Orchestrator's _should_plan() skips planning when no planner is
+#      configured — this matches our setup.
+#   3. Phase 7 finding is that _build_prompt is hand-built, not loading
+#      system_prompt_path. Fixing that is the Developer's job (Phase 7
+#      of the V2 fix), not the setup's job.
 #
-# Codex review of 8 phases is in:
-#   /tmp/codex-final-verdict.md
-# and archived here for agents to read:
-#   prd/v2-review-codex.md (created before this pipeline runs)
+# Roles (2-agent mode):
+#   - developer: Claude Code (deepseek-v4-pro @ api.deepseek.com/anthropic)
+#   - reviewer:  Codex (gpt-5.5 @ 987xyz.com/v1)
+#   - observer:  Hermes (qwen3.7-plus @ alibaba) — out-of-band, watches state
+#
+# Codex review of 8 phases:
+#   ~/projects/unison/v2-review-codex.md
 
 version: "2.0"
 project_root: "."
 
 agents:
-  planner:
-    role: planner
-    runtime: claude
-    model: deepseek-v4-pro
-    system_prompt_path: "prompts/planner.md"
-
   developer:
     role: developer
     runtime: claude
