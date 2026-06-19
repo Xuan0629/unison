@@ -253,17 +253,10 @@ def _migrate_state_1_to_2(d: dict) -> dict:
 def _migrate_pipeline_1_to_2(d: dict) -> dict:
     """V1 → V2 PipelineSpec migration.
 
-    Adds ``dag``, ``reviewer_config``, and per-agent ``context_budget``
-    fields introduced in V2.  Existing fields are preserved.
+    V2 fields (dag, reviewer_config, context_budget) require PipelineSpec
+    schema changes.  Until PipelineSpec supports them, this migration is a
+    no-op that only bumps the version.  The fields will be added by a
+    future V2.x migration when their storage path is defined.
     """
-    d.setdefault("dag", None)
-    d.setdefault(
-        "reviewer_config",
-        {"enabled": False, "count": 1, "reconcile_strategy": "majority"},
-    )
-    # Per-agent context_budget
-    for role, agent in d.get("agents", {}).items():
-        if isinstance(agent, dict):
-            agent.setdefault("context_budget", None)
     d["version"] = "2.0"
     return d

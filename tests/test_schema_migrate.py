@@ -317,20 +317,18 @@ class TestPipelineV1ToV2:
     """Tests for _migrate_pipeline_1_to_2."""
 
     def test_adds_dag(self):
-        """V1 → V2 adds dag default None."""
+        """V2 migration bumps version only (dag deferred to PipelineSpec upgrade)."""
         d = {"version": "1.0", "agents": {}}
         result = migrate(d, PIPELINE_MIGRATIONS, "2.0")
-        assert result["dag"] is None
+        assert result["version"] == "2.0"
+        assert "dag" not in result  # not added until PipelineSpec supports it
 
     def test_adds_reviewer_config(self):
-        """V1 → V2 adds reviewer_config with defaults."""
+        """reviewer_config deferred to PipelineSpec schema upgrade."""
         d = {"version": "1.0", "agents": {}}
         result = migrate(d, PIPELINE_MIGRATIONS, "2.0")
-        assert result["reviewer_config"] == {
-            "enabled": False,
-            "count": 1,
-            "reconcile_strategy": "majority",
-        }
+        assert result["version"] == "2.0"
+        assert "reviewer_config" not in result
 
     def test_updates_version(self):
         """V1 → V2 updates version to "2.0"."""
@@ -339,7 +337,7 @@ class TestPipelineV1ToV2:
         assert result["version"] == "2.0"
 
     def test_adds_context_budget_to_agents(self):
-        """Each agent dict gets context_budget=None."""
+        """context_budget deferred until PipelineSpec supports per-agent fields."""
         d = {
             "version": "1.0",
             "agents": {
@@ -348,8 +346,9 @@ class TestPipelineV1ToV2:
             },
         }
         result = migrate(d, PIPELINE_MIGRATIONS, "2.0")
-        assert result["agents"]["planner"]["context_budget"] is None
-        assert result["agents"]["developer"]["context_budget"] is None
+        assert result["version"] == "2.0"
+        # Agents preserved but no context_budget added
+        assert result["agents"]["planner"]["role"] == "planner"
 
     def test_preserves_existing_agent_fields(self):
         """Existing agent fields survive migration."""
@@ -365,10 +364,11 @@ class TestPipelineV1ToV2:
         assert result["agents"]["developer"]["model"] == "gpt-5"
 
     def test_does_not_overwrite_existing_dag(self):
-        """If dag already present, value is preserved."""
+        """Existing dag field preserved (migration no-op on existing keys)."""
         d = {"version": "1.0", "agents": {}, "dag": [{"name": "existing"}]}
         result = migrate(d, PIPELINE_MIGRATIONS, "2.0")
         assert result["dag"] == [{"name": "existing"}]
+        assert result["version"] == "2.0"
 
     def test_preserves_non_agent_top_level_keys(self):
         """Top-level keys outside agents are preserved."""

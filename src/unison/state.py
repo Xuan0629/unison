@@ -96,6 +96,8 @@ class State:
     last_review_verdict: Verdict | None = None
     last_review_path: Path | None = None
     last_activity: str | None = None  # ISO timestamp
+    dag_status: dict | None = None   # V2: DAG 并行阶段状态
+    reviewer_verdicts: list[dict] = field(default_factory=list)  # V2: 多 Reviewer 裁决
 
     def __post_init__(self) -> None:
         if self.phase not in VALID_PHASES:
@@ -123,6 +125,8 @@ class State:
                 else None
             ),
             "last_activity": self.last_activity,
+            "dag_status": self.dag_status,
+            "reviewer_verdicts": self.reviewer_verdicts,
         }
 
     @classmethod
@@ -152,6 +156,8 @@ class State:
                 Path(last_review_path) if last_review_path is not None else None
             ),
             last_activity=d.get("last_activity"),
+            dag_status=d.get("dag_status"),
+            reviewer_verdicts=d.get("reviewer_verdicts", []),
         )
 
     # ---- State Machine ------------------------------------------------------

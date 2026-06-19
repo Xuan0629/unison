@@ -274,8 +274,8 @@ def truncate_diff(diff: str, max_lines: int = 200) -> str:
                 taken_hunks.append(hunk)
                 budget -= hunk_cost
             elif budget > 0:
-                # Partial hunk — truncate and annotate
-                truncated_hunk = hunk[:budget] + ["... (truncated)"]
+                # Partial hunk — truncate and annotate, leaving room for the marker
+                truncated_hunk = hunk[: max(0, budget - 1)] + ["... (truncated)"]
                 taken_hunks.append(truncated_hunk)
                 budget = 0
                 break
@@ -450,30 +450,36 @@ def assemble_context(
     # --- design_content (priority 4) ---
     design_text = ""
     if design_content and remaining > 0:
-        max_chars = int(remaining * chars_per_token)
+        header_overhead = _estimate_tokens("\n## Design\n", chars_per_token)
+        effective_budget = max(0, remaining - header_overhead)
+        max_chars = int(effective_budget * chars_per_token)
         d_est = _estimate_tokens(design_content, chars_per_token)
-        if d_est <= remaining:
+        if d_est <= effective_budget:
             design_text = design_content
             remaining -= d_est
         elif max_chars > 0:
             design_text = _truncate_tail(design_content, max_chars)
             remaining -= _estimate_tokens(design_text, chars_per_token)
             truncated_sections.append("design_content")
+        remaining -= header_overhead  # pay for the header
 
     # --- prd_content (priority 5) ---
     prd_text = ""
     if prd_content and remaining > 0:
-        max_chars = int(remaining * chars_per_token)
+        header_overhead = _estimate_tokens("\n## PRD\n", chars_per_token)
+        effective_budget = max(0, remaining - header_overhead)
+        max_chars = int(effective_budget * chars_per_token)
         p_est = _estimate_tokens(prd_content, chars_per_token)
-        if p_est <= remaining:
+        if p_est <= effective_budget:
             prd_text = prd_content
             remaining -= p_est
         elif max_chars > 0:
             prd_text = _truncate_tail(prd_content, max_chars)
             remaining -= _estimate_tokens(prd_text, chars_per_token)
             truncated_sections.append("prd_content")
+        remaining -= header_overhead  # pay for the header
 
-    # --- Assemble ---
+    # --- Assemble (budget headers into the token count) ---
     sections = [system_prompt]
     if findings_text:
         sections.append("\n## Last Review Findings\n" + findings_text)
@@ -486,6 +492,18 @@ def assemble_context(
 
     prompt = "\n".join(sections)
     total_est = _estimate_tokens(prompt, chars_per_token)
+
+    # Final enforcement: if prompt exceeds budget, drop lowest priority sections
+    # sections order: [system_prompt, findings?, diff?, design?, prd?]
+    # sections[0] is system_prompt, never dropped
+    section_names = {1: "last_review_findings", 2: "git_diff", 3: "design_content", 4: "prd_content"}
+    while total_est > token_budget and len(sections) > 1:
+        dropped_idx = len(sections) - 1
+        if dropped_idx in section_names:
+            truncated_sections.append(section_names[dropped_idx])
+        sections.pop()
+        prompt = "\n".join(sections)
+        total_est = _estimate_tokens(prompt, chars_per_token)
 
     return AssembledContext(
         prompt=prompt,
