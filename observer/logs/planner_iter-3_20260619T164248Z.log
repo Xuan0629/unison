@@ -1,0 +1,144 @@
+=== COMMAND ===
+claude -p --dangerously-skip-permissions Plan a skill health audit. Write PRD to prd/PRD.md: define scope (~/.hermes/skills/ and ~/.openclaw/agents/), audit dimensions (CLI validity, path validity, frontmatter, cross-refs), output format. Write technical design to prd/tech-design.md.
+
+# Skill-Auditor (Claude Code) — Phase 12: Skill Health Audit
+
+You are the **Skill-Auditor**. Scan hermes and openclaw skill files for
+outdated, broken, or incomplete content.
+
+## Your Mission
+
+Write `reviews/skill-audit.md` — a structured audit of all skill files under:
+- `~/.hermes/skills/`
+- `~/.openclaw/agents/`
+
+## Audit Checklist
+
+For each SKILL.md file, check:
+
+1. **CLI Command Validity** (use `which` or `command -v`):
+   - Commands like `hermes config set`, `claude -p`, `codex exec` — are they installed?
+   - Flags like `--dangerously-skip-permissions` — still valid? (check `claude --help`)
+
+2. **File Path Validity** (use `test -f` or `ls`):
+   - Paths like `~/.hermes/config.yaml`, `~/.openclaw/openclaw.json` — do they exist?
+   - Template paths like `templates/` — are they still in the skill dir?
+
+3. **Frontmatter Completeness** (use `python3 -c "import yaml; ..."`):
+   - Has `name`, `description`, `version`, `tags`?
+   - Is `version` valid semver?
+   - Is `description` non-empty and not a placeholder?
+
+4. **Cross-Reference Validity**:
+   - If skill A says "see skill B", does skill B exist?
+   - Use `grep -r "skill.name"` to find references, then verify.
+
+## Output Format
+
+```markdown
+# Skill Health Audit
+
+**Date**: <today>
+**Files scanned**: <N>
+**Issues found**: <N>
+
+## Issues
+
+| # | File | Line | Type | Severity | Details | Suggested Fix |
+|---|------|------|------|----------|---------|----------------|
+| 1 | ~/.hermes/skills/foo/SKILL.md | 12 | broken-command | HIGH | `hermes config set` → flag `--foo` not found | Update to `hermes config ...` |
+| ... |
+
+## Summary by Type
+
+| Type | Count |
+|------|-------|
+| broken-command | N |
+| missing-path | N |
+| incomplete-frontmatter | N |
+| broken-cross-ref | N |
+
+## Clean Skills (no issues)
+- ~/.hermes/skills/bar/SKILL.md
+- ...
+```
+
+## Rules
+
+- Do NOT modify any skill files — READ ONLY.
+- Do NOT modify Unison source code.
+- If `which` returns nothing, mark as `unverifiable` not `broken`.
+- Focus on OBJECTIVE issues, not style preferences.
+- Skip files that are not SKILL.md (e.g., README.md, scripts/).
+
+
+## Last Review Findings
+[INFO] {'severity': 'Critical', 'title': 'Required plugin proposal is missing'}
+[INFO] {'severity': 'Critical', 'title': 'Validation command checks placeholder files instead of the required proposal'}
+[INFO] {'severity': 'Major', 'title': 'No concrete plugin contract, runtime behavior, or examples are specified'}
+
+## Git Diff
+diff --git a/phase14-pipeline.yaml b/phase14-pipeline.yaml
+index b4c953d..6399a2a 100644
+--- a/phase14-pipeline.yaml
++++ b/phase14-pipeline.yaml
+@@ -24,6 +24,7 @@ agents:
+     runtime: claude
+     model: deepseek-v4-pro
+     system_prompt_path: "prompts/template-migrator-phase14.md"
++    pipeline_role: developer
+     task_instruction: "Execute template migration per prd/PRD.md and prd/tech-design.md. Read source files from ~/projects/unison/ (v2-fix-pipeline.yaml, prompts/developer-v2-fix.md, prompts/reviewer-v2-fix.md). Generate target project files to ~/projects/unison/target-demo/: target-pipeline.yaml, prompts/developer-target.md, prompts/reviewer-target.md. Mark user-customizable fields with <USER MUST FILL>."
+ 
+... (truncated)
+
+## Design
+# Phase 12: Technical Design
+
+The Skill-Auditor will write the full tech design here.
+
+
+## PRD
+# Phase 12: Skill Health Audit
+
+The Skill-Auditor will write the full audit plan here.
+
+
+=== STDOUT ===
+Both documents are complete. Here's a summary of what was written:
+
+---
+
+### `prd/PRD.md` (323 lines)
+
+Defines the full product requirements:
+
+- **Scope**: 202 target files — 124 hermes `SKILL.md` + 78 openclaw `SKILL.md` + 30 hermes `DESCRIPTION.md` (frontmatter-only)
+- **5 audit dimensions** with detailed methodology:
+  1. **CLI Command Validity** (`broken-command`) — `command -v` / `which` verification with built-in exclusion list
+  2. **File Path Validity** (`missing-path`) — `test -f` / `test -d` checks with tilde/env-var expansion
+  3. **Frontmatter Completeness** (`incomplete-frontmatter`) — YAML parse + required-field validation, placeholder detection
+  4. **Cross-Reference Validity** (`broken-cross-ref`) — name index resolution for `related_skills` + inline prose refs
+  5. **Opportunistic checks** — duplicate names, invalid YAML, type mismatches, deprecation markers
+- **Severity matrix**: HIGH/MEDIUM/LOW/INFO with clear criteria per dimension
+- **Output format**: Full markdown template for `reviews/skill-audit.md`
+- **6 acceptance criteria** including ≥90% file coverage, all 4 primary dimensions covered, no side effects
+- **Roles & constraints**: Developer (Skill-Auditor) + Reviewer (Audit-Reviewer), read-only on all skill files
+
+### `prd/tech-design.md` (634 lines)
+
+Defines the implementation design:
+
+- **5-phase architecture**: Discover → Index → Audit → Dedup/Classify → Report
+- **Phase 1**: `find`-based file discovery with classification tags (hermes:active, hermes:archived, openclaw:agent, etc.)
+- **Phase 2**: `python3 + yaml` frontmatter parsing, building `name_index` and `tag_index`, with pure-shell fallback if PyYAML absent
+- **Phase 3**: Detailed algorithms for each dimension — command extraction with pipe/redirect/assignment stripping, path extraction with expansion rules, cross-ref resolution with case-insensitive fuzzy matching
+- **Phase 4**: Deduplication rules (same file+type → merge, parse errors supersede field errors) and severity assignment matrix
+- **Phase 5**: Report generation with sorting rules and edge case handling
+- **Tooling**: Required tools table with fallbacks; command cache optimization for performance
+- **Error handling**: File access errors, parser errors, check errors — each with specific handling
+- **Archived skills**: Modified severity (downgraded) and separate reporting section
+- **Verification strategy** for the Audit-Reviewer (spot-check 5–10 findings)
+
+
+=== STDERR ===
+

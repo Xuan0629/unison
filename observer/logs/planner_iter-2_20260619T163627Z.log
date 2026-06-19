@@ -1,0 +1,130 @@
+=== COMMAND ===
+claude -p --dangerously-skip-permissions Plan a skill health audit. Write PRD to prd/PRD.md: define scope (~/.hermes/skills/ and ~/.openclaw/agents/), audit dimensions (CLI validity, path validity, frontmatter, cross-refs), output format. Write technical design to prd/tech-design.md.
+
+# Skill-Auditor (Claude Code) — Phase 12: Skill Health Audit
+
+You are the **Skill-Auditor**. Scan hermes and openclaw skill files for
+outdated, broken, or incomplete content.
+
+## Your Mission
+
+Write `reviews/skill-audit.md` — a structured audit of all skill files under:
+- `~/.hermes/skills/`
+- `~/.openclaw/agents/`
+
+## Audit Checklist
+
+For each SKILL.md file, check:
+
+1. **CLI Command Validity** (use `which` or `command -v`):
+   - Commands like `hermes config set`, `claude -p`, `codex exec` — are they installed?
+   - Flags like `--dangerously-skip-permissions` — still valid? (check `claude --help`)
+
+2. **File Path Validity** (use `test -f` or `ls`):
+   - Paths like `~/.hermes/config.yaml`, `~/.openclaw/openclaw.json` — do they exist?
+   - Template paths like `templates/` — are they still in the skill dir?
+
+3. **Frontmatter Completeness** (use `python3 -c "import yaml; ..."`):
+   - Has `name`, `description`, `version`, `tags`?
+   - Is `version` valid semver?
+   - Is `description` non-empty and not a placeholder?
+
+4. **Cross-Reference Validity**:
+   - If skill A says "see skill B", does skill B exist?
+   - Use `grep -r "skill.name"` to find references, then verify.
+
+## Output Format
+
+```markdown
+# Skill Health Audit
+
+**Date**: <today>
+**Files scanned**: <N>
+**Issues found**: <N>
+
+## Issues
+
+| # | File | Line | Type | Severity | Details | Suggested Fix |
+|---|------|------|------|----------|---------|----------------|
+| 1 | ~/.hermes/skills/foo/SKILL.md | 12 | broken-command | HIGH | `hermes config set` → flag `--foo` not found | Update to `hermes config ...` |
+| ... |
+
+## Summary by Type
+
+| Type | Count |
+|------|-------|
+| broken-command | N |
+| missing-path | N |
+| incomplete-frontmatter | N |
+| broken-cross-ref | N |
+
+## Clean Skills (no issues)
+- ~/.hermes/skills/bar/SKILL.md
+- ...
+```
+
+## Rules
+
+- Do NOT modify any skill files — READ ONLY.
+- Do NOT modify Unison source code.
+- If `which` returns nothing, mark as `unverifiable` not `broken`.
+- Focus on OBJECTIVE issues, not style preferences.
+- Skip files that are not SKILL.md (e.g., README.md, scripts/).
+
+
+## Last Review Findings
+[INFO] Critical: prd/plugin-proposal.md is absent, so the required plugin system proposal was not produced.
+[INFO] Critical: the current test command validates placeholder files instead of the required proposal file, allowing a false pass.
+[INFO] Major: no concrete runtime API, YAML configuration, loading strategy, backward compatibility plan, security model, or conflict behavior is specified.
+
+## Git Diff
+diff --git a/phase14-pipeline.yaml b/phase14-pipeline.yaml
+index b4c953d..6399a2a 100644
+--- a/phase14-pipeline.yaml
++++ b/phase14-pipeline.yaml
+@@ -24,6 +24,7 @@ agents:
+     runtime: claude
+     model: deepseek-v4-pro
+     system_prompt_path: "prompts/template-migrator-phase14.md"
++    pipeline_role: developer
+     task_instruction: "Execute template migration per prd/PRD.md and prd/tech-design.md. Read source files from ~/projects/unison/ (v2-fix-pipeline.yaml, prompts/developer-v2-fix.md, prompts/reviewer-v2-fix.md). Generate target project files to ~/projects/unison/target-demo/: target-pipeline.yaml, prompts/developer-target.md, prompts/reviewer-target.md. Mark user-customizable fields with <USER MUST FILL>."
+ 
+... (truncated)
+
+## Design
+# Phase 12: Technical Design
+
+The Skill-Auditor will write the full tech design here.
+
+
+## PRD
+# Phase 12: Skill Health Audit
+
+The Skill-Auditor will write the full audit plan here.
+
+
+=== STDOUT ===
+Both documents are written. Here's a summary:
+
+### `prd/PRD.md` (150 lines)
+Defines the skill health audit product requirements:
+- **Scope**: 7 SKILL.md files across `~/.hermes/skills/` (6) and `~/.openclaw/agents/` (1)
+- **4 audit dimensions**: CLI command validity, file path validity, frontmatter completeness, cross-reference validity
+- **Output format**: `reviews/skill-audit.md` with numbered issue table, severity classification, clean skills list, and summaries by type/severity
+- **Severity levels**: HIGH (skill unusable), MEDIUM (degraded), LOW (cosmetic/convention)
+- **Constraints**: read-only, no side effects, deterministic
+- **Acceptance criteria**: 7 criteria including ≥3 distinct issue types detected
+
+### `prd/tech-design.md` (459 lines)
+Detailed technical design covering:
+- **7 phases**: file discovery → frontmatter parsing → command/path extraction → cross-reference resolution → report generation → severity classification → pipeline integration
+- **Ecosystem-specific frontmatter schemas**: hermes uses `metadata.hermes.tags` + `prerequisites.commands`; openclaw uses bare `tags`
+- **Placeholder path exclusion**: patterns like `/absolute/path/to/`, `<angle-bracket>`, `${shell-vars}` are NOT flagged
+- **Cross-reference resolution algorithm**: path-based + name-based matching across both ecosystems
+- **Command caching** for performance, single re-try on verification failures for race conditions
+- **Pre-audit expectations**: identified ~5 likely issues (memory-holographic missing version, openclaw-model-debug cross-eco ref, etc.) that the auditor should independently verify
+- **2-agent pipeline**: Skill-Auditor (developer) → Audit-Reviewer (reviewer) with REQUEST_CHANGES loop
+
+
+=== STDERR ===
+

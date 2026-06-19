@@ -10,7 +10,7 @@ agents:
     model: deepseek-v4-pro
     system_prompt_path: "prompts/template-migrator-phase14.md"
     pipeline_role: planner
-    task_instruction: "Plan template migration from Unison project to a generic Python project. Write PRD to prd/PRD.md: define what to migrate (pipeline.yaml structure, developer/reviewer prompt patterns, risk matrix), target format, validation criteria. Write technical design to prd/tech-design.md."
+    task_instruction: "WRITE A COMPLETE PRD NOW. Do not write placeholders. Write at least 300 words covering: (1) what to migrate: pipeline.yaml structure, developer/reviewer prompt patterns, risk matrix config, (2) target: generic Python project in target-demo/, (3) format: YAML templates with <USER MUST FILL> markers, (4) validation: dry-run must pass. Start writing immediately."
 
   plan_reviewer:
     role: plan-reviewer

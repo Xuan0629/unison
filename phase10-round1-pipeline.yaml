@@ -10,7 +10,7 @@ agents:
     model: deepseek-v4-pro
     system_prompt_path: "prompts/architect-phase10.md"
     pipeline_role: planner
-    task_instruction: "Design a plugin system for Unison to support custom agent runtimes beyond the 4 hardcoded ones (claude/codex/hermes/openclaw). Write the proposal to prd/PRD.md and prd/tech-design.md. Cover: plugin interface, loading, configuration, CLI flag mapping, backward compatibility. Be specific with code snippets and YAML examples."
+    task_instruction: "WRITE A COMPLETE plugin system design NOW. Do NOT write placeholders or stubs. Write at least 500 words to prd/PRD.md covering: (1) Python plugin interface class with method signatures, (2) YAML config example showing custom runtime, (3) plugin loading mechanism, (4) backward compatibility proof showing existing pipeline.yaml still works, (5) error handling for missing/broken plugins. Include actual code snippets. Start immediately."
 
   critic:
     role: critic

@@ -1,0 +1,1006 @@
+=== COMMAND ===
+codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 1: 1. Run tests: test -f reviews/skill-audit.md && echo 'audit exists' 2. Write review to /home/sean/projects/unison/reviews/plan-iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Audit-Reviewer (Codex) — Phase 12: Skill Audit Review
+
+You are the **Audit-Reviewer**. Validate the Skill-Auditor's report for accuracy.
+
+## Your Mission
+
+Review `reviews/skill-audit.md` and produce a verdict.
+
+## Review Criteria
+
+1. **Spot-Check Accuracy**: Randomly pick 3-5 findings. Independently verify:
+   - The command really is broken (run `which` yourself)
+   - The path really is missing (run `test -f` yourself)
+   - The frontmatter really is incomplete (parse it yourself)
+
+2. **False Positive Rate**: How many marked issues are actually fine?
+   If ≥ 30% of spot-checks are false positives → REQUEST_CHANGES.
+
+3. **False Negative Rate**: Are there obvious issues the Auditor missed?
+   Check 2-3 skills the Auditor marked as "clean". If you find issues → report.
+
+4. **Report Format**: Is the output in the specified table format?
+   Are all columns filled?
+
+## Output Format
+
+```
+Verdict: PASS | REQUEST_CHANGES
+
+Spot-check results:
+- Checked: <N>/<total> findings
+- Confirmed: <N>
+- False positives: <N> (<list>)
+- Missed issues: <N> (<list>)
+
+Format: PASS | FAIL
+Accuracy: PASS | FAIL (<false positive rate>%)
+Coverage: PASS | FAIL (<missed issues>)
+
+Issues (if REQUEST_CHANGES):
+- <specific issue> → <suggested fix>
+```
+
+
+## Git Diff
+diff --git a/phase14-pipeline.yaml b/phase14-pipeline.yaml
+index b4c953d..6399a2a 100644
+--- a/phase14-pipeline.yaml
++++ b/phase14-pipeline.yaml
+@@ -24,6 +24,7 @@ agents:
+     runtime: claude
+     model: deepseek-v4-pro
+     system_prompt_path: "prompts/template-migrator-phase14.md"
++    pipeline_role: developer
+     task_instruction: "Execute template migration per prd/PRD.md and prd/tech-design.md. Read source files from ~/projects/unison/ (v2-fix-pipeline.yaml, prompts/developer-v2-fix.md, prompts/reviewer-v2-fix.md). Generate target project files to ~/projects/unison/target-demo/: target-pipeline.yaml, prompts/developer-target.md, prompts/reviewer-target.md. Mark user-customizable fields with <USER MUST FILL>."
+ 
+... (truncated)
+
+## Design
+# Phase 12: Technical Design
+
+The Skill-Auditor will write the full tech design here.
+
+
+## PRD
+# Phase 12: Skill Health Audit
+
+The Skill-Auditor will write the full audit plan here.
+
+
+=== STDOUT ===
+Wrote the audit review to [reviews/plan-iter-1.md](/home/sean/projects/unison/reviews/plan-iter-1.md:1).
+
+Verdict is `REQUEST_CHANGES` because the required test failed:
+
+```bash
+test -f reviews/skill-audit.md && echo 'audit exists'
+# exit code 1
+```
+
+`reviews/skill-audit.md` is missing, so the audit findings, format, accuracy, and coverage could not be validated. I did not modify `src/`; the only tracked file changed is `reviews/plan-iter-1.md`.
+
+
+=== STDERR ===
+Reading additional input from stdin...
+OpenAI Codex v0.141.0
+--------
+workdir: /home/sean/projects/unison
+model: gpt-5.5
+provider: openai-custom
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 019ee0b8-f87e-79e3-9d75-21d3e850dbc2
+--------
+user
+Review Iteration 1: 1. Run tests: test -f reviews/skill-audit.md && echo 'audit exists' 2. Write review to /home/sean/projects/unison/reviews/plan-iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Audit-Reviewer (Codex) — Phase 12: Skill Audit Review
+
+You are the **Audit-Reviewer**. Validate the Skill-Auditor's report for accuracy.
+
+## Your Mission
+
+Review `reviews/skill-audit.md` and produce a verdict.
+
+## Review Criteria
+
+1. **Spot-Check Accuracy**: Randomly pick 3-5 findings. Independently verify:
+   - The command really is broken (run `which` yourself)
+   - The path really is missing (run `test -f` yourself)
+   - The frontmatter really is incomplete (parse it yourself)
+
+2. **False Positive Rate**: How many marked issues are actually fine?
+   If ≥ 30% of spot-checks are false positives → REQUEST_CHANGES.
+
+3. **False Negative Rate**: Are there obvious issues the Auditor missed?
+   Check 2-3 skills the Auditor marked as "clean". If you find issues → report.
+
+4. **Report Format**: Is the output in the specified table format?
+   Are all columns filled?
+
+## Output Format
+
+```
+Verdict: PASS | REQUEST_CHANGES
+
+Spot-check results:
+- Checked: <N>/<total> findings
+- Confirmed: <N>
+- False positives: <N> (<list>)
+- Missed issues: <N> (<list>)
+
+Format: PASS | FAIL
+Accuracy: PASS | FAIL (<false positive rate>%)
+Coverage: PASS | FAIL (<missed issues>)
+
+Issues (if REQUEST_CHANGES):
+- <specific issue> → <suggested fix>
+```
+
+
+## Git Diff
+diff --git a/phase14-pipeline.yaml b/phase14-pipeline.yaml
+index b4c953d..6399a2a 100644
+--- a/phase14-pipeline.yaml
++++ b/phase14-pipeline.yaml
+@@ -24,6 +24,7 @@ agents:
+     runtime: claude
+     model: deepseek-v4-pro
+     system_prompt_path: "prompts/template-migrator-phase14.md"
++    pipeline_role: developer
+     task_instruction: "Execute template migration per prd/PRD.md and prd/tech-design.md. Read source files from ~/projects/unison/ (v2-fix-pipeline.yaml, prompts/developer-v2-fix.md, prompts/reviewer-v2-fix.md). Generate target project files to ~/projects/unison/target-demo/: target-pipeline.yaml, prompts/developer-target.md, prompts/reviewer-target.md. Mark user-customizable fields with <USER MUST FILL>."
+ 
+... (truncated)
+
+## Design
+# Phase 12: Technical Design
+
+The Skill-Auditor will write the full tech design here.
+
+
+## PRD
+# Phase 12: Skill Health Audit
+
+The Skill-Auditor will write the full audit plan here.
+
+codex
+I’ll validate the auditor report without touching `src/`, starting with the required existence test and then sampling findings directly against the filesystem/commands.
+exec
+/bin/bash -lc "test -f reviews/skill-audit.md && echo 'audit exists'" in /home/sean/projects/unison
+ exited 1 in 0ms:
+codex
+The required test failed: `reviews/skill-audit.md` is not present at the expected path. I’m checking the review directory now so the written verdict reflects the actual state rather than assuming the report exists.
+exec
+/bin/bash -lc 'find reviews -maxdepth 2 -type f -print | sort' in /home/sean/projects/unison
+ succeeded in 0ms:
+reviews/design-review-round-1.md
+reviews/design-review-round-2.md
+reviews/design-review-round-3.md
+reviews/design-review-round-4.md
+reviews/design-review-round-5.md
+reviews/design-review-round-6.md
+reviews/iter-1.md
+reviews/plan-iter-1.md
+reviews/plan-iter-2.md
+reviews/v1.1-observer-inotify.md
+reviews/v2-4agent-mode.md
+reviews/v2-context-window.md
+reviews/v2-dag-parallel.md
+reviews/v2-multi-reviewer.md
+reviews/v2-parallel-developer.md
+reviews/v2-schema-migrate.md
+reviews/v2-sqlite-channel.md
+
+exec
+/bin/bash -lc pwd in /home/sean/projects/unison
+ succeeded in 0ms:
+/home/sean/projects/unison
+
+exec
+/bin/bash -lc "find . -maxdepth 4 -name 'skill-audit.md' -print" in /home/sean/projects/unison
+ succeeded in 0ms:
+codex
+There is no `skill-audit.md` anywhere under the repo, so the review cannot perform the requested 3-5 finding spot-checks. I’m going to write the iteration review as `REQUEST_CHANGES` with the missing report as the blocking issue.
+exec
+/bin/bash -lc "sed -n '1,200p' reviews/plan-iter-1.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+---
+verdict: REQUEST_CHANGES
+summary: "The actual Architect proposal is missing: prd/plugin-proposal.md does not exist, while prd/PRD.md and prd/tech-design.md are placeholders. The review cannot validate completeness, security, compatibility, or edge cases until the proposal is written."
+findings:
+  - "Critical: prd/plugin-proposal.md is absent, so the required plugin system proposal was not produced."
+  - "Critical: the current test command validates placeholder files instead of the required proposal file, allowing a false pass."
+  - "Major: no concrete runtime API, YAML configuration, loading strategy, backward compatibility plan, security model, or conflict behavior is specified."
+  - "Major: finalization/commit instructions were introduced before any Critic approval, which can prematurely bless an empty design."
+---
+
+Verdict: REQUEST_CHANGES
+
+## Strengths
+- The Phase 10 background in `prd/PRD-phase10.md` frames the right debate topic: whether Unison should support custom runtimes through a plugin system.
+- The Phase 10 technical design identifies useful review dimensions, including runtime interface, plugin loading, configuration, backward compatibility, and migration path.
+- The debate workflow asks the Critic to challenge security, complexity, and edge cases, which is the right review posture for a plugin architecture.
+
+## Issues
+### Issue 1: Target proposal file is missing
+- **Severity**: Critical
+- **What**: `prd/plugin-proposal.md` does not exist. The only current Phase 10 active files, `prd/PRD.md` and `prd/tech-design.md`, contain placeholder text saying the Architect will write the design later.
+- **Why it matters**: There is no actual proposal to review against the required dimensions. Completeness is effectively zero: runtime interface, plugin loading, configuration, backward compatibility, migration, security, and conflict behavior are not specified.
+- **Suggested fix**: Create `prd/plugin-proposal.md` and populate it with the full Architect proposal before requesting Critic review. At minimum, include the 7 required sections plus explicit examples for runtime interface, plugin manifest, pipeline YAML, migration, security boundaries, error handling, and conflict resolution.
+
+### Issue 2: The validation command gives a false pass
+- **Severity**: Critical
+- **What**: The requested test command passed because it only checks `prd/PRD.md` and `prd/tech-design.md`, not `prd/plugin-proposal.md`. Those files currently exist but are placeholders.
+- **Why it matters**: The pipeline can report "proposal exists" while the real proposal is missing. This masks a failed Architect step and lets later roles review or finalize an empty design.
+- **Suggested fix**: Change the Phase 10 Round 1 validation to `test -s prd/plugin-proposal.md && echo 'proposal exists'`, and optionally add grep checks for required section headings so placeholder documents cannot pass.
+
+### Issue 3: No concrete plugin API or examples are provided
+- **Severity**: Major
+- **What**: There are no code snippets, manifest examples, YAML examples, runtime method signatures, or lifecycle diagrams in the active proposal material.
+- **Why it matters**: A plugin system lives or dies on contract clarity. Without a concrete interface, implementers cannot tell how custom runtimes receive prompts, stream output, report tool calls, expose capabilities, handle cancellation, or return structured failures.
+- **Suggested fix**: Add a concrete interface such as `RuntimePlugin.invoke(request: RuntimeRequest) -> RuntimeResult`, a plugin manifest example, and a `pipeline.yaml` example showing both existing built-in runtimes and a custom plugin runtime.
+
+### Issue 4: Backward compatibility is not proven
+- **Severity**: Major
+- **What**: The proposal does not show how existing `pipeline.yaml` files using `runtime: claude`, `runtime: codex`, `runtime: hermes`, or `runtime: openclaw` continue to parse and execute unchanged.
+- **Why it matters**: If plugin support replaces the current `Literal[...]` runtime model without a compatibility shim, existing pipelines and tests can break. This is especially risky because the Phase 10 PRD says code should not be modified, yet the proposed topic touches core runtime dispatch.
+- **Suggested fix**: Specify a compatibility layer where built-in runtime strings remain first-class aliases. Add migration rules, schema examples before and after, and tests that load representative existing pipeline YAML files.
+
+### Issue 5: Security model is absent
+- **Severity**: Major
+- **What**: There is no sandboxing, trust model, allowlist, signature/checksum, permission prompt, environment-variable policy, or file/network access boundary for third-party runtime plugins.
+- **Why it matters**: Runtime plugins are executable integration points. A malicious or compromised plugin could read secrets, modify repository files, exfiltrate prompts, or execute arbitrary commands under the user's account.
+- **Suggested fix**: Define plugin trust levels and default-deny behavior. Require explicit installation/enablement, isolate subprocess execution where possible, pass a restricted environment, log plugin execution, and document which permissions a plugin can request.
+
+### Issue 6: Missing edge-case behavior for absent or conflicting plugins
+- **Severity**: Major
+- **What**: The proposal does not define what happens when a plugin is missing, has the wrong version, fails to load, times out, conflicts with another plugin name, or claims a built-in runtime name.
+- **Why it matters**: These are normal operational cases. Without deterministic behavior, the orchestrator may fail late, pick the wrong runtime, or silently change execution semantics.
+- **Suggested fix**: Add a resolution algorithm: built-ins have reserved names, plugin IDs must be globally unique or namespace-qualified, version constraints are checked at pipeline load time, and load failures produce actionable configuration errors before agent execution begins.
+
+## Missing Coverage
+- The actual `prd/plugin-proposal.md` file.
+- The 7 required proposal sections.
+- Runtime interface contract and structured request/response types.
+- Plugin discovery, installation, versioning, and loading order.
+- Concrete `pipeline.yaml` examples for built-in and custom runtimes.
+- Backward compatibility and migration path for current runtime strings.
+- Security model, sandboxing limits, and permission boundaries.
+- Failure behavior for missing, invalid, conflicting, or malicious plugins.
+- Test strategy and acceptance criteria for the plugin design.
+- Complexity analysis explaining why a plugin system is preferable to a smaller runtime adapter registry.
+
+## Verdict Rationale
+REQUEST_CHANGES. The repository currently contains placeholders and no `prd/plugin-proposal.md`, so the Architect has not delivered the artifact under review. The existing test command passing is not meaningful because it checks the wrong files. A revised submission should first provide the actual proposal with concrete API and YAML examples, then demonstrate compatibility, security, and edge-case handling.
+
+exec
+/bin/bash -lc 'git status --short' in /home/sean/projects/unison
+ succeeded in 0ms:
+?? observer/logs/planner_iter-1_20260619T162843Z.log
+
+codex
+I’m replacing the stale review content in `reviews/plan-iter-1.md` with the Phase 12 audit-review result. The only edit is in `reviews/`; `src/` remains untouched.
+apply patch
+patch: completed
+/home/sean/projects/unison/reviews/plan-iter-1.md
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+index ddcd76e3dcaddb4f5e9364fc5d66e9bedbbfc6e6..37ca5c528664d71a649d4dcb0d30e574e18f31d0
+--- a/reviews/plan-iter-1.md
++++ b/reviews/plan-iter-1.md
+@@ -1,68 +1,25 @@
+ ---
+ verdict: REQUEST_CHANGES
+-summary: "The actual Architect proposal is missing: prd/plugin-proposal.md does not exist, while prd/PRD.md and prd/tech-design.md are placeholders. The review cannot validate completeness, security, compatibility, or edge cases until the proposal is written."
++summary: "The audit report cannot be validated because reviews/skill-audit.md is missing. The required existence test failed, so spot-check accuracy, false positive rate, coverage, and table formatting cannot be assessed."
+ findings:
+-  - "Critical: prd/plugin-proposal.md is absent, so the required plugin system proposal was not produced."
+-  - "Critical: the current test command validates placeholder files instead of the required proposal file, allowing a false pass."
+-  - "Major: no concrete runtime API, YAML configuration, loading strategy, backward compatibility plan, security model, or conflict behavior is specified."
+-  - "Major: finalization/commit instructions were introduced before any Critic approval, which can prematurely bless an empty design."
++  - "Critical: reviews/skill-audit.md does not exist, so there are no findings to spot-check."
++  - "Critical: the required test command `test -f reviews/skill-audit.md && echo 'audit exists'` failed with exit code 1."
++  - "Major: report format cannot be validated because the expected audit report was not produced."
+ ---
+ 
+ Verdict: REQUEST_CHANGES
+-
+-## Strengths
+-- The Phase 10 background in `prd/PRD-phase10.md` frames the right debate topic: whether Unison should support custom runtimes through a plugin system.
+-- The Phase 10 technical design identifies useful review dimensions, including runtime interface, plugin loading, configuration, backward compatibility, and migration path.
+-- The debate workflow asks the Critic to challenge security, complexity, and edge cases, which is the right review posture for a plugin architecture.
+-
+-## Issues
+-### Issue 1: Target proposal file is missing
+-- **Severity**: Critical
+-- **What**: `prd/plugin-proposal.md` does not exist. The only current Phase 10 active files, `prd/PRD.md` and `prd/tech-design.md`, contain placeholder text saying the Architect will write the design later.
+-- **Why it matters**: There is no actual proposal to review against the required dimensions. Completeness is effectively zero: runtime interface, plugin loading, configuration, backward compatibility, migration, security, and conflict behavior are not specified.
+-- **Suggested fix**: Create `prd/plugin-proposal.md` and populate it with the full Architect proposal before requesting Critic review. At minimum, include the 7 required sections plus explicit examples for runtime interface, plugin manifest, pipeline YAML, migration, security boundaries, error handling, and conflict resolution.
+-
+-### Issue 2: The validation command gives a false pass
+-- **Severity**: Critical
+-- **What**: The requested test command passed because it only checks `prd/PRD.md` and `prd/tech-design.md`, not `prd/plugin-proposal.md`. Those files currently exist but are placeholders.
+-- **Why it matters**: The pipeline can report "proposal exists" while the real proposal is missing. This masks a failed Architect step and lets later roles review or finalize an empty design.
+-- **Suggested fix**: Change the Phase 10 Round 1 validation to `test -s prd/plugin-proposal.md && echo 'proposal exists'`, and optionally add grep checks for required section headings so placeholder documents cannot pass.
+ 
+-### Issue 3: No concrete plugin API or examples are provided
+-- **Severity**: Major
+-- **What**: There are no code snippets, manifest examples, YAML examples, runtime method signatures, or lifecycle diagrams in the active proposal material.
+-- **Why it matters**: A plugin system lives or dies on contract clarity. Without a concrete interface, implementers cannot tell how custom runtimes receive prompts, stream output, report tool calls, expose capabilities, handle cancellation, or return structured failures.
+-- **Suggested fix**: Add a concrete interface such as `RuntimePlugin.invoke(request: RuntimeRequest) -> RuntimeResult`, a plugin manifest example, and a `pipeline.yaml` example showing both existing built-in runtimes and a custom plugin runtime.
+-
+-### Issue 4: Backward compatibility is not proven
+-- **Severity**: Major
+-- **What**: The proposal does not show how existing `pipeline.yaml` files using `runtime: claude`, `runtime: codex`, `runtime: hermes`, or `runtime: openclaw` continue to parse and execute unchanged.
+-- **Why it matters**: If plugin support replaces the current `Literal[...]` runtime model without a compatibility shim, existing pipelines and tests can break. This is especially risky because the Phase 10 PRD says code should not be modified, yet the proposed topic touches core runtime dispatch.
+-- **Suggested fix**: Specify a compatibility layer where built-in runtime strings remain first-class aliases. Add migration rules, schema examples before and after, and tests that load representative existing pipeline YAML files.
+-
+-### Issue 5: Security model is absent
+-- **Severity**: Major
+-- **What**: There is no sandboxing, trust model, allowlist, signature/checksum, permission prompt, environment-variable policy, or file/network access boundary for third-party runtime plugins.
+-- **Why it matters**: Runtime plugins are executable integration points. A malicious or compromised plugin could read secrets, modify repository files, exfiltrate prompts, or execute arbitrary commands under the user's account.
+-- **Suggested fix**: Define plugin trust levels and default-deny behavior. Require explicit installation/enablement, isolate subprocess execution where possible, pass a restricted environment, log plugin execution, and document which permissions a plugin can request.
+-
+-### Issue 6: Missing edge-case behavior for absent or conflicting plugins
+-- **Severity**: Major
+-- **What**: The proposal does not define what happens when a plugin is missing, has the wrong version, fails to load, times out, conflicts with another plugin name, or claims a built-in runtime name.
+-- **Why it matters**: These are normal operational cases. Without deterministic behavior, the orchestrator may fail late, pick the wrong runtime, or silently change execution semantics.
+-- **Suggested fix**: Add a resolution algorithm: built-ins have reserved names, plugin IDs must be globally unique or namespace-qualified, version constraints are checked at pipeline load time, and load failures produce actionable configuration errors before agent execution begins.
++Spot-check results:
++- Checked: 0/0 findings
++- Confirmed: 0
++- False positives: 0 (none; no findings were available to sample)
++- Missed issues: 0 (not assessed; no audit report was available)
+ 
+-## Missing Coverage
+-- The actual `prd/plugin-proposal.md` file.
+-- The 7 required proposal sections.
+-- Runtime interface contract and structured request/response types.
+-- Plugin discovery, installation, versioning, and loading order.
+-- Concrete `pipeline.yaml` examples for built-in and custom runtimes.
+-- Backward compatibility and migration path for current runtime strings.
+-- Security model, sandboxing limits, and permission boundaries.
+-- Failure behavior for missing, invalid, conflicting, or malicious plugins.
+-- Test strategy and acceptance criteria for the plugin design.
+-- Complexity analysis explaining why a plugin system is preferable to a smaller runtime adapter registry.
++Format: FAIL
++Accuracy: FAIL (not measurable; missing audit report)
++Coverage: FAIL (not measurable; missing audit report)
+ 
+-## Verdict Rationale
+-REQUEST_CHANGES. The repository currently contains placeholders and no `prd/plugin-proposal.md`, so the Architect has not delivered the artifact under review. The existing test command passing is not meaningful because it checks the wrong files. A revised submission should first provide the actual proposal with concrete API and YAML examples, then demonstrate compatibility, security, and edge-case handling.
++Issues (if REQUEST_CHANGES):
++- `reviews/skill-audit.md` is missing -> produce the Skill-Auditor report at that exact path, then rerun review.
++- Required existence test failed -> ensure `test -f reviews/skill-audit.md && echo 'audit exists'` prints `audit exists`.
++- Audit report format could not be checked -> include the specified table with all required columns filled.
+
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+index ddcd76e3dcaddb4f5e9364fc5d66e9bedbbfc6e6..37ca5c528664d71a649d4dcb0d30e574e18f31d0
+--- a/reviews/plan-iter-1.md
++++ b/reviews/plan-iter-1.md
+@@ -1,68 +1,25 @@
+ ---
+ verdict: REQUEST_CHANGES
+-summary: "The actual Architect proposal is missing: prd/plugin-proposal.md does not exist, while prd/PRD.md and prd/tech-design.md are placeholders. The review cannot validate completeness, security, compatibility, or edge cases until the proposal is written."
++summary: "The audit report cannot be validated because reviews/skill-audit.md is missing. The required existence test failed, so spot-check accuracy, false positive rate, coverage, and table formatting cannot be assessed."
+ findings:
+-  - "Critical: prd/plugin-proposal.md is absent, so the required plugin system proposal was not produced."
+-  - "Critical: the current test command validates placeholder files instead of the required proposal file, allowing a false pass."
+-  - "Major: no concrete runtime API, YAML configuration, loading strategy, backward compatibility plan, security model, or conflict behavior is specified."
+-  - "Major: finalization/commit instructions were introduced before any Critic approval, which can prematurely bless an empty design."
++  - "Critical: reviews/skill-audit.md does not exist, so there are no findings to spot-check."
++  - "Critical: the required test command `test -f reviews/skill-audit.md && echo 'audit exists'` failed with exit code 1."
++  - "Major: report format cannot be validated because the expected audit report was not produced."
+ ---
+ 
+ Verdict: REQUEST_CHANGES
+-
+-## Strengths
+-- The Phase 10 background in `prd/PRD-phase10.md` frames the right debate topic: whether Unison should support custom runtimes through a plugin system.
+-- The Phase 10 technical design identifies useful review dimensions, including runtime interface, plugin loading, configuration, backward compatibility, and migration path.
+-- The debate workflow asks the Critic to challenge security, complexity, and edge cases, which is the right review posture for a plugin architecture.
+-
+-## Issues
+-### Issue 1: Target proposal file is missing
+-- **Severity**: Critical
+-- **What**: `prd/plugin-proposal.md` does not exist. The only current Phase 10 active files, `prd/PRD.md` and `prd/tech-design.md`, contain placeholder text saying the Architect will write the design later.
+-- **Why it matters**: There is no actual proposal to review against the required dimensions. Completeness is effectively zero: runtime interface, plugin loading, configuration, backward compatibility, migration, security, and conflict behavior are not specified.
+-- **Suggested fix**: Create `prd/plugin-proposal.md` and populate it with the full Architect proposal before requesting Critic review. At minimum, include the 7 required sections plus explicit examples for runtime interface, plugin manifest, pipeline YAML, migration, security boundaries, error handling, and conflict resolution.
+-
+-### Issue 2: The validation command gives a false pass
+-- **Severity**: Critical
+-- **What**: The requested test command passed because it only checks `prd/PRD.md` and `prd/tech-design.md`, not `prd/plugin-proposal.md`. Those files currently exist but are placeholders.
+-- **Why it matters**: The pipeline can report "proposal exists" while the real proposal is missing. This masks a failed Architect step and lets later roles review or finalize an empty design.
+-- **Suggested fix**: Change the Phase 10 Round 1 validation to `test -s prd/plugin-proposal.md && echo 'proposal exists'`, and optionally add grep checks for required section headings so placeholder documents cannot pass.
+ 
+-### Issue 3: No concrete plugin API or examples are provided
+-- **Severity**: Major
+-- **What**: There are no code snippets, manifest examples, YAML examples, runtime method signatures, or lifecycle diagrams in the active proposal material.
+-- **Why it matters**: A plugin system lives or dies on contract clarity. Without a concrete interface, implementers cannot tell how custom runtimes receive prompts, stream output, report tool calls, expose capabilities, handle cancellation, or return structured failures.
+-- **Suggested fix**: Add a concrete interface such as `RuntimePlugin.invoke(request: RuntimeRequest) -> RuntimeResult`, a plugin manifest example, and a `pipeline.yaml` example showing both existing built-in runtimes and a custom plugin runtime.
+-
+-### Issue 4: Backward compatibility is not proven
+-- **Severity**: Major
+-- **What**: The proposal does not show how existing `pipeline.yaml` files using `runtime: claude`, `runtime: codex`, `runtime: hermes`, or `runtime: openclaw` continue to parse and execute unchanged.
+-- **Why it matters**: If plugin support replaces the current `Literal[...]` runtime model without a compatibility shim, existing pipelines and tests can break. This is especially risky because the Phase 10 PRD says code should not be modified, yet the proposed topic touches core runtime dispatch.
+-- **Suggested fix**: Specify a compatibility layer where built-in runtime strings remain first-class aliases. Add migration rules, schema examples before and after, and tests that load representative existing pipeline YAML files.
+-
+-### Issue 5: Security model is absent
+-- **Severity**: Major
+-- **What**: There is no sandboxing, trust model, allowlist, signature/checksum, permission prompt, environment-variable policy, or file/network access boundary for third-party runtime plugins.
+-- **Why it matters**: Runtime plugins are executable integration points. A malicious or compromised plugin could read secrets, modify repository files, exfiltrate prompts, or execute arbitrary commands under the user's account.
+-- **Suggested fix**: Define plugin trust levels and default-deny behavior. Require explicit installation/enablement, isolate subprocess execution where possible, pass a restricted environment, log plugin execution, and document which permissions a plugin can request.
+-
+-### Issue 6: Missing edge-case behavior for absent or conflicting plugins
+-- **Severity**: Major
+-- **What**: The proposal does not define what happens when a plugin is missing, has the wrong version, fails to load, times out, conflicts with another plugin name, or claims a built-in runtime name.
+-- **Why it matters**: These are normal operational cases. Without deterministic behavior, the orchestrator may fail late, pick the wrong runtime, or silently change execution semantics.
+-- **Suggested fix**: Add a resolution algorithm: built-ins have reserved names, plugin IDs must be globally unique or namespace-qualified, version constraints are checked at pipeline load time, and load failures produce actionable configuration errors before agent execution begins.
++Spot-check results:
++- Checked: 0/0 findings
++- Confirmed: 0
++- False positives: 0 (none; no findings were available to sample)
++- Missed issues: 0 (not assessed; no audit report was available)
+ 
+-## Missing Coverage
+-- The actual `prd/plugin-proposal.md` file.
+-- The 7 required proposal sections.
+-- Runtime interface contract and structured request/response types.
+-- Plugin discovery, installation, versioning, and loading order.
+-- Concrete `pipeline.yaml` examples for built-in and custom runtimes.
+-- Backward compatibility and migration path for current runtime strings.
+-- Security model, sandboxing limits, and permission boundaries.
+-- Failure behavior for missing, invalid, conflicting, or malicious plugins.
+-- Test strategy and acceptance criteria for the plugin design.
+-- Complexity analysis explaining why a plugin system is preferable to a smaller runtime adapter registry.
++Format: FAIL
++Accuracy: FAIL (not measurable; missing audit report)
++Coverage: FAIL (not measurable; missing audit report)
+ 
+-## Verdict Rationale
+-REQUEST_CHANGES. The repository currently contains placeholders and no `prd/plugin-proposal.md`, so the Architect has not delivered the artifact under review. The existing test command passing is not meaningful because it checks the wrong files. A revised submission should first provide the actual proposal with concrete API and YAML examples, then demonstrate compatibility, security, and edge-case handling.
++Issues (if REQUEST_CHANGES):
++- `reviews/skill-audit.md` is missing -> produce the Skill-Auditor report at that exact path, then rerun review.
++- Required existence test failed -> ensure `test -f reviews/skill-audit.md && echo 'audit exists'` prints `audit exists`.
++- Audit report format could not be checked -> include the specified table with all required columns filled.
+
+codex
+The review file is written. I’m doing a quick verification pass now: checking the new YAML/frontmatter shape and confirming the only intentional tracked edit is the review artifact.
+exec
+/bin/bash -lc "sed -n '1,120p' reviews/plan-iter-1.md" in /home/sean/projects/unison
+exec
+/bin/bash -lc 'git diff -- reviews/plan-iter-1.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+---
+verdict: REQUEST_CHANGES
+summary: "The audit report cannot be validated because reviews/skill-audit.md is missing. The required existence test failed, so spot-check accuracy, false positive rate, coverage, and table formatting cannot be assessed."
+findings:
+  - "Critical: reviews/skill-audit.md does not exist, so there are no findings to spot-check."
+  - "Critical: the required test command `test -f reviews/skill-audit.md && echo 'audit exists'` failed with exit code 1."
+  - "Major: report format cannot be validated because the expected audit report was not produced."
+---
+
+Verdict: REQUEST_CHANGES
+
+Spot-check results:
+- Checked: 0/0 findings
+- Confirmed: 0
+- False positives: 0 (none; no findings were available to sample)
+- Missed issues: 0 (not assessed; no audit report was available)
+
+Format: FAIL
+Accuracy: FAIL (not measurable; missing audit report)
+Coverage: FAIL (not measurable; missing audit report)
+
+Issues (if REQUEST_CHANGES):
+- `reviews/skill-audit.md` is missing -> produce the Skill-Auditor report at that exact path, then rerun review.
+- Required existence test failed -> ensure `test -f reviews/skill-audit.md && echo 'audit exists'` prints `audit exists`.
+- Audit report format could not be checked -> include the specified table with all required columns filled.
+
+ succeeded in 0ms:
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+index ddcd76e..37ca5c5 100644
+--- a/reviews/plan-iter-1.md
++++ b/reviews/plan-iter-1.md
+@@ -1,68 +1,25 @@
+ ---
+ verdict: REQUEST_CHANGES
+-summary: "The actual Architect proposal is missing: prd/plugin-proposal.md does not exist, while prd/PRD.md and prd/tech-design.md are placeholders. The review cannot validate completeness, security, compatibility, or edge cases until the proposal is written."
++summary: "The audit report cannot be validated because reviews/skill-audit.md is missing. The required existence test failed, so spot-check accuracy, false positive rate, coverage, and table formatting cannot be assessed."
+ findings:
+-  - "Critical: prd/plugin-proposal.md is absent, so the required plugin system proposal was not produced."
+-  - "Critical: the current test command validates placeholder files instead of the required proposal file, allowing a false pass."
+-  - "Major: no concrete runtime API, YAML configuration, loading strategy, backward compatibility plan, security model, or conflict behavior is specified."
+-  - "Major: finalization/commit instructions were introduced before any Critic approval, which can prematurely bless an empty design."
++  - "Critical: reviews/skill-audit.md does not exist, so there are no findings to spot-check."
++  - "Critical: the required test command `test -f reviews/skill-audit.md && echo 'audit exists'` failed with exit code 1."
++  - "Major: report format cannot be validated because the expected audit report was not produced."
+ ---
+ 
+ Verdict: REQUEST_CHANGES
+ 
+-## Strengths
+-- The Phase 10 background in `prd/PRD-phase10.md` frames the right debate topic: whether Unison should support custom runtimes through a plugin system.
+-- The Phase 10 technical design identifies useful review dimensions, including runtime interface, plugin loading, configuration, backward compatibility, and migration path.
+-- The debate workflow asks the Critic to challenge security, complexity, and edge cases, which is the right review posture for a plugin architecture.
++Spot-check results:
++- Checked: 0/0 findings
++- Confirmed: 0
++- False positives: 0 (none; no findings were available to sample)
++- Missed issues: 0 (not assessed; no audit report was available)
+ 
+-## Issues
+-### Issue 1: Target proposal file is missing
+-- **Severity**: Critical
+-- **What**: `prd/plugin-proposal.md` does not exist. The only current Phase 10 active files, `prd/PRD.md` and `prd/tech-design.md`, contain placeholder text saying the Architect will write the design later.
+-- **Why it matters**: There is no actual proposal to review against the required dimensions. Completeness is effectively zero: runtime interface, plugin loading, configuration, backward compatibility, migration, security, and conflict behavior are not specified.
+-- **Suggested fix**: Create `prd/plugin-proposal.md` and populate it with the full Architect proposal before requesting Critic review. At minimum, include the 7 required sections plus explicit examples for runtime interface, plugin manifest, pipeline YAML, migration, security boundaries, error handling, and conflict resolution.
++Format: FAIL
++Accuracy: FAIL (not measurable; missing audit report)
++Coverage: FAIL (not measurable; missing audit report)
+ 
+-### Issue 2: The validation command gives a false pass
+-- **Severity**: Critical
+-- **What**: The requested test command passed because it only checks `prd/PRD.md` and `prd/tech-design.md`, not `prd/plugin-proposal.md`. Those files currently exist but are placeholders.
+-- **Why it matters**: The pipeline can report "proposal exists" while the real proposal is missing. This masks a failed Architect step and lets later roles review or finalize an empty design.
+-- **Suggested fix**: Change the Phase 10 Round 1 validation to `test -s prd/plugin-proposal.md && echo 'proposal exists'`, and optionally add grep checks for required section headings so placeholder documents cannot pass.
+-
+-### Issue 3: No concrete plugin API or examples are provided
+-- **Severity**: Major
+-- **What**: There are no code snippets, manifest examples, YAML examples, runtime method signatures, or lifecycle diagrams in the active proposal material.
+-- **Why it matters**: A plugin system lives or dies on contract clarity. Without a concrete interface, implementers cannot tell how custom runtimes receive prompts, stream output, report tool calls, expose capabilities, handle cancellation, or return structured failures.
+-- **Suggested fix**: Add a concrete interface such as `RuntimePlugin.invoke(request: RuntimeRequest) -> RuntimeResult`, a plugin manifest example, and a `pipeline.yaml` example showing both existing built-in runtimes and a custom plugin runtime.
+-
+-### Issue 4: Backward compatibility is not proven
+-- **Severity**: Major
+-- **What**: The proposal does not show how existing `pipeline.yaml` files using `runtime: claude`, `runtime: codex`, `runtime: hermes`, or `runtime: openclaw` continue to parse and execute unchanged.
+-- **Why it matters**: If plugin support replaces the current `Literal[...]` runtime model without a compatibility shim, existing pipelines and tests can break. This is especially risky because the Phase 10 PRD says code should not be modified, yet the proposed topic touches core runtime dispatch.
+-- **Suggested fix**: Specify a compatibility layer where built-in runtime strings remain first-class aliases. Add migration rules, schema examples before and after, and tests that load representative existing pipeline YAML files.
+-
+-### Issue 5: Security model is absent
+-- **Severity**: Major
+-- **What**: There is no sandboxing, trust model, allowlist, signature/checksum, permission prompt, environment-variable policy, or file/network access boundary for third-party runtime plugins.
+-- **Why it matters**: Runtime plugins are executable integration points. A malicious or compromised plugin could read secrets, modify repository files, exfiltrate prompts, or execute arbitrary commands under the user's account.
+-- **Suggested fix**: Define plugin trust levels and default-deny behavior. Require explicit installation/enablement, isolate subprocess execution where possible, pass a restricted environment, log plugin execution, and document which permissions a plugin can request.
+-
+-### Issue 6: Missing edge-case behavior for absent or conflicting plugins
+-- **Severity**: Major
+-- **What**: The proposal does not define what happens when a plugin is missing, has the wrong version, fails to load, times out, conflicts with another plugin name, or claims a built-in runtime name.
+-- **Why it matters**: These are normal operational cases. Without deterministic behavior, the orchestrator may fail late, pick the wrong runtime, or silently change execution semantics.
+-- **Suggested fix**: Add a resolution algorithm: built-ins have reserved names, plugin IDs must be globally unique or namespace-qualified, version constraints are checked at pipeline load time, and load failures produce actionable configuration errors before agent execution begins.
+-
+-## Missing Coverage
+-- The actual `prd/plugin-proposal.md` file.
+-- The 7 required proposal sections.
+-- Runtime interface contract and structured request/response types.
+-- Plugin discovery, installation, versioning, and loading order.
+-- Concrete `pipeline.yaml` examples for built-in and custom runtimes.
+-- Backward compatibility and migration path for current runtime strings.
+-- Security model, sandboxing limits, and permission boundaries.
+-- Failure behavior for missing, invalid, conflicting, or malicious plugins.
+-- Test strategy and acceptance criteria for the plugin design.
+-- Complexity analysis explaining why a plugin system is preferable to a smaller runtime adapter registry.
+-
+-## Verdict Rationale
+-REQUEST_CHANGES. The repository currently contains placeholders and no `prd/plugin-proposal.md`, so the Architect has not delivered the artifact under review. The existing test command passing is not meaningful because it checks the wrong files. A revised submission should first provide the actual proposal with concrete API and YAML examples, then demonstrate compatibility, security, and edge-case handling.
++Issues (if REQUEST_CHANGES):
++- `reviews/skill-audit.md` is missing -> produce the Skill-Auditor report at that exact path, then rerun review.
++- Required existence test failed -> ensure `test -f reviews/skill-audit.md && echo 'audit exists'` prints `audit exists`.
++- Audit report format could not be checked -> include the specified table with all required columns filled.
+
+exec
+/bin/bash -lc 'git status --short' in /home/sean/projects/unison
+ succeeded in 0ms:
+ M reviews/plan-iter-1.md
+?? observer/logs/planner_iter-1_20260619T162843Z.log
+
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+index ddcd76e3dcaddb4f5e9364fc5d66e9bedbbfc6e6..37ca5c528664d71a649d4dcb0d30e574e18f31d0
+--- a/reviews/plan-iter-1.md
++++ b/reviews/plan-iter-1.md
+@@ -1,68 +1,25 @@
+ ---
+ verdict: REQUEST_CHANGES
+-summary: "The actual Architect proposal is missing: prd/plugin-proposal.md does not exist, while prd/PRD.md and prd/tech-design.md are placeholders. The review cannot validate completeness, security, compatibility, or edge cases until the proposal is written."
++summary: "The audit report cannot be validated because reviews/skill-audit.md is missing. The required existence test failed, so spot-check accuracy, false positive rate, coverage, and table formatting cannot be assessed."
+ findings:
+-  - "Critical: prd/plugin-proposal.md is absent, so the required plugin system proposal was not produced."
+-  - "Critical: the current test command validates placeholder files instead of the required proposal file, allowing a false pass."
+-  - "Major: no concrete runtime API, YAML configuration, loading strategy, backward compatibility plan, security model, or conflict behavior is specified."
+-  - "Major: finalization/commit instructions were introduced before any Critic approval, which can prematurely bless an empty design."
++  - "Critical: reviews/skill-audit.md does not exist, so there are no findings to spot-check."
++  - "Critical: the required test command `test -f reviews/skill-audit.md && echo 'audit exists'` failed with exit code 1."
++  - "Major: report format cannot be validated because the expected audit report was not produced."
+ ---
+ 
+ Verdict: REQUEST_CHANGES
+-
+-## Strengths
+-- The Phase 10 background in `prd/PRD-phase10.md` frames the right debate topic: whether Unison should support custom runtimes through a plugin system.
+-- The Phase 10 technical design identifies useful review dimensions, including runtime interface, plugin loading, configuration, backward compatibility, and migration path.
+-- The debate workflow asks the Critic to challenge security, complexity, and edge cases, which is the right review posture for a plugin architecture.
+-
+-## Issues
+-### Issue 1: Target proposal file is missing
+-- **Severity**: Critical
+-- **What**: `prd/plugin-proposal.md` does not exist. The only current Phase 10 active files, `prd/PRD.md` and `prd/tech-design.md`, contain placeholder text saying the Architect will write the design later.
+-- **Why it matters**: There is no actual proposal to review against the required dimensions. Completeness is effectively zero: runtime interface, plugin loading, configuration, backward compatibility, migration, security, and conflict behavior are not specified.
+-- **Suggested fix**: Create `prd/plugin-proposal.md` and populate it with the full Architect proposal before requesting Critic review. At minimum, include the 7 required sections plus explicit examples for runtime interface, plugin manifest, pipeline YAML, migration, security boundaries, error handling, and conflict resolution.
+-
+-### Issue 2: The validation command gives a false pass
+-- **Severity**: Critical
+-- **What**: The requested test command passed because it only checks `prd/PRD.md` and `prd/tech-design.md`, not `prd/plugin-proposal.md`. Those files currently exist but are placeholders.
+-- **Why it matters**: The pipeline can report "proposal exists" while the real proposal is missing. This masks a failed Architect step and lets later roles review or finalize an empty design.
+-- **Suggested fix**: Change the Phase 10 Round 1 validation to `test -s prd/plugin-proposal.md && echo 'proposal exists'`, and optionally add grep checks for required section headings so placeholder documents cannot pass.
+ 
+-### Issue 3: No concrete plugin API or examples are provided
+-- **Severity**: Major
+-- **What**: There are no code snippets, manifest examples, YAML examples, runtime method signatures, or lifecycle diagrams in the active proposal material.
+-- **Why it matters**: A plugin system lives or dies on contract clarity. Without a concrete interface, implementers cannot tell how custom runtimes receive prompts, stream output, report tool calls, expose capabilities, handle cancellation, or return structured failures.
+-- **Suggested fix**: Add a concrete interface such as `RuntimePlugin.invoke(request: RuntimeRequest) -> RuntimeResult`, a plugin manifest example, and a `pipeline.yaml` example showing both existing built-in runtimes and a custom plugin runtime.
+-
+-### Issue 4: Backward compatibility is not proven
+-- **Severity**: Major
+-- **What**: The proposal does not show how existing `pipeline.yaml` files using `runtime: claude`, `runtime: codex`, `runtime: hermes`, or `runtime: openclaw` continue to parse and execute unchanged.
+-- **Why it matters**: If plugin support replaces the current `Literal[...]` runtime model without a compatibility shim, existing pipelines and tests can break. This is especially risky because the Phase 10 PRD says code should not be modified, yet the proposed topic touches core runtime dispatch.
+-- **Suggested fix**: Specify a compatibility layer where built-in runtime strings remain first-class aliases. Add migration rules, schema examples before and after, and tests that load representative existing pipeline YAML files.
+-
+-### Issue 5: Security model is absent
+-- **Severity**: Major
+-- **What**: There is no sandboxing, trust model, allowlist, signature/checksum, permission prompt, environment-variable policy, or file/network access boundary for third-party runtime plugins.
+-- **Why it matters**: Runtime plugins are executable integration points. A malicious or compromised plugin could read secrets, modify repository files, exfiltrate prompts, or execute arbitrary commands under the user's account.
+-- **Suggested fix**: Define plugin trust levels and default-deny behavior. Require explicit installation/enablement, isolate subprocess execution where possible, pass a restricted environment, log plugin execution, and document which permissions a plugin can request.
+-
+-### Issue 6: Missing edge-case behavior for absent or conflicting plugins
+-- **Severity**: Major
+-- **What**: The proposal does not define what happens when a plugin is missing, has the wrong version, fails to load, times out, conflicts with another plugin name, or claims a built-in runtime name.
+-- **Why it matters**: These are normal operational cases. Without deterministic behavior, the orchestrator may fail late, pick the wrong runtime, or silently change execution semantics.
+-- **Suggested fix**: Add a resolution algorithm: built-ins have reserved names, plugin IDs must be globally unique or namespace-qualified, version constraints are checked at pipeline load time, and load failures produce actionable configuration errors before agent execution begins.
++Spot-check results:
++- Checked: 0/0 findings
++- Confirmed: 0
++- False positives: 0 (none; no findings were available to sample)
++- Missed issues: 0 (not assessed; no audit report was available)
+ 
+-## Missing Coverage
+-- The actual `prd/plugin-proposal.md` file.
+-- The 7 required proposal sections.
+-- Runtime interface contract and structured request/response types.
+-- Plugin discovery, installation, versioning, and loading order.
+-- Concrete `pipeline.yaml` examples for built-in and custom runtimes.
+-- Backward compatibility and migration path for current runtime strings.
+-- Security model, sandboxing limits, and permission boundaries.
+-- Failure behavior for missing, invalid, conflicting, or malicious plugins.
+-- Test strategy and acceptance criteria for the plugin design.
+-- Complexity analysis explaining why a plugin system is preferable to a smaller runtime adapter registry.
++Format: FAIL
++Accuracy: FAIL (not measurable; missing audit report)
++Coverage: FAIL (not measurable; missing audit report)
+ 
+-## Verdict Rationale
+-REQUEST_CHANGES. The repository currently contains placeholders and no `prd/plugin-proposal.md`, so the Architect has not delivered the artifact under review. The existing test command passing is not meaningful because it checks the wrong files. A revised submission should first provide the actual proposal with concrete API and YAML examples, then demonstrate compatibility, security, and edge-case handling.
++Issues (if REQUEST_CHANGES):
++- `reviews/skill-audit.md` is missing -> produce the Skill-Auditor report at that exact path, then rerun review.
++- Required existence test failed -> ensure `test -f reviews/skill-audit.md && echo 'audit exists'` prints `audit exists`.
++- Audit report format could not be checked -> include the specified table with all required columns filled.
+
+exec
+/bin/bash -lc "ruby -e 'require \"yaml\"; text = File.read(\"reviews/plan-iter-1.md\"); fm = text[/\\A---\\n(.*?)\\n---/m, 1] or abort(\"missing frontmatter\"); data = YAML.safe_load(fm); %w[verdict summary findings].each { |k| abort(\"missing #{k}\") unless data.key?(k) }; puts \"frontmatter ok\"'" in /home/sean/projects/unison
+ exited 127 in 0ms:
+/bin/bash: line 1: ruby: command not found
+
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+index ddcd76e3dcaddb4f5e9364fc5d66e9bedbbfc6e6..37ca5c528664d71a649d4dcb0d30e574e18f31d0
+--- a/reviews/plan-iter-1.md
++++ b/reviews/plan-iter-1.md
+@@ -1,68 +1,25 @@
+ ---
+ verdict: REQUEST_CHANGES
+-summary: "The actual Architect proposal is missing: prd/plugin-proposal.md does not exist, while prd/PRD.md and prd/tech-design.md are placeholders. The review cannot validate completeness, security, compatibility, or edge cases until the proposal is written."
++summary: "The audit report cannot be validated because reviews/skill-audit.md is missing. The required existence test failed, so spot-check accuracy, false positive rate, coverage, and table formatting cannot be assessed."
+ findings:
+-  - "Critical: prd/plugin-proposal.md is absent, so the required plugin system proposal was not produced."
+-  - "Critical: the current test command validates placeholder files instead of the required proposal file, allowing a false pass."
+-  - "Major: no concrete runtime API, YAML configuration, loading strategy, backward compatibility plan, security model, or conflict behavior is specified."
+-  - "Major: finalization/commit instructions were introduced before any Critic approval, which can prematurely bless an empty design."
++  - "Critical: reviews/skill-audit.md does not exist, so there are no findings to spot-check."
++  - "Critical: the required test command `test -f reviews/skill-audit.md && echo 'audit exists'` failed with exit code 1."
++  - "Major: report format cannot be validated because the expected audit report was not produced."
+ ---
+ 
+ Verdict: REQUEST_CHANGES
+-
+-## Strengths
+-- The Phase 10 background in `prd/PRD-phase10.md` frames the right debate topic: whether Unison should support custom runtimes through a plugin system.
+-- The Phase 10 technical design identifies useful review dimensions, including runtime interface, plugin loading, configuration, backward compatibility, and migration path.
+-- The debate workflow asks the Critic to challenge security, complexity, and edge cases, which is the right review posture for a plugin architecture.
+-
+-## Issues
+-### Issue 1: Target proposal file is missing
+-- **Severity**: Critical
+-- **What**: `prd/plugin-proposal.md` does not exist. The only current Phase 10 active files, `prd/PRD.md` and `prd/tech-design.md`, contain placeholder text saying the Architect will write the design later.
+-- **Why it matters**: There is no actual proposal to review against the required dimensions. Completeness is effectively zero: runtime interface, plugin loading, configuration, backward compatibility, migration, security, and conflict behavior are not specified.
+-- **Suggested fix**: Create `prd/plugin-proposal.md` and populate it with the full Architect proposal before requesting Critic review. At minimum, include the 7 required sections plus explicit examples for runtime interface, plugin manifest, pipeline YAML, migration, security boundaries, error handling, and conflict resolution.
+-
+-### Issue 2: The validation command gives a false pass
+-- **Severity**: Critical
+-- **What**: The requested test command passed because it only checks `prd/PRD.md` and `prd/tech-design.md`, not `prd/plugin-proposal.md`. Those files currently exist but are placeholders.
+-- **Why it matters**: The pipeline can report "proposal exists" while the real proposal is missing. This masks a failed Architect step and lets later roles review or finalize an empty design.
+-- **Suggested fix**: Change the Phase 10 Round 1 validation to `test -s prd/plugin-proposal.md && echo 'proposal exists'`, and optionally add grep checks for required section headings so placeholder documents cannot pass.
+ 
+-### Issue 3: No concrete plugin API or examples are provided
+-- **Severity**: Major
+-- **What**: There are no code snippets, manifest examples, YAML examples, runtime method signatures, or lifecycle diagrams in the active proposal material.
+-- **Why it matters**: A plugin system lives or dies on contract clarity. Without a concrete interface, implementers cannot tell how custom runtimes receive prompts, stream output, report tool calls, expose capabilities, handle cancellation, or return structured failures.
+-- **Suggested fix**: Add a concrete interface such as `RuntimePlugin.invoke(request: RuntimeRequest) -> RuntimeResult`, a plugin manifest example, and a `pipeline.yaml` example showing both existing built-in runtimes and a custom plugin runtime.
+-
+-### Issue 4: Backward compatibility is not proven
+-- **Severity**: Major
+-- **What**: The proposal does not show how existing `pipeline.yaml` files using `runtime: claude`, `runtime: codex`, `runtime: hermes`, or `runtime: openclaw` continue to parse and execute unchanged.
+-- **Why it matters**: If plugin support replaces the current `Literal[...]` runtime model without a compatibility shim, existing pipelines and tests can break. This is especially risky because the Phase 10 PRD says code should not be modified, yet the proposed topic touches core runtime dispatch.
+-- **Suggested fix**: Specify a compatibility layer where built-in runtime strings remain first-class aliases. Add migration rules, schema examples before and after, and tests that load representative existing pipeline YAML files.
+-
+-### Issue 5: Security model is absent
+-- **Severity**: Major
+-- **What**: There is no sandboxing, trust model, allowlist, signature/checksum, permission prompt, environment-variable policy, or file/network access boundary for third-party runtime plugins.
+-- **Why it matters**: Runtime plugins are executable integration points. A malicious or compromised plugin could read secrets, modify repository files, exfiltrate prompts, or execute arbitrary commands under the user's account.
+-- **Suggested fix**: Define plugin trust levels and default-deny behavior. Require explicit installation/enablement, isolate subprocess execution where possible, pass a restricted environment, log plugin execution, and document which permissions a plugin can request.
+-
+-### Issue 6: Missing edge-case behavior for absent or conflicting plugins
+-- **Severity**: Major
+-- **What**: The proposal does not define what happens when a plugin is missing, has the wrong version, fails to load, times out, conflicts with another plugin name, or claims a built-in runtime name.
+-- **Why it matters**: These are normal operational cases. Without deterministic behavior, the orchestrator may fail late, pick the wrong runtime, or silently change execution semantics.
+-- **Suggested fix**: Add a resolution algorithm: built-ins have reserved names, plugin IDs must be globally unique or namespace-qualified, version constraints are checked at pipeline load time, and load failures produce actionable configuration errors before agent execution begins.
++Spot-check results:
++- Checked: 0/0 findings
++- Confirmed: 0
++- False positives: 0 (none; no findings were available to sample)
++- Missed issues: 0 (not assessed; no audit report was available)
+ 
+-## Missing Coverage
+-- The actual `prd/plugin-proposal.md` file.
+-- The 7 required proposal sections.
+-- Runtime interface contract and structured request/response types.
+-- Plugin discovery, installation, versioning, and loading order.
+-- Concrete `pipeline.yaml` examples for built-in and custom runtimes.
+-- Backward compatibility and migration path for current runtime strings.
+-- Security model, sandboxing limits, and permission boundaries.
+-- Failure behavior for missing, invalid, conflicting, or malicious plugins.
+-- Test strategy and acceptance criteria for the plugin design.
+-- Complexity analysis explaining why a plugin system is preferable to a smaller runtime adapter registry.
++Format: FAIL
++Accuracy: FAIL (not measurable; missing audit report)
++Coverage: FAIL (not measurable; missing audit report)
+ 
+-## Verdict Rationale
+-REQUEST_CHANGES. The repository currently contains placeholders and no `prd/plugin-proposal.md`, so the Architect has not delivered the artifact under review. The existing test command passing is not meaningful because it checks the wrong files. A revised submission should first provide the actual proposal with concrete API and YAML examples, then demonstrate compatibility, security, and edge-case handling.
++Issues (if REQUEST_CHANGES):
++- `reviews/skill-audit.md` is missing -> produce the Skill-Auditor report at that exact path, then rerun review.
++- Required existence test failed -> ensure `test -f reviews/skill-audit.md && echo 'audit exists'` prints `audit exists`.
++- Audit report format could not be checked -> include the specified table with all required columns filled.
+
+codex
+`ruby` is not installed here, so I couldn’t use it to parse the frontmatter. I’m using the available toolchain for a final sanity check instead of introducing any additional changes.
+exec
+/bin/bash -lc 'git diff --name-only' in /home/sean/projects/unison
+ succeeded in 0ms:
+reviews/plan-iter-1.md
+
+exec
+/bin/bash -lc "python3 - <<'PY'
+from pathlib import Path
+p = Path('reviews/plan-iter-1.md')
+text = p.read_text()
+if not text.startswith('---\\n'):
+    raise SystemExit('missing opening frontmatter delimiter')
+end = text.find('\\n---\\n', 4)
+if end == -1:
+    raise SystemExit('missing closing frontmatter delimiter')
+fm = text[4:end]
+for key in ('verdict:', 'summary:', 'findings:'):
+    if key not in fm:
+        raise SystemExit(f'missing {key}')
+print('frontmatter keys ok')
+PY" in /home/sean/projects/unison
+ succeeded in 0ms:
+frontmatter keys ok
+
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+index ddcd76e3dcaddb4f5e9364fc5d66e9bedbbfc6e6..37ca5c528664d71a649d4dcb0d30e574e18f31d0
+--- a/reviews/plan-iter-1.md
++++ b/reviews/plan-iter-1.md
+@@ -1,68 +1,25 @@
+ ---
+ verdict: REQUEST_CHANGES
+-summary: "The actual Architect proposal is missing: prd/plugin-proposal.md does not exist, while prd/PRD.md and prd/tech-design.md are placeholders. The review cannot validate completeness, security, compatibility, or edge cases until the proposal is written."
++summary: "The audit report cannot be validated because reviews/skill-audit.md is missing. The required existence test failed, so spot-check accuracy, false positive rate, coverage, and table formatting cannot be assessed."
+ findings:
+-  - "Critical: prd/plugin-proposal.md is absent, so the required plugin system proposal was not produced."
+-  - "Critical: the current test command validates placeholder files instead of the required proposal file, allowing a false pass."
+-  - "Major: no concrete runtime API, YAML configuration, loading strategy, backward compatibility plan, security model, or conflict behavior is specified."
+-  - "Major: finalization/commit instructions were introduced before any Critic approval, which can prematurely bless an empty design."
++  - "Critical: reviews/skill-audit.md does not exist, so there are no findings to spot-check."
++  - "Critical: the required test command `test -f reviews/skill-audit.md && echo 'audit exists'` failed with exit code 1."
++  - "Major: report format cannot be validated because the expected audit report was not produced."
+ ---
+ 
+ Verdict: REQUEST_CHANGES
+-
+-## Strengths
+-- The Phase 10 background in `prd/PRD-phase10.md` frames the right debate topic: whether Unison should support custom runtimes through a plugin system.
+-- The Phase 10 technical design identifies useful review dimensions, including runtime interface, plugin loading, configuration, backward compatibility, and migration path.
+-- The debate workflow asks the Critic to challenge security, complexity, and edge cases, which is the right review posture for a plugin architecture.
+-
+-## Issues
+-### Issue 1: Target proposal file is missing
+-- **Severity**: Critical
+-- **What**: `prd/plugin-proposal.md` does not exist. The only current Phase 10 active files, `prd/PRD.md` and `prd/tech-design.md`, contain placeholder text saying the Architect will write the design later.
+-- **Why it matters**: There is no actual proposal to review against the required dimensions. Completeness is effectively zero: runtime interface, plugin loading, configuration, backward compatibility, migration, security, and conflict behavior are not specified.
+-- **Suggested fix**: Create `prd/plugin-proposal.md` and populate it with the full Architect proposal before requesting Critic review. At minimum, include the 7 required sections plus explicit examples for runtime interface, plugin manifest, pipeline YAML, migration, security boundaries, error handling, and conflict resolution.
+-
+-### Issue 2: The validation command gives a false pass
+-- **Severity**: Critical
+-- **What**: The requested test command passed because it only checks `prd/PRD.md` and `prd/tech-design.md`, not `prd/plugin-proposal.md`. Those files currently exist but are placeholders.
+-- **Why it matters**: The pipeline can report "proposal exists" while the real proposal is missing. This masks a failed Architect step and lets later roles review or finalize an empty design.
+-- **Suggested fix**: Change the Phase 10 Round 1 validation to `test -s prd/plugin-proposal.md && echo 'proposal exists'`, and optionally add grep checks for required section headings so placeholder documents cannot pass.
+ 
+-### Issue 3: No concrete plugin API or examples are provided
+-- **Severity**: Major
+-- **What**: There are no code snippets, manifest examples, YAML examples, runtime method signatures, or lifecycle diagrams in the active proposal material.
+-- **Why it matters**: A plugin system lives or dies on contract clarity. Without a concrete interface, implementers cannot tell how custom runtimes receive prompts, stream output, report tool calls, expose capabilities, handle cancellation, or return structured failures.
+-- **Suggested fix**: Add a concrete interface such as `RuntimePlugin.invoke(request: RuntimeRequest) -> RuntimeResult`, a plugin manifest example, and a `pipeline.yaml` example showing both existing built-in runtimes and a custom plugin runtime.
+-
+-### Issue 4: Backward compatibility is not proven
+-- **Severity**: Major
+-- **What**: The proposal does not show how existing `pipeline.yaml` files using `runtime: claude`, `runtime: codex`, `runtime: hermes`, or `runtime: openclaw` continue to parse and execute unchanged.
+-- **Why it matters**: If plugin support replaces the current `Literal[...]` runtime model without a compatibility shim, existing pipelines and tests can break. This is especially risky because the Phase 10 PRD says code should not be modified, yet the proposed topic touches core runtime dispatch.
+-- **Suggested fix**: Specify a compatibility layer where built-in runtime strings remain first-class aliases. Add migration rules, schema examples before and after, and tests that load representative existing pipeline YAML files.
+-
+-### Issue 5: Security model is absent
+-- **Severity**: Major
+-- **What**: There is no sandboxing, trust model, allowlist, signature/checksum, permission prompt, environment-variable policy, or file/network access boundary for third-party runtime plugins.
+-- **Why it matters**: Runtime plugins are executable integration points. A malicious or compromised plugin could read secrets, modify repository files, exfiltrate prompts, or execute arbitrary commands under the user's account.
+-- **Suggested fix**: Define plugin trust levels and default-deny behavior. Require explicit installation/enablement, isolate subprocess execution where possible, pass a restricted environment, log plugin execution, and document which permissions a plugin can request.
+-
+-### Issue 6: Missing edge-case behavior for absent or conflicting plugins
+-- **Severity**: Major
+-- **What**: The proposal does not define what happens when a plugin is missing, has the wrong version, fails to load, times out, conflicts with another plugin name, or claims a built-in runtime name.
+-- **Why it matters**: These are normal operational cases. Without deterministic behavior, the orchestrator may fail late, pick the wrong runtime, or silently change execution semantics.
+-- **Suggested fix**: Add a resolution algorithm: built-ins have reserved names, plugin IDs must be globally unique or namespace-qualified, version constraints are checked at pipeline load time, and load failures produce actionable configuration errors before agent execution begins.
++Spot-check results:
++- Checked: 0/0 findings
++- Confirmed: 0
++- False positives: 0 (none; no findings were available to sample)
++- Missed issues: 0 (not assessed; no audit report was available)
+ 
+-## Missing Coverage
+-- The actual `prd/plugin-proposal.md` file.
+-- The 7 required proposal sections.
+-- Runtime interface contract and structured request/response types.
+-- Plugin discovery, installation, versioning, and loading order.
+-- Concrete `pipeline.yaml` examples for built-in and custom runtimes.
+-- Backward compatibility and migration path for current runtime strings.
+-- Security model, sandboxing limits, and permission boundaries.
+-- Failure behavior for missing, invalid, conflicting, or malicious plugins.
+-- Test strategy and acceptance criteria for the plugin design.
+-- Complexity analysis explaining why a plugin system is preferable to a smaller runtime adapter registry.
++Format: FAIL
++Accuracy: FAIL (not measurable; missing audit report)
++Coverage: FAIL (not measurable; missing audit report)
+ 
+-## Verdict Rationale
+-REQUEST_CHANGES. The repository currently contains placeholders and no `prd/plugin-proposal.md`, so the Architect has not delivered the artifact under review. The existing test command passing is not meaningful because it checks the wrong files. A revised submission should first provide the actual proposal with concrete API and YAML examples, then demonstrate compatibility, security, and edge-case handling.
++Issues (if REQUEST_CHANGES):
++- `reviews/skill-audit.md` is missing -> produce the Skill-Auditor report at that exact path, then rerun review.
++- Required existence test failed -> ensure `test -f reviews/skill-audit.md && echo 'audit exists'` prints `audit exists`.
++- Audit report format could not be checked -> include the specified table with all required columns filled.
+
+codex
+Wrote the audit review to [reviews/plan-iter-1.md](/home/sean/projects/unison/reviews/plan-iter-1.md:1).
+
+Verdict is `REQUEST_CHANGES` because the required test failed:
+
+```bash
+test -f reviews/skill-audit.md && echo 'audit exists'
+# exit code 1
+```
+
+`reviews/skill-audit.md` is missing, so the audit findings, format, accuracy, and coverage could not be validated. I did not modify `src/`; the only tracked file changed is `reviews/plan-iter-1.md`.
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+index ddcd76e3dcaddb4f5e9364fc5d66e9bedbbfc6e6..37ca5c528664d71a649d4dcb0d30e574e18f31d0
+--- a/reviews/plan-iter-1.md
++++ b/reviews/plan-iter-1.md
+@@ -1,68 +1,25 @@
+ ---
+ verdict: REQUEST_CHANGES
+-summary: "The actual Architect proposal is missing: prd/plugin-proposal.md does not exist, while prd/PRD.md and prd/tech-design.md are placeholders. The review cannot validate completeness, security, compatibility, or edge cases until the proposal is written."
++summary: "The audit report cannot be validated because reviews/skill-audit.md is missing. The required existence test failed, so spot-check accuracy, false positive rate, coverage, and table formatting cannot be assessed."
+ findings:
+-  - "Critical: prd/plugin-proposal.md is absent, so the required plugin system proposal was not produced."
+-  - "Critical: the current test command validates placeholder files instead of the required proposal file, allowing a false pass."
+-  - "Major: no concrete runtime API, YAML configuration, loading strategy, backward compatibility plan, security model, or conflict behavior is specified."
+-  - "Major: finalization/commit instructions were introduced before any Critic approval, which can prematurely bless an empty design."
++  - "Critical: reviews/skill-audit.md does not exist, so there are no findings to spot-check."
++  - "Critical: the required test command `test -f reviews/skill-audit.md && echo 'audit exists'` failed with exit code 1."
++  - "Major: report format cannot be validated because the expected audit report was not produced."
+ ---
+ 
+ Verdict: REQUEST_CHANGES
+-
+-## Strengths
+-- The Phase 10 background in `prd/PRD-phase10.md` frames the right debate topic: whether Unison should support custom runtimes through a plugin system.
+-- The Phase 10 technical design identifies useful review dimensions, including runtime interface, plugin loading, configuration, backward compatibility, and migration path.
+-- The debate workflow asks the Critic to challenge security, complexity, and edge cases, which is the right review posture for a plugin architecture.
+-
+-## Issues
+-### Issue 1: Target proposal file is missing
+-- **Severity**: Critical
+-- **What**: `prd/plugin-proposal.md` does not exist. The only current Phase 10 active files, `prd/PRD.md` and `prd/tech-design.md`, contain placeholder text saying the Architect will write the design later.
+-- **Why it matters**: There is no actual proposal to review against the required dimensions. Completeness is effectively zero: runtime interface, plugin loading, configuration, backward compatibility, migration, security, and conflict behavior are not specified.
+-- **Suggested fix**: Create `prd/plugin-proposal.md` and populate it with the full Architect proposal before requesting Critic review. At minimum, include the 7 required sections plus explicit examples for runtime interface, plugin manifest, pipeline YAML, migration, security boundaries, error handling, and conflict resolution.
+-
+-### Issue 2: The validation command gives a false pass
+-- **Severity**: Critical
+-- **What**: The requested test command passed because it only checks `prd/PRD.md` and `prd/tech-design.md`, not `prd/plugin-proposal.md`. Those files currently exist but are placeholders.
+-- **Why it matters**: The pipeline can report "proposal exists" while the real proposal is missing. This masks a failed Architect step and lets later roles review or finalize an empty design.
+-- **Suggested fix**: Change the Phase 10 Round 1 validation to `test -s prd/plugin-proposal.md && echo 'proposal exists'`, and optionally add grep checks for required section headings so placeholder documents cannot pass.
+ 
+-### Issue 3: No concrete plugin API or examples are provided
+-- **Severity**: Major
+-- **What**: There are no code snippets, manifest examples, YAML examples, runtime method signatures, or lifecycle diagrams in the active proposal material.
+-- **Why it matters**: A plugin system lives or dies on contract clarity. Without a concrete interface, implementers cannot tell how custom runtimes receive prompts, stream output, report tool calls, expose capabilities, handle cancellation, or return structured failures.
+-- **Suggested fix**: Add a concrete interface such as `RuntimePlugin.invoke(request: RuntimeRequest) -> RuntimeResult`, a plugin manifest example, and a `pipeline.yaml` example showing both existing built-in runtimes and a custom plugin runtime.
+-
+-### Issue 4: Backward compatibility is not proven
+-- **Severity**: Major
+-- **What**: The proposal does not show how existing `pipeline.yaml` files using `runtime: claude`, `runtime: codex`, `runtime: hermes`, or `runtime: openclaw` continue to parse and execute unchanged.
+-- **Why it matters**: If plugin support replaces the current `Literal[...]` runtime model without a compatibility shim, existing pipelines and tests can break. This is especially risky because the Phase 10 PRD says code should not be modified, yet the proposed topic touches core runtime dispatch.
+-- **Suggested fix**: Specify a compatibility layer where built-in runtime strings remain first-class aliases. Add migration rules, schema examples before and after, and tests that load representative existing pipeline YAML files.
+-
+-### Issue 5: Security model is absent
+-- **Severity**: Major
+-- **What**: There is no sandboxing, trust model, allowlist, signature/checksum, permission prompt, environment-variable policy, or file/network access boundary for third-party runtime plugins.
+-- **Why it matters**: Runtime plugins are executable integration points. A malicious or compromised plugin could read secrets, modify repository files, exfiltrate prompts, or execute arbitrary commands under the user's account.
+-- **Suggested fix**: Define plugin trust levels and default-deny behavior. Require explicit installation/enablement, isolate subprocess execution where possible, pass a restricted environment, log plugin execution, and document which permissions a plugin can request.
+-
+-### Issue 6: Missing edge-case behavior for absent or conflicting plugins
+-- **Severity**: Major
+-- **What**: The proposal does not define what happens when a plugin is missing, has the wrong version, fails to load, times out, conflicts with another plugin name, or claims a built-in runtime name.
+-- **Why it matters**: These are normal operational cases. Without deterministic behavior, the orchestrator may fail late, pick the wrong runtime, or silently change execution semantics.
+-- **Suggested fix**: Add a resolution algorithm: built-ins have reserved names, plugin IDs must be globally unique or namespace-qualified, version constraints are checked at pipeline load time, and load failures produce actionable configuration errors before agent execution begins.
++Spot-check results:
++- Checked: 0/0 findings
++- Confirmed: 0
++- False positives: 0 (none; no findings were available to sample)
++- Missed issues: 0 (not assessed; no audit report was available)
+ 
+-## Missing Coverage
+-- The actual `prd/plugin-proposal.md` file.
+-- The 7 required proposal sections.
+-- Runtime interface contract and structured request/response types.
+-- Plugin discovery, installation, versioning, and loading order.
+-- Concrete `pipeline.yaml` examples for built-in and custom runtimes.
+-- Backward compatibility and migration path for current runtime strings.
+-- Security model, sandboxing limits, and permission boundaries.
+-- Failure behavior for missing, invalid, conflicting, or malicious plugins.
+-- Test strategy and acceptance criteria for the plugin design.
+-- Complexity analysis explaining why a plugin system is preferable to a smaller runtime adapter registry.
++Format: FAIL
++Accuracy: FAIL (not measurable; missing audit report)
++Coverage: FAIL (not measurable; missing audit report)
+ 
+-## Verdict Rationale
+-REQUEST_CHANGES. The repository currently contains placeholders and no `prd/plugin-proposal.md`, so the Architect has not delivered the artifact under review. The existing test command passing is not meaningful because it checks the wrong files. A revised submission should first provide the actual proposal with concrete API and YAML examples, then demonstrate compatibility, security, and edge-case handling.
++Issues (if REQUEST_CHANGES):
++- `reviews/skill-audit.md` is missing -> produce the Skill-Auditor report at that exact path, then rerun review.
++- Required existence test failed -> ensure `test -f reviews/skill-audit.md && echo 'audit exists'` prints `audit exists`.
++- Audit report format could not be checked -> include the specified table with all required columns filled.
+
+tokens used
+14,895
+

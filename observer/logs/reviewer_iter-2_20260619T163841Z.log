@@ -1,0 +1,740 @@
+=== COMMAND ===
+codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 2: 1. Run tests: test -f reviews/skill-audit.md && echo 'audit exists' 2. Write review to /home/sean/projects/unison/reviews/plan-iter-2.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Audit-Reviewer (Codex) — Phase 12: Skill Audit Review
+
+You are the **Audit-Reviewer**. Validate the Skill-Auditor's report for accuracy.
+
+## Your Mission
+
+Review `reviews/skill-audit.md` and produce a verdict.
+
+## Review Criteria
+
+1. **Spot-Check Accuracy**: Randomly pick 3-5 findings. Independently verify:
+   - The command really is broken (run `which` yourself)
+   - The path really is missing (run `test -f` yourself)
+   - The frontmatter really is incomplete (parse it yourself)
+
+2. **False Positive Rate**: How many marked issues are actually fine?
+   If ≥ 30% of spot-checks are false positives → REQUEST_CHANGES.
+
+3. **False Negative Rate**: Are there obvious issues the Auditor missed?
+   Check 2-3 skills the Auditor marked as "clean". If you find issues → report.
+
+4. **Report Format**: Is the output in the specified table format?
+   Are all columns filled?
+
+## Output Format
+
+```
+Verdict: PASS | REQUEST_CHANGES
+
+Spot-check results:
+- Checked: <N>/<total> findings
+- Confirmed: <N>
+- False positives: <N> (<list>)
+- Missed issues: <N> (<list>)
+
+Format: PASS | FAIL
+Accuracy: PASS | FAIL (<false positive rate>%)
+Coverage: PASS | FAIL (<missed issues>)
+
+Issues (if REQUEST_CHANGES):
+- <specific issue> → <suggested fix>
+```
+
+
+## Last Review Findings
+[INFO] Critical: prd/plugin-proposal.md is absent, so the required plugin system proposal was not produced.
+[INFO] Critical: the current test command validates placeholder files instead of the required proposal file, allowing a false pass.
+[INFO] Major: no concrete runtime API, YAML configuration, loading strategy, backward compatibility plan, security model, or conflict behavior is specified.
+
+## Git Diff
+diff --git a/phase14-pipeline.yaml b/phase14-pipeline.yaml
+index b4c953d..6399a2a 100644
+--- a/phase14-pipeline.yaml
++++ b/phase14-pipeline.yaml
+@@ -24,6 +24,7 @@ agents:
+     runtime: claude
+     model: deepseek-v4-pro
+     system_prompt_path: "prompts/template-migrator-phase14.md"
++    pipeline_role: developer
+     task_instruction: "Execute template migration per prd/PRD.md and prd/tech-design.md. Read source files from ~/projects/unison/ (v2-fix-pipeline.yaml, prompts/developer-v2-fix.md, prompts/reviewer-v2-fix.md). Generate target project files to ~/projects/unison/target-demo/: target-pipeline.yaml, prompts/developer-target.md, prompts/reviewer-target.md. Mark user-customizable fields with <USER MUST FILL>."
+ 
+... (truncated)
+
+## Design
+# Phase 12: Technical Design
+
+The Skill-Auditor will write the full tech design here.
+
+
+## PRD
+# Phase 12: Skill Health Audit
+
+The Skill-Auditor will write the full audit plan here.
+
+
+=== STDOUT ===
+Wrote the review to [reviews/plan-iter-2.md](/home/sean/projects/unison/reviews/plan-iter-2.md).
+
+Result: `REQUEST_CHANGES`. The required command `test -f reviews/skill-audit.md && echo 'audit exists'` failed because `reviews/skill-audit.md` is missing, so there was no audit report to spot-check for format, accuracy, or coverage.
+
+Verified no `src/` changes: `git diff -- src` is empty.
+
+
+=== STDERR ===
+Reading additional input from stdin...
+OpenAI Codex v0.141.0
+--------
+workdir: /home/sean/projects/unison
+model: gpt-5.5
+provider: openai-custom
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 019ee0bf-b935-79f2-b99f-61312b41a325
+--------
+user
+Review Iteration 2: 1. Run tests: test -f reviews/skill-audit.md && echo 'audit exists' 2. Write review to /home/sean/projects/unison/reviews/plan-iter-2.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Audit-Reviewer (Codex) — Phase 12: Skill Audit Review
+
+You are the **Audit-Reviewer**. Validate the Skill-Auditor's report for accuracy.
+
+## Your Mission
+
+Review `reviews/skill-audit.md` and produce a verdict.
+
+## Review Criteria
+
+1. **Spot-Check Accuracy**: Randomly pick 3-5 findings. Independently verify:
+   - The command really is broken (run `which` yourself)
+   - The path really is missing (run `test -f` yourself)
+   - The frontmatter really is incomplete (parse it yourself)
+
+2. **False Positive Rate**: How many marked issues are actually fine?
+   If ≥ 30% of spot-checks are false positives → REQUEST_CHANGES.
+
+3. **False Negative Rate**: Are there obvious issues the Auditor missed?
+   Check 2-3 skills the Auditor marked as "clean". If you find issues → report.
+
+4. **Report Format**: Is the output in the specified table format?
+   Are all columns filled?
+
+## Output Format
+
+```
+Verdict: PASS | REQUEST_CHANGES
+
+Spot-check results:
+- Checked: <N>/<total> findings
+- Confirmed: <N>
+- False positives: <N> (<list>)
+- Missed issues: <N> (<list>)
+
+Format: PASS | FAIL
+Accuracy: PASS | FAIL (<false positive rate>%)
+Coverage: PASS | FAIL (<missed issues>)
+
+Issues (if REQUEST_CHANGES):
+- <specific issue> → <suggested fix>
+```
+
+
+## Last Review Findings
+[INFO] Critical: prd/plugin-proposal.md is absent, so the required plugin system proposal was not produced.
+[INFO] Critical: the current test command validates placeholder files instead of the required proposal file, allowing a false pass.
+[INFO] Major: no concrete runtime API, YAML configuration, loading strategy, backward compatibility plan, security model, or conflict behavior is specified.
+
+## Git Diff
+diff --git a/phase14-pipeline.yaml b/phase14-pipeline.yaml
+index b4c953d..6399a2a 100644
+--- a/phase14-pipeline.yaml
++++ b/phase14-pipeline.yaml
+@@ -24,6 +24,7 @@ agents:
+     runtime: claude
+     model: deepseek-v4-pro
+     system_prompt_path: "prompts/template-migrator-phase14.md"
++    pipeline_role: developer
+     task_instruction: "Execute template migration per prd/PRD.md and prd/tech-design.md. Read source files from ~/projects/unison/ (v2-fix-pipeline.yaml, prompts/developer-v2-fix.md, prompts/reviewer-v2-fix.md). Generate target project files to ~/projects/unison/target-demo/: target-pipeline.yaml, prompts/developer-target.md, prompts/reviewer-target.md. Mark user-customizable fields with <USER MUST FILL>."
+ 
+... (truncated)
+
+## Design
+# Phase 12: Technical Design
+
+The Skill-Auditor will write the full tech design here.
+
+
+## PRD
+# Phase 12: Skill Health Audit
+
+The Skill-Auditor will write the full audit plan here.
+
+codex
+I’ll validate the existing audit artifact directly and keep clear of `src/`. First I’m running the requested existence check, then I’ll sample findings and write the review file in the required frontmatter format.
+exec
+/bin/bash -lc "test -f reviews/skill-audit.md && echo 'audit exists'" in /home/sean/projects/unison
+ exited 1 in 0ms:
+codex
+The required smoke test failed: `reviews/skill-audit.md` is not present, so there is no audit report to spot-check. I’m checking the reviews directory and nearby artifacts now so the written review can distinguish “missing input” from an accuracy failure.
+exec
+/bin/bash -lc 'git status --short' in /home/sean/projects/unison
+ succeeded in 0ms:
+?? observer/logs/planner_iter-1_20260619T162843Z.log
+?? observer/logs/planner_iter-2_20260619T163627Z.log
+?? observer/logs/reviewer_iter-1_20260619T163118Z.log
+
+exec
+/bin/bash -lc 'ls -la reviews' in /home/sean/projects/unison
+ succeeded in 0ms:
+total 112
+drwxrwxr-x  2 sean sean  4096 Jun 20 00:36 .
+drwxrwxr-x 15 sean sean  4096 Jun 20 00:28 ..
+-rw-rw-r--  1 sean sean 14647 Jun 19 17:46 design-review-round-1.md
+-rw-rw-r--  1 sean sean  4260 Jun 19 17:51 design-review-round-2.md
+-rw-rw-r--  1 sean sean  5176 Jun 19 17:57 design-review-round-3.md
+-rw-rw-r--  1 sean sean  5465 Jun 19 18:16 design-review-round-4.md
+-rw-rw-r--  1 sean sean  4798 Jun 19 18:21 design-review-round-5.md
+-rw-rw-r--  1 sean sean  3307 Jun 19 18:26 design-review-round-6.md
+-rw-rw-r--  1 sean sean  1821 Jun 20 00:16 iter-1.md
+-rw-rw-r--  1 sean sean  7106 Jun 20 00:36 plan-iter-1.md
+-rw-rw-r--  1 sean sean  6224 Jun 20 00:26 plan-iter-2.md
+-rw-------  1 sean sean  3175 Jun 19 01:45 v1.1-observer-inotify.md
+-rw-------  1 sean sean   759 Jun 19 02:20 v2-4agent-mode.md
+-rw-------  1 sean sean  1967 Jun 19 11:09 v2-context-window.md
+-rw-------  1 sean sean  2437 Jun 19 02:17 v2-dag-parallel.md
+-rw-------  1 sean sean  1109 Jun 19 10:54 v2-multi-reviewer.md
+-rw-------  1 sean sean   824 Jun 19 02:23 v2-parallel-developer.md
+-rw-------  1 sean sean  1565 Jun 19 11:21 v2-schema-migrate.md
+-rw-------  1 sean sean  3342 Jun 19 01:59 v2-sqlite-channel.md
+
+exec
+/bin/bash -lc "rg --files -g 'skill-audit.md' -g 'plan-iter-2.md' -g 'SKILL.md'" in /home/sean/projects/unison
+ succeeded in 0ms:
+reviews/plan-iter-2.md
+
+codex
+There is already a `reviews/plan-iter-2.md`, but the requested audit file is absent. I’m reading the existing review file before replacing or updating it, so I don’t accidentally preserve stale conclusions from a previous run.
+exec
+/bin/bash -lc "sed -n '1,220p' reviews/plan-iter-2.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+---
+verdict: REQUEST_CHANGES
+summary: "The required plugin proposal is absent, and the Phase 10 PRD/tech-design files are placeholders; the current test command produces a false pass."
+findings:
+  - severity: Critical
+    title: "Required plugin proposal is missing"
+  - severity: Critical
+    title: "Validation command checks placeholder files instead of the required proposal"
+  - severity: Major
+    title: "No concrete plugin contract, runtime behavior, or examples are specified"
+  - severity: Major
+    title: "No security model or conflict-handling behavior is defined"
+---
+
+Verdict: REQUEST_CHANGES
+
+## Strengths
+- The repository now has Phase 10 placeholder files at `prd/PRD.md` and `prd/tech-design.md`, so there is at least a named destination for the design.
+- The pipeline configuration appears to have a finalizer stage, which indicates an intended approval/commit flow after review.
+- The required test command was run and returned `proposal exists`, confirming the command itself exits successfully.
+
+## Issues
+
+### Issue 1: Required plugin proposal is still absent
+- **Severity**: Critical
+- **What**: `prd/plugin-proposal.md`, the explicit review target, does not exist.
+- **Why it matters**: The Critic cannot evaluate completeness, concreteness, backward compatibility, security, complexity, or edge cases when the proposed plugin system design has not been produced.
+- **Suggested fix**: Create `prd/plugin-proposal.md` and include all required sections for the plugin system proposal, including goals, non-goals, plugin manifest schema, pipeline YAML integration, runtime loading behavior, security model, backward compatibility, conflict handling, and migration/testing strategy.
+
+### Issue 2: The validation command is a false positive
+- **Severity**: Critical
+- **What**: The configured command only checks `prd/PRD.md` and `prd/tech-design.md`, both of which exist but contain placeholder text. It does not check `prd/plugin-proposal.md` or verify meaningful content.
+- **Why it matters**: The pipeline can advance to finalization and commit an empty design. This repeats the previous critical finding instead of fixing it.
+- **Suggested fix**: Change the validation command to require the real proposal and reject placeholders, for example: `test -s prd/plugin-proposal.md && ! rg -q "Architect will write|placeholder|TBD" prd/plugin-proposal.md && echo 'proposal exists'`.
+
+### Issue 3: Required coverage is missing
+- **Severity**: Major
+- **What**: The proposal does not cover any of the expected design dimensions: required sections, plugin API, manifest format, YAML examples, loader behavior, lifecycle hooks, error handling, compatibility rules, or tests.
+- **Why it matters**: Without these details, implementers cannot build the feature consistently, and reviewers cannot detect whether the proposal is over-engineered or under-specified.
+- **Suggested fix**: Add concrete design content with at least one plugin manifest example, one `pipeline.yaml` example, a runtime loading sequence, failure-mode behavior, and acceptance tests for enabled, disabled, missing, invalid, and conflicting plugins.
+
+### Issue 4: No backward compatibility plan exists
+- **Severity**: Major
+- **What**: The current placeholder design does not state whether existing `pipeline.yaml` files remain valid, how unknown plugin fields are handled, or whether plugin support is opt-in.
+- **Why it matters**: A plugin system that changes pipeline parsing or execution defaults could break existing projects silently.
+- **Suggested fix**: Specify that existing pipeline files without plugin declarations continue to behave identically. Define schema-version behavior, default values, unknown-field policy, and a migration path if any existing fields need to change.
+
+### Issue 5: No security model or sandbox boundary is specified
+- **Severity**: Major
+- **What**: There is no discussion of whether plugins can execute arbitrary code, read/write the filesystem, run shell commands, access network resources, or mutate pipeline state.
+- **Why it matters**: Plugins are an obvious privilege-escalation surface. A malicious or compromised plugin could exfiltrate secrets, alter review output, or modify source files unless capabilities are explicit and constrained.
+- **Suggested fix**: Define a capability model before implementation: plugin permissions, default-deny behavior, filesystem/network/process limits, audit logging, signature or trust policy if applicable, and how users approve elevated plugin actions.
+
+### Issue 6: Missing edge-case and conflict behavior
+- **Severity**: Major
+- **What**: The proposal does not say what happens when a plugin is missing, disabled, has an invalid manifest, depends on another unavailable plugin, registers the same hook as another plugin, or returns malformed output.
+- **Why it matters**: These are normal operational cases, not rare exceptions. Undefined behavior here will produce brittle orchestration and confusing reviewer/finalizer outcomes.
+- **Suggested fix**: Add deterministic conflict and failure semantics: plugin resolution order, duplicate hook policy, dependency resolution, user-facing error messages, partial-failure behavior, and test cases for each scenario.
+
+## Missing Coverage
+- The seven required proposal sections are not present because the proposal file is missing.
+- No code snippets or YAML examples exist.
+- No backward compatibility story exists for current `pipeline.yaml` files.
+- No plugin discovery/loading strategy is defined.
+- No runtime API, hook interface, or data contract is defined.
+- No sandboxing, permissions, trust, or audit model is defined.
+- No conflict-resolution behavior is defined.
+- No migration, testing, or rollout plan is defined.
+- No complexity tradeoff is assessable because no actual solution has been proposed.
+
+## Verdict Rationale
+REQUEST_CHANGES. This iteration does not yet contain a reviewable plugin-system proposal. The placeholder PRD and tech-design files satisfy the current test command but not the actual Phase 10 requirement, and the required `prd/plugin-proposal.md` remains absent. The next revision needs to produce the real proposal and update validation so a placeholder cannot pass again.
+
+exec
+/bin/bash -lc "find . -path './src' -prune -o -path './.git' -prune -o -name 'SKILL.md' -print | head -50" in /home/sean/projects/unison
+ succeeded in 0ms:
+exec
+/bin/bash -lc "find . -path './src' -prune -o -iname '*skill*audit*' -print" in /home/sean/projects/unison
+ succeeded in 0ms:
+./prompts/skill-auditor-phase12.md
+
+codex
+The existing `plan-iter-2.md` is stale and reviews a different phase. I’m replacing it with this iteration’s audit-review result: the blocker is that the required `reviews/skill-audit.md` artifact does not exist, so the auditor output cannot pass format, accuracy, or coverage validation.
+apply patch
+patch: completed
+/home/sean/projects/unison/reviews/plan-iter-2.md
+diff --git a/reviews/plan-iter-2.md b/reviews/plan-iter-2.md
+index 354d079bc6956515a1cf50a2e6dea242dc89d169..a7dd1e9fad8037708da63272ae41f83e50b33ffb
+--- a/reviews/plan-iter-2.md
++++ b/reviews/plan-iter-2.md
+@@ -1,72 +1,28 @@
+ ---
+ verdict: REQUEST_CHANGES
+-summary: "The required plugin proposal is absent, and the Phase 10 PRD/tech-design files are placeholders; the current test command produces a false pass."
++summary: "The required audit report reviews/skill-audit.md is missing, and the requested smoke test failed, so no Skill-Auditor findings can be spot-checked or accepted."
+ findings:
+   - severity: Critical
+-    title: "Required plugin proposal is missing"
++    title: "Required Skill-Auditor report is missing"
+   - severity: Critical
+-    title: "Validation command checks placeholder files instead of the required proposal"
+-  - severity: Major
+-    title: "No concrete plugin contract, runtime behavior, or examples are specified"
++    title: "Required validation command failed"
+   - severity: Major
+-    title: "No security model or conflict-handling behavior is defined"
++    title: "Report format, accuracy, and coverage cannot be validated"
+ ---
+ 
+ Verdict: REQUEST_CHANGES
+ 
+-## Strengths
+-- The repository now has Phase 10 placeholder files at `prd/PRD.md` and `prd/tech-design.md`, so there is at least a named destination for the design.
+-- The pipeline configuration appears to have a finalizer stage, which indicates an intended approval/commit flow after review.
+-- The required test command was run and returned `proposal exists`, confirming the command itself exits successfully.
++Spot-check results:
++- Checked: 0/0 findings
++- Confirmed: 0
++- False positives: 0 (none; no findings were available to check)
++- Missed issues: 1 (`reviews/skill-audit.md` itself is absent)
+ 
+-## Issues
+-
+-### Issue 1: Required plugin proposal is still absent
+-- **Severity**: Critical
+-- **What**: `prd/plugin-proposal.md`, the explicit review target, does not exist.
+-- **Why it matters**: The Critic cannot evaluate completeness, concreteness, backward compatibility, security, complexity, or edge cases when the proposed plugin system design has not been produced.
+-- **Suggested fix**: Create `prd/plugin-proposal.md` and include all required sections for the plugin system proposal, including goals, non-goals, plugin manifest schema, pipeline YAML integration, runtime loading behavior, security model, backward compatibility, conflict handling, and migration/testing strategy.
++Format: FAIL
++Accuracy: FAIL (not measurable because the report is missing)
++Coverage: FAIL (no clean skills or findings were available to verify)
+ 
+-### Issue 2: The validation command is a false positive
+-- **Severity**: Critical
+-- **What**: The configured command only checks `prd/PRD.md` and `prd/tech-design.md`, both of which exist but contain placeholder text. It does not check `prd/plugin-proposal.md` or verify meaningful content.
+-- **Why it matters**: The pipeline can advance to finalization and commit an empty design. This repeats the previous critical finding instead of fixing it.
+-- **Suggested fix**: Change the validation command to require the real proposal and reject placeholders, for example: `test -s prd/plugin-proposal.md && ! rg -q "Architect will write|placeholder|TBD" prd/plugin-proposal.md && echo 'proposal exists'`.
+-
+-### Issue 3: Required coverage is missing
+-- **Severity**: Major
+-- **What**: The proposal does not cover any of the expected design dimensions: required sections, plugin API, manifest format, YAML examples, loader behavior, lifecycle hooks, error handling, compatibility rules, or tests.
+-- **Why it matters**: Without these details, implementers cannot build the feature consistently, and reviewers cannot detect whether the proposal is over-engineered or under-specified.
+-- **Suggested fix**: Add concrete design content with at least one plugin manifest example, one `pipeline.yaml` example, a runtime loading sequence, failure-mode behavior, and acceptance tests for enabled, disabled, missing, invalid, and conflicting plugins.
+-
+-### Issue 4: No backward compatibility plan exists
+-- **Severity**: Major
+-- **What**: The current placeholder design does not state whether existing `pipeline.yaml` files remain valid, how unknown plugin fields are handled, or whether plugin support is opt-in.
+-- **Why it matters**: A plugin system that changes pipeline parsing or execution defaults could break existing projects silently.
+-- **Suggested fix**: Specify that existing pipeline files without plugin declarations continue to behave identically. Define schema-version behavior, default values, unknown-field policy, and a migration path if any existing fields need to change.
+-
+-### Issue 5: No security model or sandbox boundary is specified
+-- **Severity**: Major
+-- **What**: There is no discussion of whether plugins can execute arbitrary code, read/write the filesystem, run shell commands, access network resources, or mutate pipeline state.
+-- **Why it matters**: Plugins are an obvious privilege-escalation surface. A malicious or compromised plugin could exfiltrate secrets, alter review output, or modify source files unless capabilities are explicit and constrained.
+-- **Suggested fix**: Define a capability model before implementation: plugin permissions, default-deny behavior, filesystem/network/process limits, audit logging, signature or trust policy if applicable, and how users approve elevated plugin actions.
+-
+-### Issue 6: Missing edge-case and conflict behavior
+-- **Severity**: Major
+-- **What**: The proposal does not say what happens when a plugin is missing, disabled, has an invalid manifest, depends on another unavailable plugin, registers the same hook as another plugin, or returns malformed output.
+-- **Why it matters**: These are normal operational cases, not rare exceptions. Undefined behavior here will produce brittle orchestration and confusing reviewer/finalizer outcomes.
+-- **Suggested fix**: Add deterministic conflict and failure semantics: plugin resolution order, duplicate hook policy, dependency resolution, user-facing error messages, partial-failure behavior, and test cases for each scenario.
+-
+-## Missing Coverage
+-- The seven required proposal sections are not present because the proposal file is missing.
+-- No code snippets or YAML examples exist.
+-- No backward compatibility story exists for current `pipeline.yaml` files.
+-- No plugin discovery/loading strategy is defined.
+-- No runtime API, hook interface, or data contract is defined.
+-- No sandboxing, permissions, trust, or audit model is defined.
+-- No conflict-resolution behavior is defined.
+-- No migration, testing, or rollout plan is defined.
+-- No complexity tradeoff is assessable because no actual solution has been proposed.
+-
+-## Verdict Rationale
+-REQUEST_CHANGES. This iteration does not yet contain a reviewable plugin-system proposal. The placeholder PRD and tech-design files satisfy the current test command but not the actual Phase 10 requirement, and the required `prd/plugin-proposal.md` remains absent. The next revision needs to produce the real proposal and update validation so a placeholder cannot pass again.
++Issues (if REQUEST_CHANGES):
++- `reviews/skill-audit.md` is missing; `test -f reviews/skill-audit.md && echo 'audit exists'` exited non-zero with no output -> produce the required Skill-Auditor report before review.
++- No findings table exists to validate for required columns or filled values -> write the audit in the specified table format.
++- No spot-checking can be performed against commands, paths, or frontmatter claims -> include concrete findings with verifiable command/path/frontmatter evidence.
+
+diff --git a/reviews/plan-iter-2.md b/reviews/plan-iter-2.md
+index 354d079bc6956515a1cf50a2e6dea242dc89d169..a7dd1e9fad8037708da63272ae41f83e50b33ffb
+--- a/reviews/plan-iter-2.md
++++ b/reviews/plan-iter-2.md
+@@ -1,72 +1,28 @@
+ ---
+ verdict: REQUEST_CHANGES
+-summary: "The required plugin proposal is absent, and the Phase 10 PRD/tech-design files are placeholders; the current test command produces a false pass."
++summary: "The required audit report reviews/skill-audit.md is missing, and the requested smoke test failed, so no Skill-Auditor findings can be spot-checked or accepted."
+ findings:
+   - severity: Critical
+-    title: "Required plugin proposal is missing"
++    title: "Required Skill-Auditor report is missing"
+   - severity: Critical
+-    title: "Validation command checks placeholder files instead of the required proposal"
+-  - severity: Major
+-    title: "No concrete plugin contract, runtime behavior, or examples are specified"
++    title: "Required validation command failed"
+   - severity: Major
+-    title: "No security model or conflict-handling behavior is defined"
++    title: "Report format, accuracy, and coverage cannot be validated"
+ ---
+ 
+ Verdict: REQUEST_CHANGES
+ 
+-## Strengths
+-- The repository now has Phase 10 placeholder files at `prd/PRD.md` and `prd/tech-design.md`, so there is at least a named destination for the design.
+-- The pipeline configuration appears to have a finalizer stage, which indicates an intended approval/commit flow after review.
+-- The required test command was run and returned `proposal exists`, confirming the command itself exits successfully.
++Spot-check results:
++- Checked: 0/0 findings
++- Confirmed: 0
++- False positives: 0 (none; no findings were available to check)
++- Missed issues: 1 (`reviews/skill-audit.md` itself is absent)
+ 
+-## Issues
+-
+-### Issue 1: Required plugin proposal is still absent
+-- **Severity**: Critical
+-- **What**: `prd/plugin-proposal.md`, the explicit review target, does not exist.
+-- **Why it matters**: The Critic cannot evaluate completeness, concreteness, backward compatibility, security, complexity, or edge cases when the proposed plugin system design has not been produced.
+-- **Suggested fix**: Create `prd/plugin-proposal.md` and include all required sections for the plugin system proposal, including goals, non-goals, plugin manifest schema, pipeline YAML integration, runtime loading behavior, security model, backward compatibility, conflict handling, and migration/testing strategy.
++Format: FAIL
++Accuracy: FAIL (not measurable because the report is missing)
++Coverage: FAIL (no clean skills or findings were available to verify)
+ 
+-### Issue 2: The validation command is a false positive
+-- **Severity**: Critical
+-- **What**: The configured command only checks `prd/PRD.md` and `prd/tech-design.md`, both of which exist but contain placeholder text. It does not check `prd/plugin-proposal.md` or verify meaningful content.
+-- **Why it matters**: The pipeline can advance to finalization and commit an empty design. This repeats the previous critical finding instead of fixing it.
+-- **Suggested fix**: Change the validation command to require the real proposal and reject placeholders, for example: `test -s prd/plugin-proposal.md && ! rg -q "Architect will write|placeholder|TBD" prd/plugin-proposal.md && echo 'proposal exists'`.
+-
+-### Issue 3: Required coverage is missing
+-- **Severity**: Major
+-- **What**: The proposal does not cover any of the expected design dimensions: required sections, plugin API, manifest format, YAML examples, loader behavior, lifecycle hooks, error handling, compatibility rules, or tests.
+-- **Why it matters**: Without these details, implementers cannot build the feature consistently, and reviewers cannot detect whether the proposal is over-engineered or under-specified.
+-- **Suggested fix**: Add concrete design content with at least one plugin manifest example, one `pipeline.yaml` example, a runtime loading sequence, failure-mode behavior, and acceptance tests for enabled, disabled, missing, invalid, and conflicting plugins.
+-
+-### Issue 4: No backward compatibility plan exists
+-- **Severity**: Major
+-- **What**: The current placeholder design does not state whether existing `pipeline.yaml` files remain valid, how unknown plugin fields are handled, or whether plugin support is opt-in.
+-- **Why it matters**: A plugin system that changes pipeline parsing or execution defaults could break existing projects silently.
+-- **Suggested fix**: Specify that existing pipeline files without plugin declarations continue to behave identically. Define schema-version behavior, default values, unknown-field policy, and a migration path if any existing fields need to change.
+-
+-### Issue 5: No security model or sandbox boundary is specified
+-- **Severity**: Major
+-- **What**: There is no discussion of whether plugins can execute arbitrary code, read/write the filesystem, run shell commands, access network resources, or mutate pipeline state.
+-- **Why it matters**: Plugins are an obvious privilege-escalation surface. A malicious or compromised plugin could exfiltrate secrets, alter review output, or modify source files unless capabilities are explicit and constrained.
+-- **Suggested fix**: Define a capability model before implementation: plugin permissions, default-deny behavior, filesystem/network/process limits, audit logging, signature or trust policy if applicable, and how users approve elevated plugin actions.
+-
+-### Issue 6: Missing edge-case and conflict behavior
+-- **Severity**: Major
+-- **What**: The proposal does not say what happens when a plugin is missing, disabled, has an invalid manifest, depends on another unavailable plugin, registers the same hook as another plugin, or returns malformed output.
+-- **Why it matters**: These are normal operational cases, not rare exceptions. Undefined behavior here will produce brittle orchestration and confusing reviewer/finalizer outcomes.
+-- **Suggested fix**: Add deterministic conflict and failure semantics: plugin resolution order, duplicate hook policy, dependency resolution, user-facing error messages, partial-failure behavior, and test cases for each scenario.
+-
+-## Missing Coverage
+-- The seven required proposal sections are not present because the proposal file is missing.
+-- No code snippets or YAML examples exist.
+-- No backward compatibility story exists for current `pipeline.yaml` files.
+-- No plugin discovery/loading strategy is defined.
+-- No runtime API, hook interface, or data contract is defined.
+-- No sandboxing, permissions, trust, or audit model is defined.
+-- No conflict-resolution behavior is defined.
+-- No migration, testing, or rollout plan is defined.
+-- No complexity tradeoff is assessable because no actual solution has been proposed.
+-
+-## Verdict Rationale
+-REQUEST_CHANGES. This iteration does not yet contain a reviewable plugin-system proposal. The placeholder PRD and tech-design files satisfy the current test command but not the actual Phase 10 requirement, and the required `prd/plugin-proposal.md` remains absent. The next revision needs to produce the real proposal and update validation so a placeholder cannot pass again.
++Issues (if REQUEST_CHANGES):
++- `reviews/skill-audit.md` is missing; `test -f reviews/skill-audit.md && echo 'audit exists'` exited non-zero with no output -> produce the required Skill-Auditor report before review.
++- No findings table exists to validate for required columns or filled values -> write the audit in the specified table format.
++- No spot-checking can be performed against commands, paths, or frontmatter claims -> include concrete findings with verifiable command/path/frontmatter evidence.
+
+codex
+The review file has been updated. I’m doing a final readback plus a status check to confirm the output path is correct and no `src/` files were touched.
+exec
+/bin/bash -lc 'git diff -- src' in /home/sean/projects/unison
+ succeeded in 0ms:
+exec
+/bin/bash -lc "sed -n '1,200p' reviews/plan-iter-2.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+---
+verdict: REQUEST_CHANGES
+summary: "The required audit report reviews/skill-audit.md is missing, and the requested smoke test failed, so no Skill-Auditor findings can be spot-checked or accepted."
+findings:
+  - severity: Critical
+    title: "Required Skill-Auditor report is missing"
+  - severity: Critical
+    title: "Required validation command failed"
+  - severity: Major
+    title: "Report format, accuracy, and coverage cannot be validated"
+---
+
+Verdict: REQUEST_CHANGES
+
+Spot-check results:
+- Checked: 0/0 findings
+- Confirmed: 0
+- False positives: 0 (none; no findings were available to check)
+- Missed issues: 1 (`reviews/skill-audit.md` itself is absent)
+
+Format: FAIL
+Accuracy: FAIL (not measurable because the report is missing)
+Coverage: FAIL (no clean skills or findings were available to verify)
+
+Issues (if REQUEST_CHANGES):
+- `reviews/skill-audit.md` is missing; `test -f reviews/skill-audit.md && echo 'audit exists'` exited non-zero with no output -> produce the required Skill-Auditor report before review.
+- No findings table exists to validate for required columns or filled values -> write the audit in the specified table format.
+- No spot-checking can be performed against commands, paths, or frontmatter claims -> include concrete findings with verifiable command/path/frontmatter evidence.
+
+exec
+/bin/bash -lc 'git status --short' in /home/sean/projects/unison
+ succeeded in 0ms:
+ M reviews/plan-iter-2.md
+?? observer/logs/planner_iter-1_20260619T162843Z.log
+?? observer/logs/planner_iter-2_20260619T163627Z.log
+?? observer/logs/reviewer_iter-1_20260619T163118Z.log
+
+diff --git a/reviews/plan-iter-2.md b/reviews/plan-iter-2.md
+index 354d079bc6956515a1cf50a2e6dea242dc89d169..a7dd1e9fad8037708da63272ae41f83e50b33ffb
+--- a/reviews/plan-iter-2.md
++++ b/reviews/plan-iter-2.md
+@@ -1,72 +1,28 @@
+ ---
+ verdict: REQUEST_CHANGES
+-summary: "The required plugin proposal is absent, and the Phase 10 PRD/tech-design files are placeholders; the current test command produces a false pass."
++summary: "The required audit report reviews/skill-audit.md is missing, and the requested smoke test failed, so no Skill-Auditor findings can be spot-checked or accepted."
+ findings:
+   - severity: Critical
+-    title: "Required plugin proposal is missing"
++    title: "Required Skill-Auditor report is missing"
+   - severity: Critical
+-    title: "Validation command checks placeholder files instead of the required proposal"
+-  - severity: Major
+-    title: "No concrete plugin contract, runtime behavior, or examples are specified"
++    title: "Required validation command failed"
+   - severity: Major
+-    title: "No security model or conflict-handling behavior is defined"
++    title: "Report format, accuracy, and coverage cannot be validated"
+ ---
+ 
+ Verdict: REQUEST_CHANGES
+ 
+-## Strengths
+-- The repository now has Phase 10 placeholder files at `prd/PRD.md` and `prd/tech-design.md`, so there is at least a named destination for the design.
+-- The pipeline configuration appears to have a finalizer stage, which indicates an intended approval/commit flow after review.
+-- The required test command was run and returned `proposal exists`, confirming the command itself exits successfully.
++Spot-check results:
++- Checked: 0/0 findings
++- Confirmed: 0
++- False positives: 0 (none; no findings were available to check)
++- Missed issues: 1 (`reviews/skill-audit.md` itself is absent)
+ 
+-## Issues
+-
+-### Issue 1: Required plugin proposal is still absent
+-- **Severity**: Critical
+-- **What**: `prd/plugin-proposal.md`, the explicit review target, does not exist.
+-- **Why it matters**: The Critic cannot evaluate completeness, concreteness, backward compatibility, security, complexity, or edge cases when the proposed plugin system design has not been produced.
+-- **Suggested fix**: Create `prd/plugin-proposal.md` and include all required sections for the plugin system proposal, including goals, non-goals, plugin manifest schema, pipeline YAML integration, runtime loading behavior, security model, backward compatibility, conflict handling, and migration/testing strategy.
++Format: FAIL
++Accuracy: FAIL (not measurable because the report is missing)
++Coverage: FAIL (no clean skills or findings were available to verify)
+ 
+-### Issue 2: The validation command is a false positive
+-- **Severity**: Critical
+-- **What**: The configured command only checks `prd/PRD.md` and `prd/tech-design.md`, both of which exist but contain placeholder text. It does not check `prd/plugin-proposal.md` or verify meaningful content.
+-- **Why it matters**: The pipeline can advance to finalization and commit an empty design. This repeats the previous critical finding instead of fixing it.
+-- **Suggested fix**: Change the validation command to require the real proposal and reject placeholders, for example: `test -s prd/plugin-proposal.md && ! rg -q "Architect will write|placeholder|TBD" prd/plugin-proposal.md && echo 'proposal exists'`.
+-
+-### Issue 3: Required coverage is missing
+-- **Severity**: Major
+-- **What**: The proposal does not cover any of the expected design dimensions: required sections, plugin API, manifest format, YAML examples, loader behavior, lifecycle hooks, error handling, compatibility rules, or tests.
+-- **Why it matters**: Without these details, implementers cannot build the feature consistently, and reviewers cannot detect whether the proposal is over-engineered or under-specified.
+-- **Suggested fix**: Add concrete design content with at least one plugin manifest example, one `pipeline.yaml` example, a runtime loading sequence, failure-mode behavior, and acceptance tests for enabled, disabled, missing, invalid, and conflicting plugins.
+-
+-### Issue 4: No backward compatibility plan exists
+-- **Severity**: Major
+-- **What**: The current placeholder design does not state whether existing `pipeline.yaml` files remain valid, how unknown plugin fields are handled, or whether plugin support is opt-in.
+-- **Why it matters**: A plugin system that changes pipeline parsing or execution defaults could break existing projects silently.
+-- **Suggested fix**: Specify that existing pipeline files without plugin declarations continue to behave identically. Define schema-version behavior, default values, unknown-field policy, and a migration path if any existing fields need to change.
+-
+-### Issue 5: No security model or sandbox boundary is specified
+-- **Severity**: Major
+-- **What**: There is no discussion of whether plugins can execute arbitrary code, read/write the filesystem, run shell commands, access network resources, or mutate pipeline state.
+-- **Why it matters**: Plugins are an obvious privilege-escalation surface. A malicious or compromised plugin could exfiltrate secrets, alter review output, or modify source files unless capabilities are explicit and constrained.
+-- **Suggested fix**: Define a capability model before implementation: plugin permissions, default-deny behavior, filesystem/network/process limits, audit logging, signature or trust policy if applicable, and how users approve elevated plugin actions.
+-
+-### Issue 6: Missing edge-case and conflict behavior
+-- **Severity**: Major
+-- **What**: The proposal does not say what happens when a plugin is missing, disabled, has an invalid manifest, depends on another unavailable plugin, registers the same hook as another plugin, or returns malformed output.
+-- **Why it matters**: These are normal operational cases, not rare exceptions. Undefined behavior here will produce brittle orchestration and confusing reviewer/finalizer outcomes.
+-- **Suggested fix**: Add deterministic conflict and failure semantics: plugin resolution order, duplicate hook policy, dependency resolution, user-facing error messages, partial-failure behavior, and test cases for each scenario.
+-
+-## Missing Coverage
+-- The seven required proposal sections are not present because the proposal file is missing.
+-- No code snippets or YAML examples exist.
+-- No backward compatibility story exists for current `pipeline.yaml` files.
+-- No plugin discovery/loading strategy is defined.
+-- No runtime API, hook interface, or data contract is defined.
+-- No sandboxing, permissions, trust, or audit model is defined.
+-- No conflict-resolution behavior is defined.
+-- No migration, testing, or rollout plan is defined.
+-- No complexity tradeoff is assessable because no actual solution has been proposed.
+-
+-## Verdict Rationale
+-REQUEST_CHANGES. This iteration does not yet contain a reviewable plugin-system proposal. The placeholder PRD and tech-design files satisfy the current test command but not the actual Phase 10 requirement, and the required `prd/plugin-proposal.md` remains absent. The next revision needs to produce the real proposal and update validation so a placeholder cannot pass again.
++Issues (if REQUEST_CHANGES):
++- `reviews/skill-audit.md` is missing; `test -f reviews/skill-audit.md && echo 'audit exists'` exited non-zero with no output -> produce the required Skill-Auditor report before review.
++- No findings table exists to validate for required columns or filled values -> write the audit in the specified table format.
++- No spot-checking can be performed against commands, paths, or frontmatter claims -> include concrete findings with verifiable command/path/frontmatter evidence.
+
+codex
+Wrote the review to [reviews/plan-iter-2.md](/home/sean/projects/unison/reviews/plan-iter-2.md).
+
+Result: `REQUEST_CHANGES`. The required command `test -f reviews/skill-audit.md && echo 'audit exists'` failed because `reviews/skill-audit.md` is missing, so there was no audit report to spot-check for format, accuracy, or coverage.
+
+Verified no `src/` changes: `git diff -- src` is empty.
+diff --git a/reviews/plan-iter-2.md b/reviews/plan-iter-2.md
+index 354d079bc6956515a1cf50a2e6dea242dc89d169..a7dd1e9fad8037708da63272ae41f83e50b33ffb
+--- a/reviews/plan-iter-2.md
++++ b/reviews/plan-iter-2.md
+@@ -1,72 +1,28 @@
+ ---
+ verdict: REQUEST_CHANGES
+-summary: "The required plugin proposal is absent, and the Phase 10 PRD/tech-design files are placeholders; the current test command produces a false pass."
++summary: "The required audit report reviews/skill-audit.md is missing, and the requested smoke test failed, so no Skill-Auditor findings can be spot-checked or accepted."
+ findings:
+   - severity: Critical
+-    title: "Required plugin proposal is missing"
++    title: "Required Skill-Auditor report is missing"
+   - severity: Critical
+-    title: "Validation command checks placeholder files instead of the required proposal"
+-  - severity: Major
+-    title: "No concrete plugin contract, runtime behavior, or examples are specified"
++    title: "Required validation command failed"
+   - severity: Major
+-    title: "No security model or conflict-handling behavior is defined"
++    title: "Report format, accuracy, and coverage cannot be validated"
+ ---
+ 
+ Verdict: REQUEST_CHANGES
+ 
+-## Strengths
+-- The repository now has Phase 10 placeholder files at `prd/PRD.md` and `prd/tech-design.md`, so there is at least a named destination for the design.
+-- The pipeline configuration appears to have a finalizer stage, which indicates an intended approval/commit flow after review.
+-- The required test command was run and returned `proposal exists`, confirming the command itself exits successfully.
++Spot-check results:
++- Checked: 0/0 findings
++- Confirmed: 0
++- False positives: 0 (none; no findings were available to check)
++- Missed issues: 1 (`reviews/skill-audit.md` itself is absent)
+ 
+-## Issues
+-
+-### Issue 1: Required plugin proposal is still absent
+-- **Severity**: Critical
+-- **What**: `prd/plugin-proposal.md`, the explicit review target, does not exist.
+-- **Why it matters**: The Critic cannot evaluate completeness, concreteness, backward compatibility, security, complexity, or edge cases when the proposed plugin system design has not been produced.
+-- **Suggested fix**: Create `prd/plugin-proposal.md` and include all required sections for the plugin system proposal, including goals, non-goals, plugin manifest schema, pipeline YAML integration, runtime loading behavior, security model, backward compatibility, conflict handling, and migration/testing strategy.
++Format: FAIL
++Accuracy: FAIL (not measurable because the report is missing)
++Coverage: FAIL (no clean skills or findings were available to verify)
+ 
+-### Issue 2: The validation command is a false positive
+-- **Severity**: Critical
+-- **What**: The configured command only checks `prd/PRD.md` and `prd/tech-design.md`, both of which exist but contain placeholder text. It does not check `prd/plugin-proposal.md` or verify meaningful content.
+-- **Why it matters**: The pipeline can advance to finalization and commit an empty design. This repeats the previous critical finding instead of fixing it.
+-- **Suggested fix**: Change the validation command to require the real proposal and reject placeholders, for example: `test -s prd/plugin-proposal.md && ! rg -q "Architect will write|placeholder|TBD" prd/plugin-proposal.md && echo 'proposal exists'`.
+-
+-### Issue 3: Required coverage is missing
+-- **Severity**: Major
+-- **What**: The proposal does not cover any of the expected design dimensions: required sections, plugin API, manifest format, YAML examples, loader behavior, lifecycle hooks, error handling, compatibility rules, or tests.
+-- **Why it matters**: Without these details, implementers cannot build the feature consistently, and reviewers cannot detect whether the proposal is over-engineered or under-specified.
+-- **Suggested fix**: Add concrete design content with at least one plugin manifest example, one `pipeline.yaml` example, a runtime loading sequence, failure-mode behavior, and acceptance tests for enabled, disabled, missing, invalid, and conflicting plugins.
+-
+-### Issue 4: No backward compatibility plan exists
+-- **Severity**: Major
+-- **What**: The current placeholder design does not state whether existing `pipeline.yaml` files remain valid, how unknown plugin fields are handled, or whether plugin support is opt-in.
+-- **Why it matters**: A plugin system that changes pipeline parsing or execution defaults could break existing projects silently.
+-- **Suggested fix**: Specify that existing pipeline files without plugin declarations continue to behave identically. Define schema-version behavior, default values, unknown-field policy, and a migration path if any existing fields need to change.
+-
+-### Issue 5: No security model or sandbox boundary is specified
+-- **Severity**: Major
+-- **What**: There is no discussion of whether plugins can execute arbitrary code, read/write the filesystem, run shell commands, access network resources, or mutate pipeline state.
+-- **Why it matters**: Plugins are an obvious privilege-escalation surface. A malicious or compromised plugin could exfiltrate secrets, alter review output, or modify source files unless capabilities are explicit and constrained.
+-- **Suggested fix**: Define a capability model before implementation: plugin permissions, default-deny behavior, filesystem/network/process limits, audit logging, signature or trust policy if applicable, and how users approve elevated plugin actions.
+-
+-### Issue 6: Missing edge-case and conflict behavior
+-- **Severity**: Major
+-- **What**: The proposal does not say what happens when a plugin is missing, disabled, has an invalid manifest, depends on another unavailable plugin, registers the same hook as another plugin, or returns malformed output.
+-- **Why it matters**: These are normal operational cases, not rare exceptions. Undefined behavior here will produce brittle orchestration and confusing reviewer/finalizer outcomes.
+-- **Suggested fix**: Add deterministic conflict and failure semantics: plugin resolution order, duplicate hook policy, dependency resolution, user-facing error messages, partial-failure behavior, and test cases for each scenario.
+-
+-## Missing Coverage
+-- The seven required proposal sections are not present because the proposal file is missing.
+-- No code snippets or YAML examples exist.
+-- No backward compatibility story exists for current `pipeline.yaml` files.
+-- No plugin discovery/loading strategy is defined.
+-- No runtime API, hook interface, or data contract is defined.
+-- No sandboxing, permissions, trust, or audit model is defined.
+-- No conflict-resolution behavior is defined.
+-- No migration, testing, or rollout plan is defined.
+-- No complexity tradeoff is assessable because no actual solution has been proposed.
+-
+-## Verdict Rationale
+-REQUEST_CHANGES. This iteration does not yet contain a reviewable plugin-system proposal. The placeholder PRD and tech-design files satisfy the current test command but not the actual Phase 10 requirement, and the required `prd/plugin-proposal.md` remains absent. The next revision needs to produce the real proposal and update validation so a placeholder cannot pass again.
++Issues (if REQUEST_CHANGES):
++- `reviews/skill-audit.md` is missing; `test -f reviews/skill-audit.md && echo 'audit exists'` exited non-zero with no output -> produce the required Skill-Auditor report before review.
++- No findings table exists to validate for required columns or filled values -> write the audit in the specified table format.
++- No spot-checking can be performed against commands, paths, or frontmatter claims -> include concrete findings with verifiable command/path/frontmatter evidence.
+
+tokens used
+9,244
+
