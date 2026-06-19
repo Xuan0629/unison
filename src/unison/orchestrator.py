@@ -564,26 +564,29 @@ class Orchestrator:
                     raw_path=review_path,
                 )
 
-        # Build ReviewerConfig
-        reconcile_strategy = os.environ.get(
-            "UNISON_REVIEWER_STRATEGY", "majority"
-        )
-        if reconcile_strategy not in ("majority", "unanimous"):
-            reconcile_strategy = "majority"
+        # Build ReviewerConfig — prefer spec.reviewer_config, fall back to env
+        if self.spec.reviewer_config is not None and self.spec.reviewer_config.enabled:
+            config = self.spec.reviewer_config
+        else:
+            reconcile_strategy = os.environ.get(
+                "UNISON_REVIEWER_STRATEGY", "majority"
+            )
+            if reconcile_strategy not in ("majority", "unanimous"):
+                reconcile_strategy = "majority"
 
-        try:
-            config = ReviewerConfig(
-                enabled=True,
-                count=reviewer_count,
-                reconcile_strategy=reconcile_strategy,  # type: ignore[arg-type]
-            )
-        except ValueError:
-            # Even count + majority → fall back to unanimous
-            config = ReviewerConfig(
-                enabled=True,
-                count=reviewer_count,
-                reconcile_strategy="unanimous",
-            )
+            try:
+                config = ReviewerConfig(
+                    enabled=True,
+                    count=reviewer_count,
+                    reconcile_strategy=reconcile_strategy,  # type: ignore[arg-type]
+                )
+            except ValueError:
+                # Even count + majority → fall back to unanimous
+                config = ReviewerConfig(
+                    enabled=True,
+                    count=reviewer_count,
+                    reconcile_strategy="unanimous",
+                )
 
         pool = ReviewerPool(config)
 
@@ -604,18 +607,24 @@ class Orchestrator:
 
         final = pool.reconcile_verdicts(verdicts, iter_n=iteration)
 
-        # Write reconciled verdict to main review file so _parse_verdict()
-        # finds it on the standard verdict routing path
-        review_path = world.review_file(iteration)
+        # Write reconciled verdict to the review-path helper location
+        # (Phase 6: uses _review_file_for_phase, not world.review_file)
+        review_path = self._review_file_for_phase("dev_review", iteration)
         review_path.parent.mkdir(parents=True, exist_ok=True)
-        yaml_findings = "\n".join(f"  - {f}" for f in final.findings)
+
+        # Use yaml.safe_dump for reliable special-character handling
+        frontmatter = {
+            "verdict": final.verdict,
+            "summary": final.summary,
+            "findings": final.findings,
+        }
+        yaml_text = yaml.safe_dump(
+            frontmatter,
+            default_flow_style=False,
+            allow_unicode=True,
+        )
         review_path.write_text(
-            f"---\n"
-            f"verdict: {final.verdict}\n"
-            f"summary: {final.summary}\n"
-            f"findings:\n"
-            f"{yaml_findings}\n"
-            f"---\n",
+            f"---\n{yaml_text}---\n",
             encoding="utf-8",
         )
 
@@ -787,11 +796,17 @@ class Orchestrator:
         return runner, effective_spec
 
     def _get_reviewer_count(self) -> int:
-        """Read reviewer count from UNISON_REVIEWER_COUNT env var (default 1).
+        """Return the number of parallel reviewers to use.
 
-        Returns:
-            Number of parallel reviewers to use.
+        Precedence:
+        1. ``spec.reviewer_config`` (when enabled)
+        2. ``UNISON_REVIEWER_COUNT`` env var (fallback, default 1)
         """
+        if (
+            self.spec.reviewer_config is not None
+            and self.spec.reviewer_config.enabled
+        ):
+            return self.spec.reviewer_config.count
         return int(os.environ.get("UNISON_REVIEWER_COUNT", "1"))
 
     def _run_bootstrap(self) -> None:
