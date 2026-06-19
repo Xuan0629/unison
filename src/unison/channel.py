@@ -305,7 +305,7 @@ class SQLiteChannel:
         cursor = self.conn.execute(
             """SELECT id, sender, recipient, iter_n, type, payload, timestamp
                FROM messages
-               WHERE recipient = ? AND iter_n > ?
+               WHERE (recipient = ? OR recipient = 'all') AND iter_n > ?
                ORDER BY id ASC""",
             (recipient, since_iter),
         )
