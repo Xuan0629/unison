@@ -1,0 +1,44 @@
+# Phase 12: Hermes/OpenClaw Skill Auto-Maintenance (4-agent)
+# Planner → Plan-Reviewer → Developer → Dev-Reviewer
+version: "2.0"
+project_root: "."
+
+agents:
+  planner:
+    role: skill-auditor
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/skill-auditor-phase12.md"
+    pipeline_role: planner
+    task_instruction: "Plan a skill health audit. Write PRD to prd/PRD.md: define scope (~/.hermes/skills/ and ~/.openclaw/agents/), audit dimensions (CLI validity, path validity, frontmatter, cross-refs), output format. Write technical design to prd/tech-design.md."
+
+  plan_reviewer:
+    role: plan-reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/audit-reviewer-phase12.md"
+    pipeline_role: reviewer
+
+  developer:
+    role: skill-auditor-dev
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/skill-auditor-phase12.md"
+    task_instruction: "Execute the skill health audit per prd/PRD.md and prd/tech-design.md. Write findings to reviews/skill-audit.md. Scan ~/.hermes/skills/ and ~/.openclaw/agents/ for outdated commands, missing paths, incomplete frontmatter, broken cross-references. Do NOT modify any skill files."
+
+  dev_reviewer:
+    role: dev-reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/audit-reviewer-phase12.md"
+    pipeline_role: reviewer
+
+project:
+  test_command: "test -f reviews/skill-audit.md && echo 'audit exists'"
+  max_iterations: 2
+
+snapshots:
+  enabled: true
+  external_paths:
+    - "~/.hermes/skills/"
+    - "~/.openclaw/agents/"

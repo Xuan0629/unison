@@ -1,0 +1,41 @@
+# Phase 14: Cross-Project Knowledge Transfer (4-agent)
+# Planner → Plan-Reviewer → Developer → Dev-Reviewer
+version: "2.0"
+project_root: "."
+
+agents:
+  planner:
+    role: template-migrator
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/template-migrator-phase14.md"
+    pipeline_role: planner
+    task_instruction: "Plan template migration from Unison project to a generic Python project. Write PRD to prd/PRD.md: define what to migrate (pipeline.yaml structure, developer/reviewer prompt patterns, risk matrix), target format, validation criteria. Write technical design to prd/tech-design.md."
+
+  plan_reviewer:
+    role: plan-reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/migrate-reviewer-phase14.md"
+    pipeline_role: reviewer
+
+  developer:
+    role: template-migrator-dev
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/template-migrator-phase14.md"
+    task_instruction: "Execute template migration per prd/PRD.md and prd/tech-design.md. Read source files from ~/projects/unison/ (v2-fix-pipeline.yaml, prompts/developer-v2-fix.md, prompts/reviewer-v2-fix.md). Generate target project files to ~/projects/unison/target-demo/: target-pipeline.yaml, prompts/developer-target.md, prompts/reviewer-target.md. Mark user-customizable fields with <USER MUST FILL>."
+
+  dev_reviewer:
+    role: dev-reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/migrate-reviewer-phase14.md"
+    pipeline_role: reviewer
+
+project:
+  test_command: "cd ~/projects/unison && PYTHONPATH=/home/sean/projects/unison:/home/sean/projects/unison/src python3 -m unison.cli dry-run --pipeline target-demo/target-pipeline.yaml 2>&1"
+  max_iterations: 2
+
+snapshots:
+  enabled: true

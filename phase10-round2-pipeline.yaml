@@ -1,0 +1,24 @@
+# Phase 10 Round 2: Plugin System Impact Assessment
+# PM-Analyst(planner) ↔ Cost-Analyst(reviewer) → impact assessment
+version: "2.0"
+project_root: "."
+
+agents:
+  pm:
+    role: pm-analyst
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/pm-phase10.md"
+    pipeline_role: planner
+    task_instruction: "Read the plugin design proposal at prd/plugin-proposal.md (saved from Round 1). Write an impact assessment to prd/PRD.md and prd/tech-design.md. Evaluate: scope (LoC estimate), priority vs Phase 12/14, risk to existing tests, alternative simpler approaches, dependency on Phase 15. Be concrete with file counts and test impact estimates."
+
+  cost_analyst:
+    role: cost-analyst
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/cost-analyst-phase10.md"
+    pipeline_role: reviewer
+
+project:
+  test_command: "test -f prd/PRD.md && test -f prd/tech-design.md && echo 'assessment exists'"
+  max_iterations: 2

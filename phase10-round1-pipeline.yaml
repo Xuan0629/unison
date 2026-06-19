@@ -1,0 +1,24 @@
+# Phase 10 Round 1: Plugin System Design Debate
+# Architect(planner) ↔ Critic(reviewer) → plugin design proposal
+version: "2.0"
+project_root: "."
+
+agents:
+  architect:
+    role: architect
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/architect-phase10.md"
+    pipeline_role: planner
+    task_instruction: "Design a plugin system for Unison to support custom agent runtimes beyond the 4 hardcoded ones. Write the proposal to prd/PRD.md (as PRD) and prd/tech-design.md. Cover: plugin interface, loading, configuration, CLI flag mapping, backward compatibility, migration path. Be specific with code snippets and YAML examples."
+
+  critic:
+    role: critic
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/critic-phase10.md"
+    pipeline_role: reviewer
+
+project:
+  test_command: "test -f prd/PRD.md && test -f prd/tech-design.md && echo 'proposal exists'"
+  max_iterations: 3
