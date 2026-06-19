@@ -432,8 +432,9 @@ class Orchestrator:
                 return
             # overflow_action == "downgrade" — already handled in _select_runner
 
-        # 3. Pre-invoke cleanup
-        self.pre_invoke_cleanup()
+        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
+        if role == "developer":
+            self.pre_invoke_cleanup()
 
         if self._state.halt_signal:
             return
