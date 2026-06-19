@@ -782,13 +782,16 @@ class Orchestrator:
             else f"You are the {role} agent."
         )
 
-        # Read PRD + tech-design content for context assembly
+        # Read PRD + tech-design content for context assembly (max 8KB each)
         prd_content = ""
         design_content = ""
+        _MAX_CONTEXT_CHARS = 8192
         if world.prd.exists():
-            prd_content = world.prd.read_text(encoding="utf-8")
+            raw = world.prd.read_text(encoding="utf-8")
+            prd_content = raw[:_MAX_CONTEXT_CHARS] + ("\n...[truncated]" if len(raw) > _MAX_CONTEXT_CHARS else "")
         if world.tech_design.exists():
-            design_content = world.tech_design.read_text(encoding="utf-8")
+            raw = world.tech_design.read_text(encoding="utf-8")
+            design_content = raw[:_MAX_CONTEXT_CHARS] + ("\n...[truncated]" if len(raw) > _MAX_CONTEXT_CHARS else "")
 
         # Extract top findings from the previous review (context deflation)
         top_findings = ""
@@ -917,8 +920,8 @@ class Orchestrator:
         )
         return self._budget_tracker
 
-    def _recent_diff(self) -> str:
-        """Return ``git diff HEAD~1 HEAD`` output, or ``""`` on failure."""
+    def _recent_diff(self, max_chars: int = 8192) -> str:
+        """Return ``git diff HEAD~1 HEAD`` output (truncated), or ``""`` on failure."""
         try:
             result = subprocess.run(
                 ["git", "diff", "HEAD~1", "HEAD"],
@@ -928,7 +931,10 @@ class Orchestrator:
                 check=False,
             )
             if result.returncode == 0:
-                return result.stdout.decode("utf-8", errors="replace")
+                raw = result.stdout.decode("utf-8", errors="replace")
+                if len(raw) > max_chars:
+                    return raw[:max_chars] + "\n...[diff truncated]"
+                return raw
         except (subprocess.SubprocessError, FileNotFoundError, OSError):
             pass
         return ""
