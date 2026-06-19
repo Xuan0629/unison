@@ -897,3 +897,63 @@ class TestSQLiteChannel:
         messages = ch2.read_inbox(recipient="reviewer", since_iter=0)
         assert len(messages) == 1
         ch2.close()
+
+
+# ============================================================================
+# Phase 2 — SQLiteChannel broadcast recipient 'all'
+# ============================================================================
+
+
+class TestSQLiteChannelBroadcast:
+    """Phase 2: broadcast messages (recipient='all') visible to role inbox reads."""
+
+    @staticmethod
+    def _make_channel(tmp_path):
+        db_path = tmp_path / "test_broadcast.db"
+        return SQLiteChannel(db_path)
+
+    def test_broadcast_message_visible_to_role_inbox(self, tmp_path):
+        """Write with default recipient='all'; read_inbox('developer') sees it."""
+        ch = self._make_channel(tmp_path)
+
+        ch.write(
+            sender="reviewer",
+            payload={"type": "broadcast", "content": "hello all roles"},
+        )
+
+        # Should be visible to developer inbox because recipient='all'
+        messages = ch.read_inbox(recipient="developer", since_iter=-1)
+        assert len(messages) == 1
+        assert messages[0]["recipient"] == "all"
+        assert messages[0]["payload"]["content"] == "hello all roles"
+
+        # Should also be visible to reviewer inbox
+        messages_rev = ch.read_inbox(recipient="reviewer", since_iter=-1)
+        assert len(messages_rev) == 1
+
+        ch.close()
+
+    def test_role_specific_message_not_in_other_inbox(self, tmp_path):
+        """Write with recipient='developer'; read_inbox('reviewer') does not see it."""
+        ch = self._make_channel(tmp_path)
+
+        ch.write(
+            sender="planner",
+            payload={
+                "type": "direct",
+                "recipient": "developer",
+                "iter_n": 1,
+                "content": "only for developer",
+            },
+        )
+
+        # Developer should see it
+        dev_messages = ch.read_inbox(recipient="developer", since_iter=0)
+        assert len(dev_messages) == 1
+        assert dev_messages[0]["payload"]["content"] == "only for developer"
+
+        # Reviewer should NOT see it
+        rev_messages = ch.read_inbox(recipient="reviewer", since_iter=0)
+        assert len(rev_messages) == 0
+
+        ch.close()
