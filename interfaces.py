@@ -34,7 +34,7 @@ Phase: TypeAlias = Literal[
     "init", "planning_active", "planning_review",
     "dev_active", "dev_review", "done"
 ]
-AgentRole: TypeAlias = Literal["planner", "developer", "reviewer"]
+AgentRole: TypeAlias = str
 Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
 Verdict: TypeAlias = Literal["PASS", "REQUEST_CHANGES"]
 Actor: TypeAlias = AgentRole | Literal["orchestrator", "observer", "harness_optimizer", "sean"]
@@ -146,7 +146,13 @@ class AgentSpec:
     model: str
     system_prompt_path: Path  # 路径指向 prompt 模板文件
     task_instruction: str | None = None  # Phase 11: override hardcoded task in _build_prompt
+    pipeline_role: AgentRole | None = None  # Phase 11: maps custom role to built-in slot
     context_budget: int | None = None  # V2: per-agent token budget override
+
+    @property
+    def effective_role(self) -> AgentRole:
+        """Return pipeline_role if set, otherwise fall back to role."""
+        return self.pipeline_role if self.pipeline_role else self.role
 
     @property
     def cli_flags(self) -> list[str]:

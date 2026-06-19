@@ -259,7 +259,14 @@ class Orchestrator:
         scheduler = DAGScheduler(self.spec.dag)
 
         def exec_stage(stage):
-            self._invoke_agent_for_role("developer", 1)
+            # Use stage.agents when available, fall back to default developer
+            if stage.agents:
+                for _role_name, agent_spec in stage.agents.items():
+                    pr = agent_spec.effective_role
+                    self._invoke_agent_for_role(pr, 1)
+                    break  # one agent per stage for now
+            else:
+                self._invoke_agent_for_role("developer", 1)
             return self._state.last_dev_commit is not None
 
         scheduler.execute_parallel(executor=exec_stage, max_workers=4)
@@ -288,7 +295,7 @@ class Orchestrator:
         If no planner is defined, we skip straight to development
         (PRD was authored externally — ARCHITECTURE.md §21).
         """
-        return "planner" in self.spec.agents
+        return any(a.effective_role == "planner" for a in self.spec.agents.values())
 
     def _run_loop(
         self,
@@ -606,7 +613,7 @@ class Orchestrator:
         from unison.reviewer_pool import ReviewerPool
 
         world = self.spec.world
-        agent_spec = self.spec.agents.get("reviewer")
+        agent_spec = self._resolve_agent("reviewer")
         if agent_spec is None:
             self.halt("No agent spec for role: reviewer")
             return
@@ -767,7 +774,7 @@ class Orchestrator:
         with smart diff truncation and top-findings extraction.
         """
         world = self.spec.world
-        agent_spec = self.spec.agents.get(role)
+        agent_spec = self._resolve_agent(role)
         tracker = self._get_budget_tracker(role)
 
         # Read system prompt from the agent's configured path
@@ -811,7 +818,6 @@ class Orchestrator:
         remaining = max(1, min(daily_remaining, per_task_remaining))
 
         # Build role-specific task instruction
-        agent_spec = self.spec.agents.get(role)
         if agent_spec and agent_spec.task_instruction:
             task = agent_spec.task_instruction
         elif role == "planner":
@@ -854,6 +860,27 @@ class Orchestrator:
     # Internal: helpers
     # ==================================================================
 
+    def _resolve_agent(self, pipeline_role: str) -> AgentSpec | None:
+        """Resolve an AgentSpec by effective_role.
+
+        First tries exact key match in ``spec.agents`` (backward
+        compatible — agents named "planner"/"developer"/"reviewer").
+        Falls back to scanning all agents for one whose
+        ``effective_role`` matches *pipeline_role*.
+
+        Returns:
+            The matching ``AgentSpec``, or ``None`` if no agent maps
+            to *pipeline_role*.
+        """
+        from interfaces import AgentSpec
+
+        if pipeline_role in self.spec.agents:
+            return self.spec.agents[pipeline_role]
+        for agent in self.spec.agents.values():
+            if agent.effective_role == pipeline_role:
+                return agent
+        return None
+
     def _get_budget_tracker(self, role: str = "") -> BudgetTracker:
         """Return the shared BudgetTracker, creating it lazily.
 
@@ -871,9 +898,9 @@ class Orchestrator:
         """
         # Determine per_task_limit: per-agent override takes precedence
         per_task_limit = self.spec.budget.per_task_limit
-        if role and role in self.spec.agents:
-            agent_spec = self.spec.agents[role]
-            if agent_spec.context_budget is not None:
+        if role:
+            agent_spec = self._resolve_agent(role)
+            if agent_spec is not None and agent_spec.context_budget is not None:
                 per_task_limit = agent_spec.context_budget
 
         # If tracker exists but per-task limit changed for this role,
@@ -977,9 +1004,9 @@ class Orchestrator:
             ``(runner, effective_agent_spec)`` — or calls ``self.halt()``
             and returns ``(None, None)`` when no runner is found.
         """
-        agent_spec = self.spec.agents.get(role)
+        agent_spec = self._resolve_agent(role)
         if agent_spec is None:
-            self.halt(f"No agent spec for role: {role}")
+            self.halt(f"No agent spec for effective_role: {role}")
             return None, None
 
         tracker = self._get_budget_tracker(role)
