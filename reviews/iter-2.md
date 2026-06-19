@@ -1,47 +1,20 @@
 ---
 verdict: REQUEST_CHANGES
-summary: "Iter 2 adds the expected Phase 6/7 symbols and focused tests pass, but multi-reviewer planning verdicts are written to the wrong path and per-agent context_budget is not actually used as the prompt assembly budget."
+summary: "The multi-reviewer planning verdict path is fixed, but the per-agent context_budget cap is still bypassed when another role initializes the shared BudgetTracker first."
 findings:
-  - "[HIGH] src/unison/orchestrator.py:345 calls _invoke_multi_reviewer() without the active review phase, and src/unison/orchestrator.py:612 hardcodes _review_file_for_phase(\"dev_review\", iteration). In the planning loop, _parse_verdict() reads reviews/plan-iter-N.md, so a pipeline with spec.reviewer_config.enabled=true and count>1 will write the reconciled planning verdict to reviews/iter-N.md and then halt with a parse failure. Pass review_phase into _invoke_multi_reviewer() and use it for the reconciled output path and reviewer instructions."
-  - "[MEDIUM] src/unison/orchestrator.py:676-714 computes assemble_context(token_budget=tracker.daily_limit - tracker.current_usage), while src/unison/orchestrator.py:730-743 stores one cached BudgetTracker whose per_task_limit is based only on the first role that asks for it. AgentSpec.context_budget therefore does not cap prompt assembly, and a later role cannot get its own override. Compute the turn context budget from the current role, for example min(daily remaining, agent.context_budget or spec.budget.per_task_limit), or keep per-role trackers."
+  - "[HIGH] src/unison/orchestrator.py:727-737 returns one cached BudgetTracker for all roles, so the role-specific per_task_limit chosen at src/unison/orchestrator.py:739-744 only applies to whichever role calls _get_budget_tracker() first. In the normal two-phase pipeline, _build_prompt('planner', 1) can initialize the tracker with the global per_task_limit, then _build_prompt('developer', 1) computes assemble_context(token_budget=remaining) from that cached global limit at src/unison/orchestrator.py:682-719. A developer context_budget=50000 is therefore still not enforced after planning if the global per_task_limit is larger. Compute the current role's context cap directly in _build_prompt, or keep per-role/task budget trackers so each AgentSpec.context_budget is honored regardless of call order."
 ---
 
 ## Verification
 
-### Phase 7
+- PASS: `_run_loop()` now calls `_invoke_multi_reviewer(iteration, review_phase)`, and `_invoke_multi_reviewer()` writes the reconciled verdict to `_review_file_for_phase(review_phase, iteration)`. This fixes the planning multi-reviewer write/read mismatch with `reviews/plan-iter-N.md`.
+- REQUEST_CHANGES: `_build_prompt()` now clamps to `min(daily_remaining, per_task_remaining)`, but `per_task_remaining` still comes from a single cached tracker whose `per_task_limit` is fixed by the first role that touched it.
 
-Partial pass:
-
-- `_build_prompt()` now loads the configured system prompt, reads PRD/design context, extracts prior review findings with `extract_top_findings()`, includes recent diff, and calls `assemble_context()`.
-- `BudgetTracker` is constructed from `spec.budget` and uses `AgentSpec.context_budget` when the tracker is first created.
-- Usage is recorded after runner invocation with a prompt-length token estimate.
-
-Blocking gap:
-
-- The per-agent context budget is not used as the `assemble_context()` budget. The current budget passed to context assembly is only daily remaining tokens, and the single cached tracker keeps whichever role initialized it first.
-
-### Phase 6
-
-Partial pass:
-
-- `_get_reviewer_count()` prefers enabled `spec.reviewer_config.count` over `UNISON_REVIEWER_COUNT`.
-- Multi-reviewer reconciliation writes YAML frontmatter through `yaml.safe_dump()`.
-- `_invoke_multi_reviewer()` builds its `ReviewerConfig` from `spec.reviewer_config` when enabled.
-
-Blocking gap:
-
-- Multi-reviewer mode is not phase-aware, so planning reviews write the final reconciled verdict to the development review path.
-
-## Tests
-
-Focused tests run:
-
-```bash
-pytest tests/test_orchestrator.py tests/test_context_deflate.py tests/test_budget.py tests/test_pipeline.py -q
-```
-
-Result:
+Focused reproduction run:
 
 ```text
-157 passed in 3.55s
+developer_context_budget= 50000
+cached_tracker_per_task_limit= 1000000
 ```
+
+That reproduction calls `_build_prompt("planner", 1)` before checking the developer tracker, matching a planning-enabled pipeline.
