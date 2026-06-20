@@ -1,0 +1,997 @@
+=== COMMAND ===
+codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 1: 1. Run tests: test -f reviews/skill-audit.md && echo 'audit exists' 2. Write review to /home/sean/projects/unison/reviews/plan-iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Audit-Reviewer (Codex) — Phase 12: Skill Audit Review
+
+You are the **Audit-Reviewer**. Validate the Skill-Auditor's report for accuracy.
+
+## Your Mission
+
+Review `reviews/skill-audit.md` and produce a verdict.
+
+## Review Criteria
+
+1. **Spot-Check Accuracy**: Randomly pick 3-5 findings. Independently verify:
+   - The command really is broken (run `which` yourself)
+   - The path really is missing (run `test -f` yourself)
+   - The frontmatter really is incomplete (parse it yourself)
+
+2. **False Positive Rate**: How many marked issues are actually fine?
+   If ≥ 30% of spot-checks are false positives → REQUEST_CHANGES.
+
+3. **False Negative Rate**: Are there obvious issues the Auditor missed?
+   Check 2-3 skills the Auditor marked as "clean". If you find issues → report.
+
+4. **Report Format**: Is the output in the specified table format?
+   Are all columns filled?
+
+## Output Format
+
+```
+Verdict: PASS | REQUEST_CHANGES
+
+Spot-check results:
+- Checked: <N>/<total> findings
+- Confirmed: <N>
+- False positives: <N> (<list>)
+- Missed issues: <N> (<list>)
+
+Format: PASS | FAIL
+Accuracy: PASS | FAIL (<false positive rate>%)
+Coverage: PASS | FAIL (<missed issues>)
+
+Issues (if REQUEST_CHANGES):
+- <specific issue> → <suggested fix>
+```
+
+
+## Git Diff
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 9b95915..76901e4 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -432,8 +432,9 @@ class Orchestrator:
+                 return
+             # overflow_action == "downgrade" — already handled in _select_runner
+ 
+-        # 3. Pre-invoke cleanup
+-        self.pre_invoke_cleanup()
++        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
++        if role == "developer":
++            self.pre_invoke_cleanup()
+ 
+         if self._state.halt_signal:
+... (truncated)
+
+## Design
+# Phase 12: Technical Design
+
+The Skill-Auditor will write the full tech design here.
+
+
+## PRD
+# Phase 12: Skill Health Audit
+
+The Skill-Auditor will write the full audit plan here.
+
+
+=== STDOUT ===
+Wrote the review to [reviews/plan-iter-1.md](/home/sean/projects/unison/reviews/plan-iter-1.md).
+
+Verdict is `REQUEST_CHANGES`. I ran the requested test (`audit exists`), spot-checked 5 findings, confirmed 4, found 1 false positive, and found clean-list contradictions. I did not modify `src/`.
+
+
+=== STDERR ===
+Reading additional input from stdin...
+OpenAI Codex v0.141.0
+--------
+workdir: /home/sean/projects/unison
+model: gpt-5.5
+provider: openai-custom
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 019ee0dc-01df-77c1-a8a3-3e039938b118
+--------
+user
+Review Iteration 1: 1. Run tests: test -f reviews/skill-audit.md && echo 'audit exists' 2. Write review to /home/sean/projects/unison/reviews/plan-iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Audit-Reviewer (Codex) — Phase 12: Skill Audit Review
+
+You are the **Audit-Reviewer**. Validate the Skill-Auditor's report for accuracy.
+
+## Your Mission
+
+Review `reviews/skill-audit.md` and produce a verdict.
+
+## Review Criteria
+
+1. **Spot-Check Accuracy**: Randomly pick 3-5 findings. Independently verify:
+   - The command really is broken (run `which` yourself)
+   - The path really is missing (run `test -f` yourself)
+   - The frontmatter really is incomplete (parse it yourself)
+
+2. **False Positive Rate**: How many marked issues are actually fine?
+   If ≥ 30% of spot-checks are false positives → REQUEST_CHANGES.
+
+3. **False Negative Rate**: Are there obvious issues the Auditor missed?
+   Check 2-3 skills the Auditor marked as "clean". If you find issues → report.
+
+4. **Report Format**: Is the output in the specified table format?
+   Are all columns filled?
+
+## Output Format
+
+```
+Verdict: PASS | REQUEST_CHANGES
+
+Spot-check results:
+- Checked: <N>/<total> findings
+- Confirmed: <N>
+- False positives: <N> (<list>)
+- Missed issues: <N> (<list>)
+
+Format: PASS | FAIL
+Accuracy: PASS | FAIL (<false positive rate>%)
+Coverage: PASS | FAIL (<missed issues>)
+
+Issues (if REQUEST_CHANGES):
+- <specific issue> → <suggested fix>
+```
+
+
+## Git Diff
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 9b95915..76901e4 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -432,8 +432,9 @@ class Orchestrator:
+                 return
+             # overflow_action == "downgrade" — already handled in _select_runner
+ 
+-        # 3. Pre-invoke cleanup
+-        self.pre_invoke_cleanup()
++        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
++        if role == "developer":
++            self.pre_invoke_cleanup()
+ 
+         if self._state.halt_signal:
+... (truncated)
+
+## Design
+# Phase 12: Technical Design
+
+The Skill-Auditor will write the full tech design here.
+
+
+## PRD
+# Phase 12: Skill Health Audit
+
+The Skill-Auditor will write the full audit plan here.
+
+codex
+I’ll validate the existing audit file without touching `src/`, then write the review artifact with the requested YAML frontmatter. First I’m checking the audit exists and reading its structure.
+exec
+/bin/bash -lc "test -f reviews/skill-audit.md && echo 'audit exists'" in /home/sean/projects/unison
+ succeeded in 0ms:
+audit exists
+
+exec
+/bin/bash -lc "sed -n '1,240p' reviews/skill-audit.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+# Skill Health Audit
+
+**Date**: 2026-06-20
+**Files scanned**: 103 (97 hermes SKILL.md + 6 openclaw AGENTS.md)
+**Issues found**: 53
+
+## Scope
+
+This audit covers all skill files under two directories:
+
+- **`~/.hermes/skills/`** — 97 non-archived `SKILL.md` files across 30 category directories (apple, autonomous-ai-agents, creative, data-science, devops, gaming, github, grok-image-to-video, hyperframes, markdown-viewer, mcp, media, memory-holographic, mlops, note-taking, openclaw-imports, productivity, red-teaming, remotion, research, smart-home, social-media, software-development, apikey-image-gen). Archived skills under `.archive/` were excluded per audit scope.
+- **`~/.openclaw/agents/`** — 6 `AGENTS.md` files (eeat-diagnostic, evidence, geoguy, geomaster, main/workspace, main/workspace/runtime/geomaster-official-site-article-bundle).
+
+## Audit Dimensions
+
+Four independent checks were performed on every file:
+
+1. **CLI Command Validity** — Every CLI command referenced in skill bodies (e.g., `hermes send`, `codex exec`, `claude -p`, `npx hyperframes`, `docker`, `shortcuts run`) was verified with `which`/`command -v`. Flags were validated against actual `--help` output.
+2. **File Path Validity** — Every `~/.*` path referenced in skill bodies was checked with `test -e` / `test -f` / `test -d`.
+3. **YAML Frontmatter Completeness** — Every `SKILL.md` frontmatter block was parsed via `python3 -c "import yaml"` and checked for `name`, `description`, `version`, semver validity, and tag presence (either top-level `tags` or `metadata.hermes.tags`).
+4. **Cross-Reference Integrity** — Every `metadata.hermes.related_skills` entry was resolved against the known skill name registry (directory name + frontmatter `name`).
+
+## Issues
+
+| # | File | Line | Type | Severity | Details | Suggested Fix |
+|---|------|------|------|----------|---------|----------------|
+| 1 | `openclaw-imports/agent_auditor/SKILL.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter block; file starts with plain Markdown heading | Add `---` delimited frontmatter with `name`, `description`, `version`, `metadata.hermes.tags` |
+| 2 | `openclaw-imports/agent_factory/SKILL.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter block; file starts with `# agent_factory` heading | Add `---` delimited frontmatter with `name`, `description`, `version`, `metadata.hermes.tags` |
+| 3 | `openclaw/agents/eeat-diagnostic/.../AGENTS.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter (OpenClaw AGENTS.md format lacks frontmatter convention) | Add frontmatter block, or document that OpenClaw agents use a different metadata standard |
+| 4 | `openclaw/agents/evidence/.../AGENTS.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter | Same as #3 — standardize or document divergence |
+| 5 | `openclaw/agents/geoguy/.../AGENTS.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter | Same as #3 |
+| 6 | `openclaw/agents/geomaster/.../AGENTS.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter | Same as #3 |
+| 7 | `openclaw/agents/main/workspace/AGENTS.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter | Same as #3 |
+| 8 | `openclaw/agents/main/.../geomaster-.../AGENTS.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter | Same as #3 |
+| 9 | `creative/ascii-video/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field in frontmatter | Add `version: X.Y.Z` |
+| 10 | `devops/check-hermes-update-readiness/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 11 | `devops/hermes-update-maintenance/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 12 | `devops/openclaw-plugin-debug/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 13 | `gaming/minecraft-modpack-server/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 14 | `gaming/pokemon-player/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 15 | `memory-holographic/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 16 | `mlops/probe-model-limits/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 17 | `openclaw-imports/academic-search-skill/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 18 | `openclaw-imports/agent-cleanup/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 19 | `openclaw-imports/agent-harness-engineering/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 20 | `openclaw-imports/engineering-cybernetics/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 21 | `openclaw-imports/observer/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 22 | `openclaw-imports/openclaw-model-debug/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 23 | `openclaw-imports/requirements_normalizer/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 24 | `openclaw-imports/skill-context-slimmer/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 25 | `openclaw-imports/skill-finder-cn/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 26 | `openclaw-imports/tavily-search/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 27 | `openclaw-imports/user-read-governance/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 28 | `openclaw-imports/workspace-pruning/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 29 | `software-development/understand-anything/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+| 30 | `apple/apple-ecosystem/SKILL.md` | 98 | broken-command | **LOW** | References `shortcuts run <name>` — `shortcuts` CLI not found on this Linux host (macOS-only) | Document as macOS-only, or guard with platform check |
+| 31 | `creative/creative-ideation/SKILL.md` | 46 | unverifiable-command | **LOW** | References `docker` — not installed (`which docker` returned empty; `podman` also absent) | Install Docker/Podman, or note container runtime as optional dependency |
+| 32 | `software-development/hermes-s6-container-supervision/SKILL.md` | 9 | unverifiable-command | **LOW** | Heavy `docker` usage (~30 references) — `docker` not installed | Install Docker/Podman, or mark skill as requiring container runtime |
+| 33 | `red-teaming/godmode/SKILL.md` | 64,84,92,134,158,172,195,232,403 | missing-path | **MEDIUM** | References `~/.hermes/prefill.json` — file does not exist on this system | Either create the file if the feature is active, or note it as optional runtime-generated config |
+| 34 | `devops/hermes-model-config/SKILL.md` | 181 | missing-path | **LOW** | References `~/.openclaw/agents/main/agent/auth-profiles.json` — file does not exist | Check if path was renamed; actual auth file is at `~/.openclaw/identity/device-auth.json` |
+| 35 | `devops/openclaw-plugin-debug/SKILL.md` | 37,44,72,281,283 | missing-path | **MEDIUM** | References `~/.openclaw/plugin-runtime-deps/` — directory does not exist | Directory may be created at plugin install time; document as runtime-only, or create if stale reference |
+| 36 | `openclaw-imports/agent-cleanup/SKILL.md` | 22,32,58 | missing-path | **MEDIUM** | References `~/.openclaw/sessions/` — directory does not exist | May be legacy path; current sessions appear under agent-specific directories |
+| 37 | `openclaw-imports/agent-cleanup/SKILL.md` | 44 | missing-path | **MEDIUM** | References `~/.openclaw/workspace/skills/` — directory does not exist | Actual skills live at `~/.hermes/skills/` and `~/.openclaw/agents/`; update path |
+| 38 | `openclaw-imports/skill-finder-cn/SKILL.md` | 58,73,124 | missing-path | **MEDIUM** | References `~/.openclaw/workspace/skills/` — directory does not exist | Same as #37 — update to actual skill paths |
+| 39 | `productivity/workplace-tools/SKILL.md` | 218,252 | missing-path | **LOW** | References `~/.config/himalaya/config.toml` — file does not exist | Install and configure `himalaya` email client, or mark as optional |
+| 40 | `github/github-pr-workflow/SKILL.md` | 35,36,634 | missing-path | **MEDIUM** | References `~/.git-credentials` — file does not exist | Configure `git credential-store` or switch to `gh auth` which is available |
+| 41 | `github/github-pr-workflow/SKILL.md` | 641 | missing-path | **LOW** | References `~/.ssh/id_ed25519.pub` — file not found (key may use different type/path) | Verify SSH key path; common alternatives: `id_rsa.pub`, `id_ecdsa.pub` |
+| 42 | `data-science/jupyter-live-kernel/SKILL.md` | 45 | missing-path | **LOW** | References `~/.agent-skills/hamelnb` — directory does not exist | Install hamelnb or update to current notebook kernel path |
+| 43 | `devops/hermes-memory-architecture/SKILL.md` | 54,166,215 | missing-path | **LOW** | References `~/.config/hermes-studio/` — directory does not exist | May be created at runtime; verify against current hermes-studio packaging |
+| 44 | `devops/node24-npm11-workaround/SKILL.md` | 226,227,265,315 | missing-path | **LOW** | References `~/.hermes/.tmp/hermes-studio/` — directory does not exist | Temp directory may only exist during active studio sessions; note as transient |
+| 45 | `devops/hermes-memory-architecture/SKILL.md` | 100 | missing-path | **LOW** | References `~/.hermes/identity/` — directory does not exist | Path may be planned but not yet implemented; verify against current architecture |
+| 46 | `autonomous-ai-agents/multi-agent-orchestration/SKILL.md` | 270 | broken-command-flag | **LOW** | References `codex exec --sandbox workspace-write` — `--sandbox` takes values `read-only`, `workspace-write`, `danger-full-access`; flag is valid but note it's `-s` shorthand | Valid syntax confirmed; no fix needed (informational) |
+| 47 | `software-development/plan/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `requesting-code-review` — no such skill is installed | Remove stale reference or create the referenced skill |
+| 48 | `software-development/hermes-agent-skill-authoring/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `requesting-code-review` — does not exist | Same as #47 |
+| 49 | `software-development/subagent-driven-development/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `requesting-code-review` — does not exist | Same as #47 |
+| 50 | `software-development/simplify-code/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `requesting-code-review` — does not exist | Same as #47 |
+| 51 | `software-development/writing-plans/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `requesting-code-review` — does not exist | Same as #47 |
+| 52 | `software-development/debugging-hermes-tui-commands/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `systematic-debugging`, `python-debugpy`, `node-inspect-debugger` — none exist | Remove stale references or create stub skills |
+| 53 | `creative/pretext/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `claude-design`, `excalidraw`, `architecture-diagram` — none exist | Remove or create referenced skills |
+| — | 20 additional skills have 1-2 broken cross-references each | 1 | broken-cross-ref | **LOW** | Minor: references to `excalidraw` (ascii-art, p5js), `codex` (hermes-agent, kanban-codex-lane), `huggingface-hub` (mlops-toolkit, research-toolkit), `claude-code` (hermes-agent, multi-agent-orchestration), and others | Audit `related_skills` lists for accuracy; remove entries that have no corresponding installed skill |
+| — | 18 `openclaw-imports/*` skills | 1 | missing-tags | **MEDIUM** | Frontmatter has no `metadata.hermes.tags` (16 skills) or no tags at all (2 skills: agent_auditor, agent_factory have no frontmatter) | Add `metadata.hermes.tags: [...]` with relevant category tags |
+
+## Summary by Type
+
+| Type | Count |
+|------|-------|
+| missing-frontmatter | 8 (2 hermes + 6 openclaw AGENTS.md) |
+| missing-version | 22 |
+| missing-tags | 18 |
+| missing-path | 13 distinct paths across 9 skills |
+| broken-command | 1 (`shortcuts` — macOS-only on Linux host) |
+| unverifiable-command | 2 (`docker` not installed; referenced in 2+ skills) |
+| broken-command-flag | 1 (informational — flag verified valid) |
+| broken-cross-ref | 37 references across 20+ skills |
+| **Total distinct issues** | **53** |
+
+## Clean Skills (no issues)
+
+Of 103 files scanned, 55 skills passed all four audit dimensions with zero issues:
+
+- `apikey-image-gen/SKILL.md`
+- `creative/ascii-art/SKILL.md`
+- `creative/baoyu-content-gen/SKILL.md`
+- `creative/manim-video/SKILL.md`
+- `creative/pixel-art/SKILL.md`
+- `creative/visual-design/SKILL.md`
+- `creative/humanizer/SKILL.md`
+- `creative/touchdesigner-mcp/SKILL.md`
+- `devops/hermes-model-config/SKILL.md`
+- `devops/kanban-automation/SKILL.md`
+- `devops/multi-agent-harness-design/SKILL.md`
+- `devops/node24-npm11-workaround/SKILL.md`
+- `devops/unison-development/SKILL.md`
+- `devops/webhook-subscriptions/SKILL.md`
+- `devops/yoda-multi-agent-config/SKILL.md`
+- `devops/yoda-pipeline-orchestrator/SKILL.md`
+- `grok-image-to-video/SKILL.md`
+- `hyperframes/SKILL.md`
+- `markdown-viewer/SKILL.md`
+- `mcp/mcporter/SKILL.md`
+- `mcp/native-mcp/SKILL.md`
+- `media/spotify/SKILL.md`
+- `mlops/cloud/modal/SKILL.md`
+- `mlops/inference/gguf/SKILL.md`
+- `mlops/inference/guidance/SKILL.md`
+- `mlops/inference/obliteratus/SKILL.md`
+- `mlops/inference/outlines/SKILL.md`
+- `mlops/mlops-toolkit/SKILL.md`
+- `mlops/models/clip/SKILL.md`
+- `mlops/models/stable-diffusion/SKILL.md`
+- `mlops/models/whisper/SKILL.md`
+- `mlops/research/dspy/SKILL.md`
+- `mlops/training/axolotl/SKILL.md`
+- `mlops/training/grpo-rl-training/SKILL.md`
+- `mlops/training/peft/SKILL.md`
+- `mlops/training/pytorch-fsdp/SKILL.md`
+- `mlops/training/trl-fine-tuning/SKILL.md`
+- `mlops/training/unsloth/SKILL.md`
+- `note-taking/note-taking-platforms/SKILL.md`
+- `productivity/linear/SKILL.md`
+- `red-teaming/godmode/SKILL.md`
+- `remotion/SKILL.md`
+- `research/research-toolkit/SKILL.md`
+- `smart-home/openhue/SKILL.md`
+- `social-media/social-platforms/SKILL.md`
+- `software-development/debugging-hermes-tui-commands/SKILL.md`
+- `software-development/hermes-s6-container-supervision/SKILL.md`
+- `software-development/plan/SKILL.md`
+- `software-development/prd-authoring/SKILL.md`
+- `software-development/test-driven-development/SKILL.md`
+- `software-development/testing-and-debugging/SKILL.md`
+- 4 more skills with only benign cross-ref issues excluded from "clean" list above
+
+## Key Findings
+
+### 1. OpenCLaw Agents Have No Frontmatter Convention
+All 6 `AGENTS.md` files under `~/.openclaw/agents/` lack YAML frontmatter entirely. This may be intentional — OpenClaw agents may use a different metadata mechanism (e.g., `agent.json` sidecar, directory conventions). If so, this is a **false positive** and the audit rules should exempt `AGENTS.md` files from frontmatter checks. If not, these files should be updated to include frontmatter blocks matching the hermes skill convention.
+
+### 2. The `openclaw-imports` Directory is a Migration Graveyard
+The 18 skills under `openclaw-imports/` were bulk-imported from OpenClaw and uniformly lack `version` fields (16 of 18) and `metadata.hermes.tags` (all 18). Two files (`agent_auditor`, `agent_factory`) have no frontmatter at all — they appear to be raw OpenClaw agent definitions that were never adapted to the hermes SKILL.md format. This directory needs a systematic migration pass.
+
+### 3. Stale Cross-References are Pervasive
+37 broken `related_skills` entries reference skills that don't exist in either `~/.hermes/skills/` or `~/.openclaw/agents/`. The most common ghosts are `requesting-code-review` (5 references), `excalidraw` (3), `systematic-debugging` (3), `codex` (2), `claude-code` (2), and `huggingface-hub` (2). These appear to be either: (a) skills that existed in an earlier installation and were removed, (b) skills planned but never authored, or (c) references to OpenClaw-era skills that were not ported.
+
+### 4. Path References to Ephemeral/Runtime Directories
+Several missing paths are likely **transient** (e.g., `~/.hermes/.tmp/hermes-studio/`, `~/.openclaw/plugin-runtime-deps/`), created only when specific components are running. However, `~/.openclaw/workspace/skills/` and `~/.openclaw/sessions/` appear to be genuinely stale — the current layout uses `~/.hermes/skills/` for skills and agent-specific session directories. Skills referencing these paths (agent-cleanup, skill-finder-cn) should be updated to reflect the current directory layout.
+
+### 5. `git-credentials` vs `gh` CLI
+The `github-pr-workflow` skill references `~/.git-credentials` for Git authentication, but this file does not exist. The `gh` CLI is installed and authenticated — the skill should be updated to prefer `gh auth` over raw credential files, since `gh` is the supported GitHub CLI tool on this system.
+
+## Constraints
+
+- **Read-only**: No skill files were modified during this audit.
+- **No Unison source modifications**: Only `reviews/skill-audit.md` was written.
+- **Objective issues only**: Style preferences, description wording quality, and content completeness (beyond placeholder detection) were not evaluated.
+- **`.archive/` excluded**: 29 archived skills were intentionally skipped — they are preserved for reference but not expected to pass active audit checks.
+
+exec
+/bin/bash -lc "rg --files -g 'SKILL.md' -g '"'!src/**'"'" in /home/sean/projects/unison
+ exited 1 in 0ms:
+codex
+The audit file is present and the table is populated, but I already see internal contradictions: several files listed as “clean” also appear in the issue table. I’m going to verify a small sample directly against the home-directory skill files before deciding the verdict.
+exec
+/bin/bash -lc 'test -f ~/.hermes/skills/creative/ascii-video/SKILL.md; echo ascii_video_f=$?; sed -n '"'1,30p' ~/.hermes/skills/creative/ascii-video/SKILL.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+ascii_video_f=0
+---
+name: ascii-video
+description: "ASCII video: convert video/audio to colored ASCII MP4/GIF."
+platforms: [linux, macos, windows]
+---
+
+# ASCII Video Production Pipeline
+
+## When to use
+
+Use when users request: ASCII video, text art video, terminal-style video, character art animation, retro text visualization, audio visualizer in ASCII, converting video to ASCII art, matrix-style effects, or any animated ASCII output.
+
+## What's inside
+
+Production pipeline for ASCII art video — any format. Converts video/audio/images/generative input into colored ASCII character video output (MP4, GIF, image sequence). Covers: video-to-ASCII conversion, audio-reactive music visualizers, generative ASCII art animations, hybrid video+audio reactive, text/lyrics overlays, real-time terminal rendering.
+
+## Creative Standard
+
+This is visual art. ASCII characters are the medium; cinema is the standard.
+
+**Before writing a single line of code**, articulate the creative concept. What is the mood? What visual story does this tell? What makes THIS project different from every other ASCII video? The user's prompt is a starting point — interpret it with creative ambition, not literal transcription.
+
+**First-render excellence is non-negotiable.** The output must be visually striking without requiring revision rounds. If something looks generic, flat, or like "AI-generated ASCII art," it is wrong — rethink the creative concept before shipping.
+
+**Go beyond the reference vocabulary.** The effect catalogs, shader presets, and palette libraries in the references are a starting vocabulary. For every project, combine, modify, and invent new patterns. The catalog is a palette of paints — you write the painting.
+
+**Be proactively creative.** Extend the skill's vocabulary when the project calls for it. If the references don't have what the vision demands, build it. Include at least one visual moment the user didn't ask for but will appreciate — a transition, an effect, a color choice that elevates the whole piece.
+
+**Cohesive aesthetic over technical correctness.** All scenes in a video must feel connected by a unifying visual language — shared color temperature, related character palettes, consistent motion vocabulary. A technically correct video where every scene uses a random different effect is an aesthetic failure.
+
+
+exec
+/bin/bash -lc 'test -f ~/.hermes/skills/openclaw-imports/agent_auditor/SKILL.md; echo agent_auditor_f=$?; sed -n '"'1,20p' ~/.hermes/skills/openclaw-imports/agent_auditor/SKILL.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+agent_auditor_f=0
+# agent_auditor
+
+## 目标
+
+对已生成的 OpenClaw 智能体文件进行结构审查与质量把关，尽量在交付前发现明显缺陷。
+
+---
+
+## 适用场景
+
+- 刚生成完一套 agent 文件，准备交付；
+- 用户要求“检查是否合理”；
+- 需要确认 skills、tools、人格设定之间是否一致；
+- 需要做交付前的快速 QA。
+
+---
+
+## 不适用场景
+
+- 用户还没有给出任何 agent 文件；
+
+exec
+/bin/bash -lc 'which shortcuts; echo shortcuts=$?; which docker; echo docker=$?; which podman; echo podman=$?' in /home/sean/projects/unison
+ succeeded in 0ms:
+shortcuts=1
+docker=1
+podman=1
+
+exec
+/bin/bash -lc 'test -f ~/.hermes/prefill.json; echo prefill_file=$?; test -e ~/.openclaw/agents/main/agent/auth-profiles.json; echo auth_profiles=$?; test -d ~/.openclaw/plugin-runtime-deps; echo plugin_runtime_deps=$?' in /home/sean/projects/unison
+ succeeded in 0ms:
+prefill_file=1
+auth_profiles=1
+plugin_runtime_deps=1
+
+exec
+/bin/bash -lc "codex exec --help | sed -n '1,120p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+Run Codex non-interactively
+
+Usage: codex exec [OPTIONS] [PROMPT]
+       codex exec [OPTIONS] <COMMAND> [ARGS]
+
+Commands:
+  resume  Resume a previous session by id or pick the most recent with --last
+  review  Run a code review against the current repository
+  help    Print this message or the help of the given subcommand(s)
+
+Arguments:
+  [PROMPT]
+          Initial instructions for the agent. If not provided as an argument (or if `-` is used),
+          instructions are read from stdin. If stdin is piped and a prompt is also provided, stdin
+          is appended as a `<stdin>` block
+
+Options:
+  -c, --config <key=value>
+          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`.
+          Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed
+          as TOML. If it fails to parse as TOML, the raw string is used as a literal.
+          
+          Examples: - `-c model="o3"` - `-c 'sandbox_permissions=["disk-full-read-access"]'` - `-c
+          shell_environment_policy.inherit=all`
+
+      --enable <FEATURE>
+          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
+
+      --disable <FEATURE>
+          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
+
+      --strict-config
+          Error out when config.toml contains fields that are not recognized by this version of
+          Codex
+
+  -i, --image <FILE>...
+          Optional image(s) to attach to the initial prompt
+
+  -m, --model <MODEL>
+          Model the agent should use
+
+      --oss
+          Use open-source provider
+
+      --local-provider <OSS_PROVIDER>
+          Specify which local provider to use (lmstudio or ollama). If not specified with --oss,
+          will use config default or show selection
+
+  -p, --profile <CONFIG_PROFILE_V2>
+          Layer $CODEX_HOME/<name>.config.toml on top of the base user config
+
+  -s, --sandbox <SANDBOX_MODE>
+          Select the sandbox policy to use when executing model-generated shell commands
+          
+          [possible values: read-only, workspace-write, danger-full-access]
+
+      --dangerously-bypass-approvals-and-sandbox
+          Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY
+          DANGEROUS. Intended solely for running in environments that are externally sandboxed
+
+      --dangerously-bypass-hook-trust
+          Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS.
+          Intended only for automation that already vets hook sources
+
+  -C, --cd <DIR>
+          Tell the agent to use the specified directory as its working root
+
+      --add-dir <DIR>
+          Additional directories that should be writable alongside the primary workspace
+
+      --skip-git-repo-check
+          Allow running Codex outside a Git repository
+
+      --ephemeral
+          Run without persisting session files to disk
+
+      --ignore-user-config
+          Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`
+
+      --ignore-rules
+          Do not load user or project execpolicy `.rules` files
+
+      --output-schema <FILE>
+          Path to a JSON Schema file describing the model's final response shape
+
+      --color <COLOR>
+          Specifies color settings for use in the output
+          
+          [default: auto]
+          [possible values: always, never, auto]
+
+      --json
+          Print events to stdout as JSONL
+
+  -o, --output-last-message <FILE>
+          Specifies file where the last message from the agent should be written
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+codex
+The first spot checks mostly match the report: the missing frontmatter, missing version, absent CLIs, and missing paths are real on this machine. One listed issue is not an issue as written: `codex exec --sandbox workspace-write` is valid according to the installed `codex exec --help`.
+exec
+/bin/bash -lc "sed -n '1,80p' ~/.hermes/skills/software-development/debugging-hermes-tui-commands/SKILL.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+---
+name: debugging-hermes-tui-commands
+description: "Debug Hermes TUI slash commands: Python, gateway, Ink UI."
+version: 1.0.0
+author: Hermes Agent
+license: MIT
+platforms: [linux, macos, windows]
+metadata:
+  hermes:
+    tags: [debugging, hermes-agent, tui, slash-commands, typescript, python]
+    related_skills: [python-debugpy, node-inspect-debugger, systematic-debugging]
+---
+
+# Debugging Hermes TUI Slash Commands
+
+## Overview
+
+Hermes slash commands span three layers — Python command registry, tui_gateway JSON-RPC bridge, and the Ink/TypeScript frontend. When a command misbehaves (missing from autocomplete, works in CLI but not TUI, config persists but UI doesn't update), the bug is almost always one layer being out of sync with another.
+
+Use this skill when you encounter issues with slash commands in the Hermes TUI, particularly when commands aren't showing in autocomplete, aren't working properly in the TUI, or need to be added/updated.
+
+## When to Use
+
+- A slash command exists in one part of the codebase but doesn't work fully
+- A command needs to be added to both backend and frontend
+- Command autocomplete isn't working for specific commands
+- Command behavior is inconsistent between CLI and TUI
+- A command persists config but doesn't apply live in the TUI
+
+## Architecture Overview
+
+```
+Python backend (hermes_cli/commands.py)     <- canonical COMMAND_REGISTRY
+       │
+       ▼
+TUI gateway (tui_gateway/server.py)         <- slash.exec / command.dispatch
+       │
+       ▼
+TUI frontend (ui-tui/src/app/slash/)        <- local handlers + fallthrough
+```
+
+Command definitions must be registered consistently across Python and TypeScript to work properly. The Python `COMMAND_REGISTRY` is the source of truth for: CLI dispatch, gateway help, Telegram BotCommand menu, Slack subcommand map, and autocomplete data shipped to Ink.
+
+## Investigation Steps
+
+1. **Check if the command exists in the TUI frontend:**
+   ```bash
+   search_files --pattern "/commandname" --file_glob "*.ts" --path ui-tui/
+   search_files --pattern "/commandname" --file_glob "*.tsx" --path ui-tui/
+   ```
+
+2. **Examine the TUI command definition:**
+   ```bash
+   read_file ui-tui/src/app/slash/commands/core.ts
+   # If not there:
+   search_files --pattern "commandname" --path ui-tui/src/app/slash/commands --target files
+   ```
+
+3. **Check if the command exists in the Python backend:**
+   ```bash
+   search_files --pattern "CommandDef" --file_glob "*.py" --path hermes_cli/
+   search_files --pattern "commandname" --path hermes_cli/commands.py --context 3
+   ```
+
+4. **Examine the gateway implementation:**
+   ```bash
+   search_files --pattern "complete.slash|slash.exec" --path tui_gateway/
+   ```
+
+## Fix: Missing Command Autocomplete
+
+If a command exists in the TUI but doesn't show in autocomplete:
+
+1. Add a `CommandDef` entry to `COMMAND_REGISTRY` in `hermes_cli/commands.py`:
+   ```python
+   CommandDef("commandname", "Description of the command", "Session",
+              cli_only=True, aliases=("alias",),
+              args_hint="[arg1|arg2|arg3]",
+              subcommands=("arg1", "arg2", "arg3")),
+   ```
+
+exec
+/bin/bash -lc 'rg -n "requesting-code-review|systematic-debugging|python-debugpy|node-inspect-debugger" ~/.hermes/skills/software-development/debugging-hermes-tui-commands/SKILL.md ~/.hermes/skills/software-development/plan/SKILL.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+/home/sean/.hermes/skills/software-development/plan/SKILL.md:11:    related_skills: [subagent-driven-development, test-driven-development, requesting-code-review]
+/home/sean/.hermes/skills/software-development/debugging-hermes-tui-commands/SKILL.md:11:    related_skills: [python-debugpy, node-inspect-debugger, systematic-debugging]
+/home/sean/.hermes/skills/software-development/debugging-hermes-tui-commands/SKILL.md:118:- **Python side hangs or misbehaves:** use the `python-debugpy` skill to break inside `_SlashWorker.exec` or the command handler. `remote-pdb` set at the handler entry is the fastest path.
+/home/sean/.hermes/skills/software-development/debugging-hermes-tui-commands/SKILL.md:119:- **Ink side not reacting:** use the `node-inspect-debugger` skill to break in `app.tsx`'s slash dispatch or the local command branch. `sb('dist/app.js', <line>)` after `npm run build`.
+
+exec
+/bin/bash -lc 'test -e ~/.hermes/skills/requesting-code-review/SKILL.md; echo requesting_code_review_file=$?; test -d ~/.hermes/skills/requesting-code-review; echo requesting_code_review_dir=$?; find ~/.hermes/skills -path '"'*/SKILL.md' -maxdepth 4 | sed 's#"'^.*/skills/##'"' | rg '"'^(requesting-code-review|systematic-debugging|python-debugpy|node-inspect-debugger)/'"'" in /home/sean/projects/unison
+exec
+/bin/bash -lc 'test -e ~/.config/hermes-studio; echo hermes_studio=$?; test -e ~/.hermes/.tmp/hermes-studio; echo tmp_hermes_studio=$?; test -e ~/.hermes/identity; echo hermes_identity=$?' in /home/sean/projects/unison
+ exited 1 in 0ms:
+requesting_code_review_file=1
+requesting_code_review_dir=1
+
+ succeeded in 0ms:
+hermes_studio=1
+tmp_hermes_studio=1
+hermes_identity=1
+
+exec
+/bin/bash -lc 'rg -n "~/.config/hermes-studio|~/.hermes/.tmp/hermes-studio|~/.hermes/identity|~/.hermes/prefill.json|auth-profiles.json" ~/.hermes/skills/devops/hermes-memory-architecture/SKILL.md ~/.hermes/skills/devops/node24-npm11-workaround/SKILL.md ~/.hermes/skills/red-teaming/godmode/SKILL.md ~/.hermes/skills/devops/hermes-model-config/SKILL.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+/home/sean/.hermes/skills/devops/hermes-model-config/SKILL.md:185:| API keys | `~/.hermes/.env` (env vars) | `~/.openclaw/agents/main/agent/auth-profiles.json` |
+/home/sean/.hermes/skills/red-teaming/godmode/SKILL.md:92:   - Writes prefill messages to `~/.hermes/prefill.json`
+/home/sean/.hermes/skills/red-teaming/godmode/SKILL.md:158:Create `~/.hermes/prefill.json`:
+/home/sean/.hermes/skills/devops/node24-npm11-workaround/SKILL.md:226:sudo chown root:root ~/.hermes/.tmp/hermes-studio/squashfs-root/chrome-sandbox
+/home/sean/.hermes/skills/devops/node24-npm11-workaround/SKILL.md:227:sudo chmod 4755 ~/.hermes/.tmp/hermes-studio/squashfs-root/chrome-sandbox
+/home/sean/.hermes/skills/devops/node24-npm11-workaround/SKILL.md:265:**Fix**: install the app to a path **without spaces**. The easiest workaround for the EKKOLearnAI case was the `--appimage-extract` path, which puts the binary under `~/.hermes/.tmp/hermes-studio/squashfs-root/hermes-studio` (no spaces). The .deb install path (`/opt/Hermes Studio/`) is not user-configurable on Debian/Ubuntu without breaking the alternatives system.
+/home/sean/.hermes/skills/devops/node24-npm11-workaround/SKILL.md:315:2. **Extract** (no sudo, sidesteps FUSE): `~/Downloads/Hermes.Studio-0.6.13-x86_64.AppImage --appimage-extract` to `~/.hermes/.tmp/hermes-studio/squashfs-root/`.
+/home/sean/.hermes/skills/devops/hermes-memory-architecture/SKILL.md:54:- **Pre-emptive guardrails: surface them as explicit plan items.** This user issues pre-emptive "don't break X" guardrails in every multi-component cleanup or migration — "uninstall Studio, don't delete Web UI", "purge the deb, leave the npm install alone", etc. The model should treat these as **explicit bullet items in the plan**, not as assumptions. Echo them back in the pre-flight plan ("I will: kill Studio processes, NOT touch Web UI; remove the AppImage extract, NOT `~/.hermes-web-ui/`; etc."), and verify at every step. **User-correction pattern (2026-06-11)**: when the user said "同意先卸载Studio的desktop app, 不要错误删除web ui" they were pre-empting exactly the trap where the model confuses `~/.config/hermes-studio/` with `~/.hermes-web-ui/`, or `pkill -f hermes-studio` matches a web-form process by accident. Honor the guardrail by listing what stays untouched, not just what gets removed.
+/home/sean/.hermes/skills/devops/hermes-memory-architecture/SKILL.md:100:- **OpenClaw has its own memory layer too — it's not the same as Hermes' memory.** When `~/.openclaw/agents/<id>/<id>/` ships with an `active-memory` extension (or any `memory-core` plugin), OpenClaw registers its own `memory_search` and `memory_get` tools inside the OpenClaw session. Those are NOT visible to Hermes and are NOT what `session_search` queries. If a user mentions "I asked OpenClaw about my preferences last week" the right retrieval path is to start an OpenClaw session, not to call `session_search` in Hermes. The two systems have isolated session DBs, isolated memory files, and isolated tool registries. The user's `~/.openclaw/identity/device-auth.json` and `~/.hermes/identity/` are also separate.
+/home/sean/.hermes/skills/devops/hermes-memory-architecture/SKILL.md:166:- **Cleaning up a broken frontend must never touch the working frontend's processes or data.** The EKKOLearnAI web form and the EKKOLearnAI desktop form **share a data dir (`~/.hermes-web-ui/`) and a bridge binary path** (`hermes-web-ui/dist/server/agent-bridge/hermes_bridge.py` is loaded by both). The web form's bridge uses `--endpoint ipc:///tmp/hermes-agent-bridge.sock`; the Studio desktop form's bridge uses `--endpoint tcp://127.0.0.1:<port>`. Same binary, different process, different endpoint — you cannot blanket-`pkill -f hermes_bridge.py` without inspecting the `--endpoint` flag first. The web form's data dir (`hermes-web-ui.db`, `.token`, `.login-lock.json`, `logs/`) must survive any Studio desktop cleanup; the `~/.config/hermes-studio/` Electron user-data dir is safe to delete because it belongs to the desktop form's GUI window (the web form has no Electron). The user explicitly stated this guardrail in 2026-06-11 ("同意先卸载Studio的desktop app, 不要错误删除web ui"). Treat the per-path ownership table in `references/studio-desktop-uninstall-recipe-2026-06-11.md` as the source of truth for what stays and what goes. **Tested pattern**: list all PIDs in two columns (web form — keep, Studio — kill) BEFORE any `kill`, verify Web UI is still HTTP 200 BEFORE deleting any file, and verify the Web UI is still HTTP 200 AGAIN at the end of the cleanup. The Web UI is the user's working frontend; if it goes down, the cleanup is broken even if the disk targets were all hit correctly.
+/home/sean/.hermes/skills/devops/hermes-memory-architecture/SKILL.md:213:| `~/.hermes/.tmp/hermes-studio/squashfs-root/` (~409 MB) | Studio extract | `rm -rf` (no sudo) |
+/home/sean/.hermes/skills/devops/hermes-memory-architecture/SKILL.md:215:| `~/.config/hermes-studio/` (~22 MB, Electron user-data) | Studio desktop form's GUI window | `rm -rf` (no sudo) — **not** the same as `~/.hermes-web-ui/` |
+/home/sean/.hermes/skills/devops/hermes-memory-architecture/SKILL.md:251:   sudo chown root:root ~/.hermes/.tmp/hermes-studio/squashfs-root/chrome-sandbox
+/home/sean/.hermes/skills/devops/hermes-memory-architecture/SKILL.md:252:   sudo chmod 4755 ~/.hermes/.tmp/hermes-studio/squashfs-root/chrome-sandbox
+
+codex
+For coverage, I checked several skills the audit labels clean. Those clean labels are unreliable: `red-teaming/godmode`, `devops/hermes-model-config`, `devops/node24-npm11-workaround`, and `software-development/debugging-hermes-tui-commands` all have issues the same report also lists elsewhere.
+exec
+/bin/bash -lc "rg -n '"'`(devops/hermes-model-config|red-teaming/godmode|devops/node24-npm11-workaround|software-development/debugging-hermes-tui-commands)/SKILL.md`'"' reviews/skill-audit.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+59:| 33 | `red-teaming/godmode/SKILL.md` | 64,84,92,134,158,172,195,232,403 | missing-path | **MEDIUM** | References `~/.hermes/prefill.json` — file does not exist on this system | Either create the file if the feature is active, or note it as optional runtime-generated config |
+60:| 34 | `devops/hermes-model-config/SKILL.md` | 181 | missing-path | **LOW** | References `~/.openclaw/agents/main/agent/auth-profiles.json` — file does not exist | Check if path was renamed; actual auth file is at `~/.openclaw/identity/device-auth.json` |
+70:| 44 | `devops/node24-npm11-workaround/SKILL.md` | 226,227,265,315 | missing-path | **LOW** | References `~/.hermes/.tmp/hermes-studio/` — directory does not exist | Temp directory may only exist during active studio sessions; note as transient |
+78:| 52 | `software-development/debugging-hermes-tui-commands/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `systematic-debugging`, `python-debugpy`, `node-inspect-debugger` — none exist | Remove stale references or create stub skills |
+109:- `devops/hermes-model-config/SKILL.md`
+112:- `devops/node24-npm11-workaround/SKILL.md`
+141:- `red-teaming/godmode/SKILL.md`
+146:- `software-development/debugging-hermes-tui-commands/SKILL.md`
+
+exec
+/bin/bash -lc "awk '/"'^'"\\|/{print NR \":\" gsub(/\\|/,\"&\") \":\" "'$0}'"' reviews/skill-audit.md | sed -n '1,90p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+25:8:| # | File | Line | Type | Severity | Details | Suggested Fix |
+26:8:|---|------|------|------|----------|---------|----------------|
+27:8:| 1 | `openclaw-imports/agent_auditor/SKILL.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter block; file starts with plain Markdown heading | Add `---` delimited frontmatter with `name`, `description`, `version`, `metadata.hermes.tags` |
+28:8:| 2 | `openclaw-imports/agent_factory/SKILL.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter block; file starts with `# agent_factory` heading | Add `---` delimited frontmatter with `name`, `description`, `version`, `metadata.hermes.tags` |
+29:8:| 3 | `openclaw/agents/eeat-diagnostic/.../AGENTS.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter (OpenClaw AGENTS.md format lacks frontmatter convention) | Add frontmatter block, or document that OpenClaw agents use a different metadata standard |
+30:8:| 4 | `openclaw/agents/evidence/.../AGENTS.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter | Same as #3 — standardize or document divergence |
+31:8:| 5 | `openclaw/agents/geoguy/.../AGENTS.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter | Same as #3 |
+32:8:| 6 | `openclaw/agents/geomaster/.../AGENTS.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter | Same as #3 |
+33:8:| 7 | `openclaw/agents/main/workspace/AGENTS.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter | Same as #3 |
+34:8:| 8 | `openclaw/agents/main/.../geomaster-.../AGENTS.md` | 1 | missing-frontmatter | **HIGH** | No YAML frontmatter | Same as #3 |
+35:8:| 9 | `creative/ascii-video/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field in frontmatter | Add `version: X.Y.Z` |
+36:8:| 10 | `devops/check-hermes-update-readiness/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+37:8:| 11 | `devops/hermes-update-maintenance/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+38:8:| 12 | `devops/openclaw-plugin-debug/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+39:8:| 13 | `gaming/minecraft-modpack-server/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+40:8:| 14 | `gaming/pokemon-player/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+41:8:| 15 | `memory-holographic/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+42:8:| 16 | `mlops/probe-model-limits/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+43:8:| 17 | `openclaw-imports/academic-search-skill/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+44:8:| 18 | `openclaw-imports/agent-cleanup/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+45:8:| 19 | `openclaw-imports/agent-harness-engineering/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+46:8:| 20 | `openclaw-imports/engineering-cybernetics/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+47:8:| 21 | `openclaw-imports/observer/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+48:8:| 22 | `openclaw-imports/openclaw-model-debug/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+49:8:| 23 | `openclaw-imports/requirements_normalizer/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+50:8:| 24 | `openclaw-imports/skill-context-slimmer/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+51:8:| 25 | `openclaw-imports/skill-finder-cn/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+52:8:| 26 | `openclaw-imports/tavily-search/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+53:8:| 27 | `openclaw-imports/user-read-governance/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+54:8:| 28 | `openclaw-imports/workspace-pruning/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+55:8:| 29 | `software-development/understand-anything/SKILL.md` | 1 | missing-version | **MEDIUM** | No `version` field | Add `version: X.Y.Z` |
+56:8:| 30 | `apple/apple-ecosystem/SKILL.md` | 98 | broken-command | **LOW** | References `shortcuts run <name>` — `shortcuts` CLI not found on this Linux host (macOS-only) | Document as macOS-only, or guard with platform check |
+57:8:| 31 | `creative/creative-ideation/SKILL.md` | 46 | unverifiable-command | **LOW** | References `docker` — not installed (`which docker` returned empty; `podman` also absent) | Install Docker/Podman, or note container runtime as optional dependency |
+58:8:| 32 | `software-development/hermes-s6-container-supervision/SKILL.md` | 9 | unverifiable-command | **LOW** | Heavy `docker` usage (~30 references) — `docker` not installed | Install Docker/Podman, or mark skill as requiring container runtime |
+59:8:| 33 | `red-teaming/godmode/SKILL.md` | 64,84,92,134,158,172,195,232,403 | missing-path | **MEDIUM** | References `~/.hermes/prefill.json` — file does not exist on this system | Either create the file if the feature is active, or note it as optional runtime-generated config |
+60:8:| 34 | `devops/hermes-model-config/SKILL.md` | 181 | missing-path | **LOW** | References `~/.openclaw/agents/main/agent/auth-profiles.json` — file does not exist | Check if path was renamed; actual auth file is at `~/.openclaw/identity/device-auth.json` |
+61:8:| 35 | `devops/openclaw-plugin-debug/SKILL.md` | 37,44,72,281,283 | missing-path | **MEDIUM** | References `~/.openclaw/plugin-runtime-deps/` — directory does not exist | Directory may be created at plugin install time; document as runtime-only, or create if stale reference |
+62:8:| 36 | `openclaw-imports/agent-cleanup/SKILL.md` | 22,32,58 | missing-path | **MEDIUM** | References `~/.openclaw/sessions/` — directory does not exist | May be legacy path; current sessions appear under agent-specific directories |
+63:8:| 37 | `openclaw-imports/agent-cleanup/SKILL.md` | 44 | missing-path | **MEDIUM** | References `~/.openclaw/workspace/skills/` — directory does not exist | Actual skills live at `~/.hermes/skills/` and `~/.openclaw/agents/`; update path |
+64:8:| 38 | `openclaw-imports/skill-finder-cn/SKILL.md` | 58,73,124 | missing-path | **MEDIUM** | References `~/.openclaw/workspace/skills/` — directory does not exist | Same as #37 — update to actual skill paths |
+65:8:| 39 | `productivity/workplace-tools/SKILL.md` | 218,252 | missing-path | **LOW** | References `~/.config/himalaya/config.toml` — file does not exist | Install and configure `himalaya` email client, or mark as optional |
+66:8:| 40 | `github/github-pr-workflow/SKILL.md` | 35,36,634 | missing-path | **MEDIUM** | References `~/.git-credentials` — file does not exist | Configure `git credential-store` or switch to `gh auth` which is available |
+67:8:| 41 | `github/github-pr-workflow/SKILL.md` | 641 | missing-path | **LOW** | References `~/.ssh/id_ed25519.pub` — file not found (key may use different type/path) | Verify SSH key path; common alternatives: `id_rsa.pub`, `id_ecdsa.pub` |
+68:8:| 42 | `data-science/jupyter-live-kernel/SKILL.md` | 45 | missing-path | **LOW** | References `~/.agent-skills/hamelnb` — directory does not exist | Install hamelnb or update to current notebook kernel path |
+69:8:| 43 | `devops/hermes-memory-architecture/SKILL.md` | 54,166,215 | missing-path | **LOW** | References `~/.config/hermes-studio/` — directory does not exist | May be created at runtime; verify against current hermes-studio packaging |
+70:8:| 44 | `devops/node24-npm11-workaround/SKILL.md` | 226,227,265,315 | missing-path | **LOW** | References `~/.hermes/.tmp/hermes-studio/` — directory does not exist | Temp directory may only exist during active studio sessions; note as transient |
+71:8:| 45 | `devops/hermes-memory-architecture/SKILL.md` | 100 | missing-path | **LOW** | References `~/.hermes/identity/` — directory does not exist | Path may be planned but not yet implemented; verify against current architecture |
+72:8:| 46 | `autonomous-ai-agents/multi-agent-orchestration/SKILL.md` | 270 | broken-command-flag | **LOW** | References `codex exec --sandbox workspace-write` — `--sandbox` takes values `read-only`, `workspace-write`, `danger-full-access`; flag is valid but note it's `-s` shorthand | Valid syntax confirmed; no fix needed (informational) |
+73:8:| 47 | `software-development/plan/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `requesting-code-review` — no such skill is installed | Remove stale reference or create the referenced skill |
+74:8:| 48 | `software-development/hermes-agent-skill-authoring/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `requesting-code-review` — does not exist | Same as #47 |
+75:8:| 49 | `software-development/subagent-driven-development/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `requesting-code-review` — does not exist | Same as #47 |
+76:8:| 50 | `software-development/simplify-code/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `requesting-code-review` — does not exist | Same as #47 |
+77:8:| 51 | `software-development/writing-plans/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `requesting-code-review` — does not exist | Same as #47 |
+78:8:| 52 | `software-development/debugging-hermes-tui-commands/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `systematic-debugging`, `python-debugpy`, `node-inspect-debugger` — none exist | Remove stale references or create stub skills |
+79:8:| 53 | `creative/pretext/SKILL.md` | 1 | broken-cross-ref | **LOW** | `related_skills` lists `claude-design`, `excalidraw`, `architecture-diagram` — none exist | Remove or create referenced skills |
+80:8:| — | 20 additional skills have 1-2 broken cross-references each | 1 | broken-cross-ref | **LOW** | Minor: references to `excalidraw` (ascii-art, p5js), `codex` (hermes-agent, kanban-codex-lane), `huggingface-hub` (mlops-toolkit, research-toolkit), `claude-code` (hermes-agent, multi-agent-orchestration), and others | Audit `related_skills` lists for accuracy; remove entries that have no corresponding installed skill |
+81:8:| — | 18 `openclaw-imports/*` skills | 1 | missing-tags | **MEDIUM** | Frontmatter has no `metadata.hermes.tags` (16 skills) or no tags at all (2 skills: agent_auditor, agent_factory have no frontmatter) | Add `metadata.hermes.tags: [...]` with relevant category tags |
+85:3:| Type | Count |
+86:3:|------|-------|
+87:3:| missing-frontmatter | 8 (2 hermes + 6 openclaw AGENTS.md) |
+88:3:| missing-version | 22 |
+89:3:| missing-tags | 18 |
+90:3:| missing-path | 13 distinct paths across 9 skills |
+91:3:| broken-command | 1 (`shortcuts` — macOS-only on Linux host) |
+92:3:| unverifiable-command | 2 (`docker` not installed; referenced in 2+ skills) |
+93:3:| broken-command-flag | 1 (informational — flag verified valid) |
+94:3:| broken-cross-ref | 37 references across 20+ skills |
+95:3:| **Total distinct issues** | **53** |
+
+exec
+/bin/bash -lc 'git status --short' in /home/sean/projects/unison
+ succeeded in 0ms:
+ M .unison/budget.json
+ D reviews/iter-1.md
+ D reviews/plan-iter-1.md
+ D reviews/plan-iter-2.md
+?? observer/logs/planner_iter-1_20260619T170712Z.log
+?? reviews/skill-audit.md
+
+exec
+/bin/bash -lc "rg -n '"'^'"\\| (46|—) \\|' reviews/skill-audit.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+72:| 46 | `autonomous-ai-agents/multi-agent-orchestration/SKILL.md` | 270 | broken-command-flag | **LOW** | References `codex exec --sandbox workspace-write` — `--sandbox` takes values `read-only`, `workspace-write`, `danger-full-access`; flag is valid but note it's `-s` shorthand | Valid syntax confirmed; no fix needed (informational) |
+80:| — | 20 additional skills have 1-2 broken cross-references each | 1 | broken-cross-ref | **LOW** | Minor: references to `excalidraw` (ascii-art, p5js), `codex` (hermes-agent, kanban-codex-lane), `huggingface-hub` (mlops-toolkit, research-toolkit), `claude-code` (hermes-agent, multi-agent-orchestration), and others | Audit `related_skills` lists for accuracy; remove entries that have no corresponding installed skill |
+81:| — | 18 `openclaw-imports/*` skills | 1 | missing-tags | **MEDIUM** | Frontmatter has no `metadata.hermes.tags` (16 skills) or no tags at all (2 skills: agent_auditor, agent_factory have no frontmatter) | Add `metadata.hermes.tags: [...]` with relevant category tags |
+
+exec
+/bin/bash -lc "python3 - <<'PY'
+from pathlib import Path
+for p in [Path.home()/'.hermes/skills/creative/ascii-video/SKILL.md', Path.home()/'.hermes/skills/software-development/debugging-hermes-tui-commands/SKILL.md']:
+    text=p.read_text(errors='replace')
+    if not text.startswith('---'):
+        print(p, 'NO_FRONTMATTER')
+        continue
+    end=text.find('\\n---', 3)
+    fm=text[3:end].strip() if end "'!= -1 else '"''
+    print('FILE', p)
+    print(fm)
+    print('has_version=', any(line.split(':',1)[0].strip() == 'version' for line in fm.splitlines()))
+PY" in /home/sean/projects/unison
+ succeeded in 0ms:
+FILE /home/sean/.hermes/skills/creative/ascii-video/SKILL.md
+name: ascii-video
+description: "ASCII video: convert video/audio to colored ASCII MP4/GIF."
+platforms: [linux, macos, windows]
+has_version= False
+FILE /home/sean/.hermes/skills/software-development/debugging-hermes-tui-commands/SKILL.md
+name: debugging-hermes-tui-commands
+description: "Debug Hermes TUI slash commands: Python, gateway, Ink UI."
+version: 1.0.0
+author: Hermes Agent
+license: MIT
+platforms: [linux, macos, windows]
+metadata:
+  hermes:
+    tags: [debugging, hermes-agent, tui, slash-commands, typescript, python]
+    related_skills: [python-debugpy, node-inspect-debugger, systematic-debugging]
+has_version= True
+
+codex
+I’ve got enough to write the review. The verdict will be `REQUEST_CHANGES` because the report has at least one confirmed false-positive issue and its “clean skills” section contradicts verified findings.
+exec
+/bin/bash -lc 'test -f reviews/plan-iter-1.md; echo plan_file=$?' in /home/sean/projects/unison
+ succeeded in 0ms:
+plan_file=1
+
+exec
+/bin/bash -lc pwd in /home/sean/projects/unison
+ succeeded in 0ms:
+/home/sean/projects/unison
+
+apply patch
+patch: completed
+/home/sean/projects/unison/reviews/plan-iter-1.md
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..76e79996d46d194c5cd080b4e9f629901590a809
+--- /dev/null
++++ b/reviews/plan-iter-1.md
+@@ -0,0 +1,25 @@
++---
++verdict: REQUEST_CHANGES
++summary: "The audit confirms many real issues, but it includes a confirmed false positive and its clean-skills section contradicts verified findings."
++findings:
++  - "Issue #46 is a false positive: `codex exec --sandbox workspace-write` is valid on the installed Codex CLI."
++  - "Several skills listed as clean also have issues in the same audit: `red-teaming/godmode`, `devops/hermes-model-config`, `devops/node24-npm11-workaround`, and `software-development/debugging-hermes-tui-commands`."
++  - "The issue table uses aggregate `—` rows, so not every issue is independently file/line addressable."
++---
++
++Verdict: REQUEST_CHANGES
++
++Spot-check results:
++- Checked: 5/53 findings
++- Confirmed: 4
++- False positives: 1 (#46: `codex exec --sandbox workspace-write` is valid; `codex exec --help` lists `-s, --sandbox <SANDBOX_MODE>` with `workspace-write` as an accepted value)
++- Missed issues: 4 clean-list contradictions (`red-teaming/godmode`, `devops/hermes-model-config`, `devops/node24-npm11-workaround`, `software-development/debugging-hermes-tui-commands`)
++
++Format: FAIL
++Accuracy: PASS (20% false positive rate)
++Coverage: FAIL (skills marked clean have verified issues)
++
++Issues (if REQUEST_CHANGES):
++- Issue #46 is not a real broken-command-flag finding -> remove it from the issue table or move it to a non-issue note.
++- The clean-skills section includes files with known issues -> regenerate the clean list after subtracting all files present in the issue table.
++- Aggregate issue rows with `—` in the file column are not independently auditable -> expand them into per-file findings or move them to a summary section outside the issue table.
+
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..76e79996d46d194c5cd080b4e9f629901590a809
+--- /dev/null
++++ b/reviews/plan-iter-1.md
+@@ -0,0 +1,25 @@
++---
++verdict: REQUEST_CHANGES
++summary: "The audit confirms many real issues, but it includes a confirmed false positive and its clean-skills section contradicts verified findings."
++findings:
++  - "Issue #46 is a false positive: `codex exec --sandbox workspace-write` is valid on the installed Codex CLI."
++  - "Several skills listed as clean also have issues in the same audit: `red-teaming/godmode`, `devops/hermes-model-config`, `devops/node24-npm11-workaround`, and `software-development/debugging-hermes-tui-commands`."
++  - "The issue table uses aggregate `—` rows, so not every issue is independently file/line addressable."
++---
++
++Verdict: REQUEST_CHANGES
++
++Spot-check results:
++- Checked: 5/53 findings
++- Confirmed: 4
++- False positives: 1 (#46: `codex exec --sandbox workspace-write` is valid; `codex exec --help` lists `-s, --sandbox <SANDBOX_MODE>` with `workspace-write` as an accepted value)
++- Missed issues: 4 clean-list contradictions (`red-teaming/godmode`, `devops/hermes-model-config`, `devops/node24-npm11-workaround`, `software-development/debugging-hermes-tui-commands`)
++
++Format: FAIL
++Accuracy: PASS (20% false positive rate)
++Coverage: FAIL (skills marked clean have verified issues)
++
++Issues (if REQUEST_CHANGES):
++- Issue #46 is not a real broken-command-flag finding -> remove it from the issue table or move it to a non-issue note.
++- The clean-skills section includes files with known issues -> regenerate the clean list after subtracting all files present in the issue table.
++- Aggregate issue rows with `—` in the file column are not independently auditable -> expand them into per-file findings or move them to a summary section outside the issue table.
+
+codex
+The review file is written at `reviews/plan-iter-1.md`. I’m doing a final check of the artifact and confirming I didn’t touch `src/`.
+exec
+/bin/bash -lc "sed -n '1,220p' reviews/plan-iter-1.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+---
+verdict: REQUEST_CHANGES
+summary: "The audit confirms many real issues, but it includes a confirmed false positive and its clean-skills section contradicts verified findings."
+findings:
+  - "Issue #46 is a false positive: `codex exec --sandbox workspace-write` is valid on the installed Codex CLI."
+  - "Several skills listed as clean also have issues in the same audit: `red-teaming/godmode`, `devops/hermes-model-config`, `devops/node24-npm11-workaround`, and `software-development/debugging-hermes-tui-commands`."
+  - "The issue table uses aggregate `—` rows, so not every issue is independently file/line addressable."
+---
+
+Verdict: REQUEST_CHANGES
+
+Spot-check results:
+- Checked: 5/53 findings
+- Confirmed: 4
+- False positives: 1 (#46: `codex exec --sandbox workspace-write` is valid; `codex exec --help` lists `-s, --sandbox <SANDBOX_MODE>` with `workspace-write` as an accepted value)
+- Missed issues: 4 clean-list contradictions (`red-teaming/godmode`, `devops/hermes-model-config`, `devops/node24-npm11-workaround`, `software-development/debugging-hermes-tui-commands`)
+
+Format: FAIL
+Accuracy: PASS (20% false positive rate)
+Coverage: FAIL (skills marked clean have verified issues)
+
+Issues (if REQUEST_CHANGES):
+- Issue #46 is not a real broken-command-flag finding -> remove it from the issue table or move it to a non-issue note.
+- The clean-skills section includes files with known issues -> regenerate the clean list after subtracting all files present in the issue table.
+- Aggregate issue rows with `—` in the file column are not independently auditable -> expand them into per-file findings or move them to a summary section outside the issue table.
+
+exec
+/bin/bash -lc 'git status --short src reviews/plan-iter-1.md reviews/skill-audit.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+ M reviews/plan-iter-1.md
+?? reviews/skill-audit.md
+
+exec
+/bin/bash -lc "test -f reviews/skill-audit.md && echo 'audit exists'" in /home/sean/projects/unison
+ succeeded in 0ms:
+audit exists
+
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..76e79996d46d194c5cd080b4e9f629901590a809
+--- /dev/null
++++ b/reviews/plan-iter-1.md
+@@ -0,0 +1,25 @@
++---
++verdict: REQUEST_CHANGES
++summary: "The audit confirms many real issues, but it includes a confirmed false positive and its clean-skills section contradicts verified findings."
++findings:
++  - "Issue #46 is a false positive: `codex exec --sandbox workspace-write` is valid on the installed Codex CLI."
++  - "Several skills listed as clean also have issues in the same audit: `red-teaming/godmode`, `devops/hermes-model-config`, `devops/node24-npm11-workaround`, and `software-development/debugging-hermes-tui-commands`."
++  - "The issue table uses aggregate `—` rows, so not every issue is independently file/line addressable."
++---
++
++Verdict: REQUEST_CHANGES
++
++Spot-check results:
++- Checked: 5/53 findings
++- Confirmed: 4
++- False positives: 1 (#46: `codex exec --sandbox workspace-write` is valid; `codex exec --help` lists `-s, --sandbox <SANDBOX_MODE>` with `workspace-write` as an accepted value)
++- Missed issues: 4 clean-list contradictions (`red-teaming/godmode`, `devops/hermes-model-config`, `devops/node24-npm11-workaround`, `software-development/debugging-hermes-tui-commands`)
++
++Format: FAIL
++Accuracy: PASS (20% false positive rate)
++Coverage: FAIL (skills marked clean have verified issues)
++
++Issues (if REQUEST_CHANGES):
++- Issue #46 is not a real broken-command-flag finding -> remove it from the issue table or move it to a non-issue note.
++- The clean-skills section includes files with known issues -> regenerate the clean list after subtracting all files present in the issue table.
++- Aggregate issue rows with `—` in the file column are not independently auditable -> expand them into per-file findings or move them to a summary section outside the issue table.
+
+codex
+Wrote the review to [reviews/plan-iter-1.md](/home/sean/projects/unison/reviews/plan-iter-1.md).
+
+Verdict is `REQUEST_CHANGES`. I ran the requested test (`audit exists`), spot-checked 5 findings, confirmed 4, found 1 false positive, and found clean-list contradictions. I did not modify `src/`.
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..76e79996d46d194c5cd080b4e9f629901590a809
+--- /dev/null
++++ b/reviews/plan-iter-1.md
+@@ -0,0 +1,25 @@
++---
++verdict: REQUEST_CHANGES
++summary: "The audit confirms many real issues, but it includes a confirmed false positive and its clean-skills section contradicts verified findings."
++findings:
++  - "Issue #46 is a false positive: `codex exec --sandbox workspace-write` is valid on the installed Codex CLI."
++  - "Several skills listed as clean also have issues in the same audit: `red-teaming/godmode`, `devops/hermes-model-config`, `devops/node24-npm11-workaround`, and `software-development/debugging-hermes-tui-commands`."
++  - "The issue table uses aggregate `—` rows, so not every issue is independently file/line addressable."
++---
++
++Verdict: REQUEST_CHANGES
++
++Spot-check results:
++- Checked: 5/53 findings
++- Confirmed: 4
++- False positives: 1 (#46: `codex exec --sandbox workspace-write` is valid; `codex exec --help` lists `-s, --sandbox <SANDBOX_MODE>` with `workspace-write` as an accepted value)
++- Missed issues: 4 clean-list contradictions (`red-teaming/godmode`, `devops/hermes-model-config`, `devops/node24-npm11-workaround`, `software-development/debugging-hermes-tui-commands`)
++
++Format: FAIL
++Accuracy: PASS (20% false positive rate)
++Coverage: FAIL (skills marked clean have verified issues)
++
++Issues (if REQUEST_CHANGES):
++- Issue #46 is not a real broken-command-flag finding -> remove it from the issue table or move it to a non-issue note.
++- The clean-skills section includes files with known issues -> regenerate the clean list after subtracting all files present in the issue table.
++- Aggregate issue rows with `—` in the file column are not independently auditable -> expand them into per-file findings or move them to a summary section outside the issue table.
+
+tokens used
+35,359
+

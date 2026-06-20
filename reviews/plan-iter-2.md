@@ -1,72 +1,52 @@
 ---
 verdict: REQUEST_CHANGES
-summary: "The required plugin proposal is absent, and the Phase 10 PRD/tech-design files are placeholders; the current test command produces a false pass."
+summary: "Round 2 is substantially more concrete and fixes the previous missing trust gate for Python plugins, but it still overstates CLI-plugin safety and leaves important integration and conflict semantics underspecified."
 findings:
-  - severity: Critical
-    title: "Required plugin proposal is missing"
-  - severity: Critical
-    title: "Validation command checks placeholder files instead of the required proposal"
-  - severity: Major
-    title: "No concrete plugin contract, runtime behavior, or examples are specified"
-  - severity: Major
-    title: "No security model or conflict-handling behavior is defined"
+  - "Major: Declarative CLI plugins are described as safe, but validation and execution can still run arbitrary repo-controlled binaries."
+  - "Major: Plugin runtime integration is incomplete around AgentSpec.runtime, AgentSpec.cli_flags, loader ordering, and existing runner contracts."
+  - "Major: Python plugin search order allows project-local shadowing and first-match loading instead of explicit conflict detection."
+  - "Minor: The mandatory binary --version validation is too strict for custom wrappers and can itself have side effects."
 ---
 
 Verdict: REQUEST_CHANGES
 
 ## Strengths
-- The repository now has Phase 10 placeholder files at `prd/PRD.md` and `prd/tech-design.md`, so there is at least a named destination for the design.
-- The pipeline configuration appears to have a finalizer stage, which indicates an intended approval/commit flow after review.
-- The required test command was run and returned `proposal exists`, confirming the command itself exits successfully.
+- The proposal now covers the expected major sections: motivation, runtime/interface design, plugin loading, YAML configuration, CLI flag mapping, backward compatibility, error handling, security model, migration path, open questions, file changes, and summary.
+- It is much more concrete than Round 1: there are YAML examples, Python API snippets, registry pseudocode, loader integration, Orchestrator integration, and a test/file-change table.
+- The previous critical Python-plugin issue is partly addressed: Python plugins are blocked by default behind `--allow-python-plugins`, and the text explicitly admits they run in-process.
+- Built-in runtime compatibility is better handled than before, including the previously missing `openclaw` runner path in the proposed runner map.
 
 ## Issues
-
-### Issue 1: Required plugin proposal is still absent
-- **Severity**: Critical
-- **What**: `prd/plugin-proposal.md`, the explicit review target, does not exist.
-- **Why it matters**: The Critic cannot evaluate completeness, concreteness, backward compatibility, security, complexity, or edge cases when the proposed plugin system design has not been produced.
-- **Suggested fix**: Create `prd/plugin-proposal.md` and include all required sections for the plugin system proposal, including goals, non-goals, plugin manifest schema, pipeline YAML integration, runtime loading behavior, security model, backward compatibility, conflict handling, and migration/testing strategy.
-
-### Issue 2: The validation command is a false positive
-- **Severity**: Critical
-- **What**: The configured command only checks `prd/PRD.md` and `prd/tech-design.md`, both of which exist but contain placeholder text. It does not check `prd/plugin-proposal.md` or verify meaningful content.
-- **Why it matters**: The pipeline can advance to finalization and commit an empty design. This repeats the previous critical finding instead of fixing it.
-- **Suggested fix**: Change the validation command to require the real proposal and reject placeholders, for example: `test -s prd/plugin-proposal.md && ! rg -q "Architect will write|placeholder|TBD" prd/plugin-proposal.md && echo 'proposal exists'`.
-
-### Issue 3: Required coverage is missing
+### Issue 1: Declarative CLI Plugins Are Not "Zero Trust Risk"
 - **Severity**: Major
-- **What**: The proposal does not cover any of the expected design dimensions: required sections, plugin API, manifest format, YAML examples, loader behavior, lifecycle hooks, error handling, compatibility rules, or tests.
-- **Why it matters**: Without these details, implementers cannot build the feature consistently, and reviewers cannot detect whether the proposal is over-engineered or under-specified.
-- **Suggested fix**: Add concrete design content with at least one plugin manifest example, one `pipeline.yaml` example, a runtime loading sequence, failure-mode behavior, and acceptance tests for enabled, disabled, missing, invalid, and conflicting plugins.
+- **What**: The proposal repeatedly frames `cli_plugins:` as safe because no Python is imported, but a YAML file can point `binary` at any executable. `_validate_cli_binary()` then runs `binary --version` during pre-flight, before any agent run. A malicious repo can include `.unison/bin/gemini-internal`, rely on PATH ordering, or reference an absolute/project-local script, and validation itself executes attacker-controlled code.
+- **Why it matters**: This weakens the central "safe by default" claim. The user may believe validating an untrusted pipeline is harmless, while validation can already execute arbitrary subprocess code with the user's environment and working-directory permissions.
+- **Suggested fix**: Reword the trust model: declarative CLI plugins avoid Python import risk, but still execute external code. Do not run arbitrary `--version` by default for untrusted YAML. Validate with existence/executable checks only, add an optional `validation_command:` for trusted configs, and require an explicit trust flag or allowlist for project-local/absolute plugin binaries.
 
-### Issue 4: No backward compatibility plan exists
+### Issue 2: Plugin Runtime Integration Still Has a Contract Gap
 - **Severity**: Major
-- **What**: The current placeholder design does not state whether existing `pipeline.yaml` files remain valid, how unknown plugin fields are handled, or whether plugin support is opt-in.
-- **Why it matters**: A plugin system that changes pipeline parsing or execution defaults could break existing projects silently.
-- **Suggested fix**: Specify that existing pipeline files without plugin declarations continue to behave identically. Define schema-version behavior, default values, unknown-field policy, and a migration path if any existing fields need to change.
+- **What**: The design widens `Runtime` to `str`, but keeps `AgentSpec.cli_flags` as a built-in runtime map and relies on "plugin runners do not call it." That is fragile: existing tests and callers treat `AgentSpec.cli_flags` as generally available, while any plugin runtime would `KeyError` if that property is touched. The proposal also shows `PipelineLoader.load(..., allow_python_plugins=False)` and `_build_agents(..., valid_runtimes)`, but the current loader builds agents before any plugin registry exists, so this requires an explicit ordering refactor across call sites and CLI commands.
+- **Why it matters**: A plugin can validate and still fail later through an incidental `spec.cli_flags` access, budget downgrade path, debug command builder, or future runner code. This is exactly the kind of partial compatibility bug that makes "existing pipelines load identically" true while new plugin pipelines are brittle.
+- **Suggested fix**: Move built-in CLI flag selection out of `AgentSpec` into built-in runner classes or a `builtin_cli_flags(runtime)` helper. Make `AgentSpec.runtime: str` and either remove `AgentSpec.cli_flags` or make it raise a clear `PipelineValidationError` for non-built-ins. Update the loader sequence explicitly: parse plugin registry first, compute valid runtimes, then build agents. Add tests that instantiate and run a plugin-backed `AgentSpec` without any `cli_flags` access.
 
-### Issue 5: No security model or sandbox boundary is specified
+### Issue 3: Python Plugin Search Paths Permit Shadowing
 - **Severity**: Major
-- **What**: There is no discussion of whether plugins can execute arbitrary code, read/write the filesystem, run shell commands, access network resources, or mutate pipeline state.
-- **Why it matters**: Plugins are an obvious privilege-escalation surface. A malicious or compromised plugin could exfiltrate secrets, alter review output, or modify source files unless capabilities are explicit and constrained.
-- **Suggested fix**: Define a capability model before implementation: plugin permissions, default-deny behavior, filesystem/network/process limits, audit logging, signature or trust policy if applicable, and how users approve elevated plugin actions.
+- **What**: Python plugins are searched in this order: project-local `.unison/plugins/`, then `~/.unison/plugins/`, then configured `search_paths`. `_load_python_class()` loads the first matching module and ignores later matches. A trusted user-global plugin can therefore be silently shadowed by a repo-local file with the same module name when the user passes `--allow-python-plugins`.
+- **Why it matters**: The trust gate is too coarse. A user may intend to allow their own plugin, but the project controls the highest-priority path. Deterministic first-match behavior is not the same as safe conflict handling.
+- **Suggested fix**: Require explicit source selection for Python plugins. Either default to user-global only and require `allow_project_plugins: true` for project-local loading, or scan all configured paths and fail if the same module appears in more than one place unless the config pins an absolute file path. Include the resolved plugin path in `unison validate` output.
 
-### Issue 6: Missing edge-case and conflict behavior
-- **Severity**: Major
-- **What**: The proposal does not say what happens when a plugin is missing, disabled, has an invalid manifest, depends on another unavailable plugin, registers the same hook as another plugin, or returns malformed output.
-- **Why it matters**: These are normal operational cases, not rare exceptions. Undefined behavior here will produce brittle orchestration and confusing reviewer/finalizer outcomes.
-- **Suggested fix**: Add deterministic conflict and failure semantics: plugin resolution order, duplicate hook policy, dependency resolution, user-facing error messages, partial-failure behavior, and test cases for each scenario.
+### Issue 4: `binary --version` Is an Overfit Validation Contract
+- **Severity**: Minor
+- **What**: `_validate_cli_binary()` requires every declarative CLI plugin to support `--version` and return zero within 5 seconds. That will reject many valid custom scripts and agent CLIs, especially wrappers that only accept prompts, CLIs that require auth before version output, or tools with slower startup.
+- **Why it matters**: This undermines the stated 90% use case for "custom bash wrappers." Users will work around it with fake `--version` handling or abandon the declarative tier for Python plugins, which increases risk and complexity.
+- **Suggested fix**: Make install validation configurable. Defaults should check only path resolution and executable permission. Add optional fields such as `healthcheck: ["--version"]`, `healthcheck_timeout: 5`, or `healthcheck: null`, and document that pre-flight health checks may execute the binary.
 
 ## Missing Coverage
-- The seven required proposal sections are not present because the proposal file is missing.
-- No code snippets or YAML examples exist.
-- No backward compatibility story exists for current `pipeline.yaml` files.
-- No plugin discovery/loading strategy is defined.
-- No runtime API, hook interface, or data contract is defined.
-- No sandboxing, permissions, trust, or audit model is defined.
-- No conflict-resolution behavior is defined.
-- No migration, testing, or rollout plan is defined.
-- No complexity tradeoff is assessable because no actual solution has been proposed.
+- The expected artifact path is inconsistent: Phase 10 text refers to `prd/plugin-proposal.md`, but the current proposal content is in `prd/PRD.md`; reviewers and pipeline checks should agree on one file.
+- There is no migration/test plan for all CLI entry points that call `PipelineLoader.load()`, especially `run`, `dry-run`, and `mode`, after adding `allow_python_plugins`.
+- The security model does not define environment handling for plugins beyond overlaying `os.environ`; there is no policy for secret leakage into arbitrary plugin processes.
+- Conflict handling covers duplicate runtime names, but not duplicate Python modules across search paths or conflicting CLI binary names resolved through PATH.
+- There is no concrete schema-version rule for whether `cli_plugins:` is valid only in v2.1 or accepted after migration from older versions.
 
 ## Verdict Rationale
-REQUEST_CHANGES. This iteration does not yet contain a reviewable plugin-system proposal. The placeholder PRD and tech-design files satisfy the current test command but not the actual Phase 10 requirement, and the required `prd/plugin-proposal.md` remains absent. The next revision needs to produce the real proposal and update validation so a placeholder cannot pass again.
+Round 2 is directionally solid and much more actionable than the prior proposal, but it should not pass while the primary safety claim is inaccurate and the plugin-runtime contract can fail through existing `AgentSpec.cli_flags` assumptions. Fix the trust wording/validation behavior, make plugin runtime integration explicit, and tighten Python plugin path resolution before accepting the design.

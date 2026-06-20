@@ -1,0 +1,124 @@
+=== COMMAND ===
+claude -p --dangerously-skip-permissions WRITE A COMPLETE PRD NOW. Do not write placeholders. Write at least 300 words covering: (1) what to migrate: pipeline.yaml structure, developer/reviewer prompt patterns, risk matrix config, (2) target: generic Python project in target-demo/, (3) format: YAML templates with <USER MUST FILL> markers, (4) validation: dry-run must pass. Start writing immediately.
+
+# Template-Migrator (Claude Code) — Phase 14: Cross-Project Template Migration
+
+You are the **Template-Migrator**. Transfer Unison pipeline configuration patterns
+from the Unison project to a new target project.
+
+## Your Mission
+
+Read source files from `~/projects/unison/` and generate a target project
+skeleton in `~/projects/unison/target-demo/`.
+
+## Source Files to Read
+
+1. `~/projects/unison/v2-fix-pipeline.yaml` — pipeline structure reference
+2. `~/projects/unison/prompts/developer-v2-fix.md` — developer prompt patterns
+3. `~/projects/unison/prompts/reviewer-v2-fix.md` — reviewer prompt patterns
+4. `~/projects/unison/interfaces.py` — understand the type system
+
+## Target Files to Generate
+
+### 1. `target-demo/target-pipeline.yaml`
+
+```yaml
+version: "2.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: <USER MUST FILL>
+    system_prompt_path: "prompts/developer-target.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: <USER MUST FILL>
+    system_prompt_path: "prompts/reviewer-target.md"
+project:
+  test_command: "<USER MUST FILL: e.g., pytest tests/ -q>"
+  max_iterations: 5
+snapshots:
+  enabled: true
+risk_matrix:
+  enabled: true
+```
+
+### 2. `target-demo/prompts/developer-target.md`
+
+Adapt the developer prompt from `developer-v2-fix.md`:
+- Replace "Unison V2 integration fix" with placeholder `<PROJECT NAME>`
+- Keep the workflow pattern (read PRD → implement → test → commit)
+- Keep the critical constraints (don't touch contract, add tests)
+- Replace Unison-specific paths with `<PROJECT_ROOT>/...` placeholders
+- Add a comment: `# Generated from Unison template — customize for your project`
+
+### 3. `target-demo/prompts/reviewer-target.md`
+
+Adapt the reviewer prompt:
+- Keep verdict format (PASS / REQUEST_CHANGES)
+- Keep review criteria structure
+- Replace Unison-specific checks with generic ones
+
+### 4. `target-demo/.unison/policy.yaml` (optional)
+
+If source has a policy file, migrate the risk matrix while keeping paths generic.
+
+## Rules
+
+- Do NOT modify source files in ~/projects/unison/
+- Do NOT modify Unison source code
+- Mark all user-customizable fields with `<USER MUST FILL: ...>`
+- Include a README comment explaining what the user needs to customize
+- Ensure `unison dry-run --pipeline target-demo/target-pipeline.yaml` succeeds
+
+
+## Git Diff
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 9b95915..76901e4 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -432,8 +432,9 @@ class Orchestrator:
+                 return
+             # overflow_action == "downgrade" — already handled in _select_runner
+ 
+-        # 3. Pre-invoke cleanup
+-        self.pre_invoke_cleanup()
++        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
++        if role == "developer":
++            self.pre_invoke_cleanup()
+ 
+         if self._state.halt_signal:
+... (truncated)
+
+## Design
+# Phase 14: Tech Design
+
+
+## PRD
+# Phase 14: Template Migration
+
+
+=== STDOUT ===
+PRD is **1,327 words** — well above the 300-word minimum. Here's what was written:
+
+### `prd/PRD.md` — covers all four required topics:
+
+1. **What to migrate** — detailed breakdown of:
+   - `v2-fix-pipeline.yaml` structure (version, agents, project, budget, snapshots, risk_matrix — every key explained)
+   - Developer prompt patterns (8-step per-iteration workflow, frozen contract, allow-list, test discipline, commit format)
+   - Reviewer prompt patterns (7-step verification loop, verdict format, verification depth, honesty principle, contract enforcement)
+   - Risk matrix config (`system_critical_paths`, `known_safe_external_commands`, `workspace_rules`, `external_rules` — derived from `interfaces.py`)
+
+2. **Target** — generic Python project at `target-demo/` with full directory tree and explanation of conventions
+
+3. **Format** — five rules for `<USER MUST FILL: description>` markers, structural key preservation, comments, path placeholders, policy example format
+
+4. **Validation** — `unison dry-run --pipeline target-demo/target-pipeline.yaml` with explicit pass criteria (YAML parse, required keys, role names, runtime IDs, path resolution, test command, max_iterations)
+
+### `prd/tech-design.md` — architecture diagram, five design decisions with rationale, file-by-file transformation specs, error handling matrix, and implementation checklist.
+
+
+=== STDERR ===
+

@@ -1,7 +1,7 @@
 {
-  "date": "2026-06-19",
-  "daily_used": 161553,
-  "task_used": 161553,
+  "date": "2026-06-20",
+  "daily_used": 26787,
+  "task_used": 188340,
   "phases": [
     {
       "phase": "developer",
@@ -62,6 +62,72 @@
       "iter_n": 1,
       "tokens_used": 18464,
       "timestamp": "2026-06-19T15:49:36.663147+00:00"
+    },
+    {
+      "phase": "planner",
+      "iter_n": 1,
+      "tokens_used": 832,
+      "timestamp": "2026-06-19T17:09:34.982249+00:00"
+    },
+    {
+      "phase": "reviewer",
+      "iter_n": 1,
+      "tokens_used": 568,
+      "timestamp": "2026-06-19T17:11:36.852230+00:00"
+    },
+    {
+      "phase": "planner",
+      "iter_n": 2,
+      "tokens_used": 949,
+      "timestamp": "2026-06-19T17:15:14.612050+00:00"
+    },
+    {
+      "phase": "planner",
+      "iter_n": 1,
+      "tokens_used": 843,
+      "timestamp": "2026-06-19T17:19:07.048267+00:00"
+    },
+    {
+      "phase": "reviewer",
+      "iter_n": 1,
+      "tokens_used": 4686,
+      "timestamp": "2026-06-19T17:21:50.646119+00:00"
+    },
+    {
+      "phase": "planner",
+      "iter_n": 2,
+      "tokens_used": 5009,
+      "timestamp": "2026-06-19T17:23:53.479158+00:00"
+    },
+    {
+      "phase": "reviewer",
+      "iter_n": 2,
+      "tokens_used": 4815,
+      "timestamp": "2026-06-19T17:28:43.666908+00:00"
+    },
+    {
+      "phase": "planner",
+      "iter_n": 1,
+      "tokens_used": 729,
+      "timestamp": "2026-06-19T17:30:30.017178+00:00"
+    },
+    {
+      "phase": "reviewer",
+      "iter_n": 1,
+      "tokens_used": 2692,
+      "timestamp": "2026-06-19T17:32:42.430196+00:00"
+    },
+    {
+      "phase": "planner",
+      "iter_n": 2,
+      "tokens_used": 2877,
+      "timestamp": "2026-06-19T17:35:14.172170+00:00"
+    },
+    {
+      "phase": "reviewer",
+      "iter_n": 2,
+      "tokens_used": 2787,
+      "timestamp": "2026-06-19T17:37:53.653181+00:00"
     }
   ]
 }

@@ -1,0 +1,1358 @@
+=== COMMAND ===
+codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 2: 1. Run tests: cd ~/projects/unison && PYTHONPATH=/home/sean/projects/unison:/home/sean/projects/unison/src python3 -m unison.cli dry-run --pipeline target-demo/target-pipeline.yaml 2>&1 2. Write review to /home/sean/projects/unison/reviews/plan-iter-2.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Migrate-Reviewer (Codex) — Phase 14: Template Migration Review
+
+You are the **Migrate-Reviewer**. Validate the template migration for correctness.
+
+## Your Mission
+
+Review the generated target project files in `~/projects/unison/target-demo/`
+and produce a verdict.
+
+## Review Criteria
+
+1. **Structural Completeness**: Are all 3-4 files generated?
+   - `target-pipeline.yaml`
+   - `prompts/developer-target.md`
+   - `prompts/reviewer-target.md`
+   - `.unison/policy.yaml` (optional)
+
+2. **Dry-Run Passes**: Run:
+   ```
+   cd ~/projects/unison && PYTHONPATH=~/projects/unison:~/projects/unison/src python3 -m unison.cli dry-run --pipeline target-demo/target-pipeline.yaml
+   ```
+   Must output "OK" for all checks.
+
+3. **No Source Leaks**: The target files should NOT contain:
+   - "Unison V2 integration fix" (source-specific)
+   - Paths like `~/projects/unison/src/` (source-specific)
+   - File names like `orchestrator.py` (source-specific)
+
+4. **Customizable Fields**: All project-specific values should be marked with
+   `<USER MUST FILL: ...>` or similar placeholder.
+
+5. **Source Files Untouched**: Verify that `~/projects/unison/prompts/developer-v2-fix.md`
+   and other source files are unchanged.
+
+## Output Format
+
+```
+Verdict: PASS | REQUEST_CHANGES
+
+Completeness: PASS | FAIL (<missing files>)
+Dry-Run: PASS | FAIL (<error message>)
+No Source Leaks: PASS | FAIL (<leaked references>)
+Customizable: PASS | FAIL (<hardcoded values>)
+Source Untouched: PASS | FAIL (<modified files>)
+
+Issues (if REQUEST_CHANGES):
+- <specific issue> → <suggested fix>
+```
+
+
+## Last Review Findings
+[INFO] {'id': 'missing-target-demo', 'severity': 'high', 'title': 'target-demo project was not generated', 'details': 'target-demo/ does not exist, so required template files are absent and dry-run fails before validation.'}
+[INFO] {'id': 'dry-run-missing-pipeline', 'severity': 'high', 'title': 'Dry-run fails because target-pipeline.yaml is missing', 'details': 'python3 -m unison.cli dry-run --pipeline target-demo/target-pipeline.yaml exited with code 1: ERROR: Pipeline file not found.'}
+
+## Git Diff
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 9b95915..76901e4 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -432,8 +432,9 @@ class Orchestrator:
+                 return
+             # overflow_action == "downgrade" — already handled in _select_runner
+ 
+-        # 3. Pre-invoke cleanup
+-        self.pre_invoke_cleanup()
++        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
++        if role == "developer":
++            self.pre_invoke_cleanup()
+ 
+         if self._state.halt_signal:
+... (truncated)
+
+## Design
+# Phase 14: Tech Design — Cross-Project Template Migration
+
+## Architecture
+
+```
+Source (read-only)                    Target (write-only)
+─────────────────                    ──────────────────
+v2-fix-pipeline.yaml ──┐
+prompts/developer-v2-fix.md ─┤
+prompts/reviewer-v2-fix.md ──┼──→ Template-Migrator ──→ target-demo/
+interfaces.py ───────────────┘                           ├── target-pipeline.yaml
+                                                          ├── prompts/developer-target.md
+                                                          ├── prompts/reviewer-target.md
+                                                          ├── .unison/policy.yaml
+                                                          ├── src/__init__.py
+                                                          ├── tests/__init__.py
+                                                          └── README.md
+```
+
+## Design Decisions
+
+### DD1: Read-Only Source Access
+
+The Template-Migrator reads Unison source files but never writes to them. This
+is enforced by the task instructions (`Do NOT modify source files`). The
+migrator operates as a pure function: `(source files) → (target files)`.
+
+**Rationale**: The templates must not accidentally overwrite the Unison project's
+own configuration. The source files are reference implementations, not mutable
+templates.
+
+### DD2: `<USER MUST FILL>` Placeholder Convention
+
+All project-specific values are replaced with `<USER MUST FILL: description>`
+markers. The description is a short hint in plain English that a new adopter can
+understand without reading Unison source code.
+
+**Rationale**: Plain `<FILL>` or empty strings would be ambiguous. A descriptive
+marker like `<USER MUST FILL: e.g., pytest tests/ -q>` gives the adopter a
+concrete example while making it obvious the field requires customization.
+
+### DD3: Prompt Structure Preservation
+
+The developer and reviewer prompts keep their workflow skeleton (numbered steps)
+and critical constraint sections (frozen files, test discipline, commit format)
+intact. Only project-specific names and paths are replaced.
+
+**Rationale**: The workflow pattern (read → implement → test → commit → report)
+is the reusable asset. Stripping it down to generic instructions would lose the
+value. Keeping the structure while parameterizing the specifics gives adopters
+a proven template they can adapt.
+
+### DD4: Risk Matrix as Commented-Out Example
+
+Since no `.unison/policy.yaml` exists in the Unison source, the migrator
+generates a commented-out example showing the `operation × scope × risk_level`
+syntax. The example is derived from the `RiskMatrixConfig` dataclass in
+`interfaces.py`.
+
+**Rationale**: A blank file is not useful. A fully-configured file with
+Unison-specific paths would be misleading. A commented-out example teaches the
+format without prescribing any particular policy.
+
+### DD5: Dry-Run Validation
+
+The acceptance criterion is `unison dry-run --pipeline target-demo/target-pipeline.yaml`
+exiting with code 0. The dry-run validates:
+1. YAML parse succeeds.
+2. All required keys are present.
+3. Agent roles and runtimes are recognized.
+4. Path references resolve.
+5. Test command is non-empty.
+6. `max_iterations` is a positive integer.
+
+**Rationale**: Dry-run is the cheapest validation that catches structural errors.
+It does not require model credentials, network access, or a running agent loop.
+A passing dry-run means the template is structurally sound and ready for an
+adopter to fill in their specific values.
+
+## File-by-File Design
+
+### 1. `target-pipeline.yaml`
+
+**Source**: `v2-fix-pipeline.yaml`
+
+**Transformations**:
+- `model` values → `<USER MUST FILL: e.g., deepseek-v4-pro, gpt-5.5, ...>`
+- `system_prompt_path` → `"prompts/developer-target.md"` and `"prompts/reviewer-target.md"`
+- `test_command` → `"<USER MUST FILL: e.g., pytest tests/ -q>"`
+- `budget` section → preserved as optional, with `<USER MUST FILL>` on token values
+- `snapshots.base_dir` → `"<USER MUST FILL: e.g., ~/.unison/snapshots>"`
+- `risk_matrix.l2_audit_log` → `"<USER MUST FILL: e.g., observer/audit.jsonl>"`
+- Header comment added: `# Generated from Unison template — customize for your project`
+
+**Preserved**:
+- `version: "2.0"`
+- Agent role names (`developer`, `reviewer`)
+- Runtime identifiers (`claude`, `codex`)
+- `max_iterations: 5`
+
+### 2. `prompts/developer-target.md`
+
+**Source**: `prompts/developer-v2-fix.md`
+
+**Transformations**:
+- `Unison V2 integration fix` → `<PROJECT NAME>`
+- `~/projects/unison/` → `<PROJECT_ROOT>/`
+- All Unison-specific file paths → `<PROJECT_ROOT>/...` placeholders
+- Phase-specific fix table → generic feature table with `<FEATURE NAME>` placeholders
+- Commit format examples → generic `<feature>: <description>` template
+- Test count (`461 → <N> passed`) → `<COUNT> → <N> passed`
+- Header comment added: `# Generated from Unison template — customize for your project`
+
+**Preserved**:
+- Per-iteration workflow (8 numbered steps)
+- Critical constraints section (frozen files, allow-list)
+- Test discipline section
+- Reporting format
+
+### 3. `prompts/reviewer-target.md`
+
+**Source**: `prompts/reviewer-v2-fix.md`
+
+**Transformations**:
+- `Unison V2 integration fix` → `<PROJECT NAME>`
+- `~/projects/unison/` → `<PROJECT_ROOT>/`
+- `prd/v2-review-codex.md` → `<PROJECT_ROOT>/<REVIEW DOC PATH>`
+- Phase-specific verification table → generic feature verification checklist
+- Severity labels → English equivalents if needed (the source uses Chinese: 严重/中等/轻微)
+- Header comment added: `# Generated from Unison template — customize for your project`
+
+**Preserved**:
+- Per-iteration workflow (7 numbered steps)
+- Verdict format (`PASS | REQUEST_CHANGES`)
+- YAML frontmatter structure (`verdict`, `summary`, `findings`)
+- Honesty principle section
+- Contract enforcement section
+
+### 4. `.unison/policy.yaml` (Optional)
+
+**Source**: `interfaces.py` `RiskMatrixConfig` dataclass
+
+**Content**: Commented-out YAML showing the policy format:
+```yaml
+# Risk matrix policy — customize for your project
+# Format: operation × scope → risk_level
+#
+# Risk levels:
+#   L0: auto_allow — always permit
+#   L1: auto_allow_session — permit after first approval this session
+#   L2: observer_evaluate — post-hoc audit via rule engine
+#   L3: halt — unconditionally deny, halt pipeline, notify operator
+#
+# system_critical_paths:
+#   - "<PROJECT_ROOT>/ARCHITECTURE.md"
+#   - "<PROJECT_ROOT>/interfaces.py"
+#
+# known_safe_external_commands:
+#   - "pip install"
+#   - "git push"
+#
+# workspace_rules:
+#   READ: L0
+#   CREATE: L1
+#   MODIFY: L2
+#   DELETE: L2
+#
+# external_rules:
+#   READ: L0
+#   CREATE: L1
+#   MODIFY: L3
+#   DELETE: L3
+```
+
+### 5. `README.md`
+
+A short guide explaining:
+- What each file is and what it does.
+- Which fields to fill in (every `<USER MUST FILL>` marker).
+- How to run `unison dry-run` to validate.
+- How to run `unison run` to start the pipeline.
+
+## Error Handling
+
+| Scenario | Behavior |
+|----------|----------|
+| Source file missing | Migrator reports the missing file and generates a placeholder with a `<!-- MISSING SOURCE -->` comment |
+| `target-demo/` already exists | Migrator overwrites template files but does not delete user-created files |
+| YAML parse error in generated output | Migrator reports the error; dry-run fails |
+| `<USER MUST FILL>` in required fields | Dry-run warns but does not error (user may have filled them in) |
+
+## Implementation Checklist
+
+- [ ] Create `target-demo/` directory structure
+- [ ] Generate `target-pipeline.yaml` from `v2-fix-pipeline.yaml`
+- [ ] Generate `prompts/developer-target.md` from `prompts/developer-v2-fix.md`
+- [ ] Generate `prompts/reviewer-target.md` from `prompts/reviewer-v2-fix.md`
+- [ ] Generate `.unison/policy.yaml` (commented-out example)
+- [ ] Generate `src/__init__.py` (empty placeholder)
+- [ ] Generate `tests/__init__.py` (empty placeholder)
+- [ ] Generate `README.md`
+- [ ] Run `unison dry-run --pipeline target-demo/target-pipeline.yaml`
+- [ ] Verify no Unison source files were modified
+
+
+## PRD
+# Phase 14: Cross-Project Template Migration
+
+## Summary
+
+Unison's configuration patterns — pipeline YAML structure, developer/reviewer
+system prompts, and risk matrix configuration — have been proven effective through
+the V2 integration fix. This phase extracts those patterns into reusable templates
+and validates them by generating a target project skeleton in `target-demo/`.
+The output is a set of generic, well-documented YAML and Markdown templates that
+any Python project can adopt with minimal customization.
+
+## What to Migrate
+
+### 1. Pipeline YAML Structure (`v2-fix-pipeline.yaml`)
+
+The source pipeline defines a two-agent loop with the following structure:
+
+- **`version: "2.0"`** — semantic version string for the pipeline spec format.
+- **`project_root`** — project working directory (`.` for the project root).
+- **`agents`** — a map of agent role names to per-agent configuration blocks.
+  Each block contains:
+  - `role`: the agent's logical role (`developer`, `reviewer`, `planner`, `observer`).
+  - `runtime`: which CLI runner to use (`claude`, `codex`, `hermes`, `openclaw`).
+  - `model`: the LLM model identifier (e.g., `deepseek-v4-pro`, `gpt-5.5`).
+  - `system_prompt_path`: path to the Markdown file containing the agent's
+    system prompt template.
+- **`project`** — project-level settings:
+  - `test_command`: shell command to run the test suite (e.g., `pytest tests/ -q`).
+  - `max_iterations`: safety cap on the dev→review→dev loop.
+- **`budget`** (optional) — token budget constraints:
+  - `max_tokens_per_agent`: per-agent token cap.
+  - `max_total_tokens`: aggregate cap across all agents.
+- **`snapshots`** — snapshot safety net configuration:
+  - `enabled`: toggle snapshots on or off.
+  - `base_dir`: directory for snapshot storage.
+- **`risk_matrix`** — risk evaluation configuration:
+  - `enabled`: toggle the risk matrix on or off.
+  - `l2_audit_log`: path to the audit log for L2-level risk events.
+
+Every field that is project-specific (model name, test command, paths) is replaced
+with a `<USER MUST FILL: description>` marker so the template is safe to copy
+without accidentally leaking Unison defaults.
+
+### 2. Developer Prompt Patterns (`prompts/developer-v2-fix.md`)
+
+The developer prompt encodes a per-iteration workflow that has proven effective
+across eight phases of V2 integration:
+
+1. Read the design document to identify assigned phases.
+2. For each phase, read the original design doc and the reviewer findings.
+3. Read the relevant source and test files.
+4. Implement the fix.
+5. Add or update tests.
+6. Run the test command (must remain green).
+7. Commit with a structured message format: `fix: <phase> <one-line summary>`.
+8. Report completion to the Observer with commit hash and test count.
+
+The prompt also encodes critical constraints:
+- A **frozen contract** — certain files may not be modified (`interfaces.py`,
+  architecture docs, past review decisions), enforced by an explicit deny-list.
+- An **allow-list** of files that may be modified.
+- **Test discipline** — tests must pass at every commit; test count must go up,
+  not down.
+- **Commit format** — each phase has a prescribed commit message template.
+
+In the migrated template, all Unison-specific references (project name, file
+paths, phase names, Codex review paths) are replaced with `<USER MUST FILL>`
+markers. The workflow skeleton is preserved intact.
+
+### 3. Reviewer Prompt Patterns (`prompts/reviewer-v2-fix.md`)
+
+The reviewer prompt defines a verification loop that complements the developer:
+
+1. Pull the latest commits from git.
+2. Review the diff.
+3. Run the test suite (must pass).
+4. For each assigned phase, verify that the Codex finding is actually fixed:
+   - Read the modified source files.
+   - Check that the file:line referenced in the review is now correct.
+   - Check that a new test covers the regression.
+5. Write the review to `reviews/iter-<N>.md` with YAML frontmatter containing
+   `verdict`, `summary`, and `findings`.
+6. Report completion with the verdict.
+
+Key patterns preserved in the template:
+- **Verdict format**: `PASS | REQUEST_CHANGES` with structured findings list.
+- **Verification depth**: each finding checks both code change AND test coverage.
+- **Honesty principle**: half-fixes get `REQUEST_CHANGES`, not a pass.
+- **Contract enforcement**: if the developer is forced to break frozen files,
+  the reviewer flags it as a planning-level failure.
+
+### 4. Risk Matrix Configuration
+
+The risk matrix is defined in `interfaces.py` via `RiskMatrixConfig`:
+
+- `system_critical_paths`: paths that always trigger `L3` (halt) on any write
+  operation. Examples: `ARCHITECTURE.md`, `interfaces.py`, contract documents.
+- `known_safe_external_commands`: commands that are downgraded one risk level
+  when executed outside the workspace. Examples: `pip install`, `git push`.
+- `workspace_rules` and `external_rules`: `Operation × RiskLevel` mappings
+  (e.g., `MODIFY` inside workspace → `L2`, `DELETE` outside workspace → `L3`).
+
+If a policy file exists at `.unison/policy.yaml`, its contents are migrated
+with paths made generic. If no policy file exists, the template includes a
+commented-out example that shows the format.
+
+## Target: Generic Python Project in `target-demo/`
+
+The target project is a minimal Python skeleton at `target-demo/` that
+demonstrates the templates working end-to-end:
+
+```
+target-demo/
+├── target-pipeline.yaml          # migrated pipeline config
+├── prompts/
+│   ├── developer-target.md       # migrated developer prompt
+│   └── reviewer-target.md        # migrated reviewer prompt
+├── .unison/
+│   └── policy.yaml               # migrated risk matrix (if source exists)
+├── src/
+│   └── __init__.py               # placeholder Python package
+├── tests/
+│   └── __init__.py               # placeholder test package
+└── README.md                     # customization guide for adopters
+```
+
+The target project uses Python conventions (`src/` + `tests/`, `pytest`) as
+the default language because Unison itself is a Python project and the template
+patterns were validated in that ecosystem. The `README.md` explains which fields
+to fill in and how to run the dry-run validation.
+
+## Format: YAML Templates with `<USER MUST FILL>` Markers
+
+Every template file follows these formatting rules:
+
+1. **All user-customizable values** are replaced with `<USER MUST FILL: description>`.
+   The description provides enough context that a new adopter can fill it in
+   without reading source code. Examples:
+   - `<USER MUST FILL: e.g., deepseek-v4-pro, gpt-5.5, claude-sonnet-4-6>`
+   - `<USER MUST FILL: e.g., pytest tests/ -q>`
+   - `<USER MUST FILL: your project name, e.g., "My Django App">`
+
+2. **Structural YAML keys** (version, agent role names, runtime identifiers) are
+   preserved as-is because they are part of the Unison protocol contract.
+
+3. **Comments** explain the purpose of each section and what the user must
+   customize. Every generated file includes a header comment:
+   `# Generated from Unison template — customize for your project`
+
+4. **Placeholder paths** use `<PROJECT_ROOT>/...` notation to indicate where
+   project-specific directories should be substituted.
+
+5. The **`.unison/policy.yaml`** template (if generated) includes commented-out
+   example rules showing the `operation × scope × risk_level` mapping syntax.
+
+## Validation: Dry-Run Must Pass
+
+The acceptance criterion for this phase is:
+
+```
+unison dry-run --pipeline target-demo/target-pipeline.yaml
+```
+
+must exit successfully. A dry-run validates:
+- YAML syntax (parseable without errors).
+- All required keys present (`version`, `agents`, `project`).
+- Agent role names are valid (`developer`, `reviewer`, `planner`, `observer`).
+- Runtime identifiers are recognized (`claude`, `codex`, `hermes`, `openclaw`).
+- Path references resolve (system prompt paths exist relative to project root).
+- Test command is a non-empty string.
+- `max_iterations` is a positive integer.
+
+The dry-run does **not** execute agents, run tests, or require model credentials —
+it only validates structural correctness. This means the template can be validated
+immediately after generation, before the user fills in any `<USER MUST FILL>`
+fields
+...[truncated]
+
+=== STDOUT ===
+
+
+=== STDERR ===
+Reading additional input from stdin...
+OpenAI Codex v0.141.0
+--------
+workdir: /home/sean/projects/unison
+model: gpt-5.5
+provider: openai-custom
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 019ee0e9-1b48-7713-8666-c13a2f063974
+--------
+user
+Review Iteration 2: 1. Run tests: cd ~/projects/unison && PYTHONPATH=/home/sean/projects/unison:/home/sean/projects/unison/src python3 -m unison.cli dry-run --pipeline target-demo/target-pipeline.yaml 2>&1 2. Write review to /home/sean/projects/unison/reviews/plan-iter-2.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Migrate-Reviewer (Codex) — Phase 14: Template Migration Review
+
+You are the **Migrate-Reviewer**. Validate the template migration for correctness.
+
+## Your Mission
+
+Review the generated target project files in `~/projects/unison/target-demo/`
+and produce a verdict.
+
+## Review Criteria
+
+1. **Structural Completeness**: Are all 3-4 files generated?
+   - `target-pipeline.yaml`
+   - `prompts/developer-target.md`
+   - `prompts/reviewer-target.md`
+   - `.unison/policy.yaml` (optional)
+
+2. **Dry-Run Passes**: Run:
+   ```
+   cd ~/projects/unison && PYTHONPATH=~/projects/unison:~/projects/unison/src python3 -m unison.cli dry-run --pipeline target-demo/target-pipeline.yaml
+   ```
+   Must output "OK" for all checks.
+
+3. **No Source Leaks**: The target files should NOT contain:
+   - "Unison V2 integration fix" (source-specific)
+   - Paths like `~/projects/unison/src/` (source-specific)
+   - File names like `orchestrator.py` (source-specific)
+
+4. **Customizable Fields**: All project-specific values should be marked with
+   `<USER MUST FILL: ...>` or similar placeholder.
+
+5. **Source Files Untouched**: Verify that `~/projects/unison/prompts/developer-v2-fix.md`
+   and other source files are unchanged.
+
+## Output Format
+
+```
+Verdict: PASS | REQUEST_CHANGES
+
+Completeness: PASS | FAIL (<missing files>)
+Dry-Run: PASS | FAIL (<error message>)
+No Source Leaks: PASS | FAIL (<leaked references>)
+Customizable: PASS | FAIL (<hardcoded values>)
+Source Untouched: PASS | FAIL (<modified files>)
+
+Issues (if REQUEST_CHANGES):
+- <specific issue> → <suggested fix>
+```
+
+
+## Last Review Findings
+[INFO] {'id': 'missing-target-demo', 'severity': 'high', 'title': 'target-demo project was not generated', 'details': 'target-demo/ does not exist, so required template files are absent and dry-run fails before validation.'}
+[INFO] {'id': 'dry-run-missing-pipeline', 'severity': 'high', 'title': 'Dry-run fails because target-pipeline.yaml is missing', 'details': 'python3 -m unison.cli dry-run --pipeline target-demo/target-pipeline.yaml exited with code 1: ERROR: Pipeline file not found.'}
+
+## Git Diff
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 9b95915..76901e4 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -432,8 +432,9 @@ class Orchestrator:
+                 return
+             # overflow_action == "downgrade" — already handled in _select_runner
+ 
+-        # 3. Pre-invoke cleanup
+-        self.pre_invoke_cleanup()
++        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
++        if role == "developer":
++            self.pre_invoke_cleanup()
+ 
+         if self._state.halt_signal:
+... (truncated)
+
+## Design
+# Phase 14: Tech Design — Cross-Project Template Migration
+
+## Architecture
+
+```
+Source (read-only)                    Target (write-only)
+─────────────────                    ──────────────────
+v2-fix-pipeline.yaml ──┐
+prompts/developer-v2-fix.md ─┤
+prompts/reviewer-v2-fix.md ──┼──→ Template-Migrator ──→ target-demo/
+interfaces.py ───────────────┘                           ├── target-pipeline.yaml
+                                                          ├── prompts/developer-target.md
+                                                          ├── prompts/reviewer-target.md
+                                                          ├── .unison/policy.yaml
+                                                          ├── src/__init__.py
+                                                          ├── tests/__init__.py
+                                                          └── README.md
+```
+
+## Design Decisions
+
+### DD1: Read-Only Source Access
+
+The Template-Migrator reads Unison source files but never writes to them. This
+is enforced by the task instructions (`Do NOT modify source files`). The
+migrator operates as a pure function: `(source files) → (target files)`.
+
+**Rationale**: The templates must not accidentally overwrite the Unison project's
+own configuration. The source files are reference implementations, not mutable
+templates.
+
+### DD2: `<USER MUST FILL>` Placeholder Convention
+
+All project-specific values are replaced with `<USER MUST FILL: description>`
+markers. The description is a short hint in plain English that a new adopter can
+understand without reading Unison source code.
+
+**Rationale**: Plain `<FILL>` or empty strings would be ambiguous. A descriptive
+marker like `<USER MUST FILL: e.g., pytest tests/ -q>` gives the adopter a
+concrete example while making it obvious the field requires customization.
+
+### DD3: Prompt Structure Preservation
+
+The developer and reviewer prompts keep their workflow skeleton (numbered steps)
+and critical constraint sections (frozen files, test discipline, commit format)
+intact. Only project-specific names and paths are replaced.
+
+**Rationale**: The workflow pattern (read → implement → test → commit → report)
+is the reusable asset. Stripping it down to generic instructions would lose the
+value. Keeping the structure while parameterizing the specifics gives adopters
+a proven template they can adapt.
+
+### DD4: Risk Matrix as Commented-Out Example
+
+Since no `.unison/policy.yaml` exists in the Unison source, the migrator
+generates a commented-out example showing the `operation × scope × risk_level`
+syntax. The example is derived from the `RiskMatrixConfig` dataclass in
+`interfaces.py`.
+
+**Rationale**: A blank file is not useful. A fully-configured file with
+Unison-specific paths would be misleading. A commented-out example teaches the
+format without prescribing any particular policy.
+
+### DD5: Dry-Run Validation
+
+The acceptance criterion is `unison dry-run --pipeline target-demo/target-pipeline.yaml`
+exiting with code 0. The dry-run validates:
+1. YAML parse succeeds.
+2. All required keys are present.
+3. Agent roles and runtimes are recognized.
+4. Path references resolve.
+5. Test command is non-empty.
+6. `max_iterations` is a positive integer.
+
+**Rationale**: Dry-run is the cheapest validation that catches structural errors.
+It does not require model credentials, network access, or a running agent loop.
+A passing dry-run means the template is structurally sound and ready for an
+adopter to fill in their specific values.
+
+## File-by-File Design
+
+### 1. `target-pipeline.yaml`
+
+**Source**: `v2-fix-pipeline.yaml`
+
+**Transformations**:
+- `model` values → `<USER MUST FILL: e.g., deepseek-v4-pro, gpt-5.5, ...>`
+- `system_prompt_path` → `"prompts/developer-target.md"` and `"prompts/reviewer-target.md"`
+- `test_command` → `"<USER MUST FILL: e.g., pytest tests/ -q>"`
+- `budget` section → preserved as optional, with `<USER MUST FILL>` on token values
+- `snapshots.base_dir` → `"<USER MUST FILL: e.g., ~/.unison/snapshots>"`
+- `risk_matrix.l2_audit_log` → `"<USER MUST FILL: e.g., observer/audit.jsonl>"`
+- Header comment added: `# Generated from Unison template — customize for your project`
+
+**Preserved**:
+- `version: "2.0"`
+- Agent role names (`developer`, `reviewer`)
+- Runtime identifiers (`claude`, `codex`)
+- `max_iterations: 5`
+
+### 2. `prompts/developer-target.md`
+
+**Source**: `prompts/developer-v2-fix.md`
+
+**Transformations**:
+- `Unison V2 integration fix` → `<PROJECT NAME>`
+- `~/projects/unison/` → `<PROJECT_ROOT>/`
+- All Unison-specific file paths → `<PROJECT_ROOT>/...` placeholders
+- Phase-specific fix table → generic feature table with `<FEATURE NAME>` placeholders
+- Commit format examples → generic `<feature>: <description>` template
+- Test count (`461 → <N> passed`) → `<COUNT> → <N> passed`
+- Header comment added: `# Generated from Unison template — customize for your project`
+
+**Preserved**:
+- Per-iteration workflow (8 numbered steps)
+- Critical constraints section (frozen files, allow-list)
+- Test discipline section
+- Reporting format
+
+### 3. `prompts/reviewer-target.md`
+
+**Source**: `prompts/reviewer-v2-fix.md`
+
+**Transformations**:
+- `Unison V2 integration fix` → `<PROJECT NAME>`
+- `~/projects/unison/` → `<PROJECT_ROOT>/`
+- `prd/v2-review-codex.md` → `<PROJECT_ROOT>/<REVIEW DOC PATH>`
+- Phase-specific verification table → generic feature verification checklist
+- Severity labels → English equivalents if needed (the source uses Chinese: 严重/中等/轻微)
+- Header comment added: `# Generated from Unison template — customize for your project`
+
+**Preserved**:
+- Per-iteration workflow (7 numbered steps)
+- Verdict format (`PASS | REQUEST_CHANGES`)
+- YAML frontmatter structure (`verdict`, `summary`, `findings`)
+- Honesty principle section
+- Contract enforcement section
+
+### 4. `.unison/policy.yaml` (Optional)
+
+**Source**: `interfaces.py` `RiskMatrixConfig` dataclass
+
+**Content**: Commented-out YAML showing the policy format:
+```yaml
+# Risk matrix policy — customize for your project
+# Format: operation × scope → risk_level
+#
+# Risk levels:
+#   L0: auto_allow — always permit
+#   L1: auto_allow_session — permit after first approval this session
+#   L2: observer_evaluate — post-hoc audit via rule engine
+#   L3: halt — unconditionally deny, halt pipeline, notify operator
+#
+# system_critical_paths:
+#   - "<PROJECT_ROOT>/ARCHITECTURE.md"
+#   - "<PROJECT_ROOT>/interfaces.py"
+#
+# known_safe_external_commands:
+#   - "pip install"
+#   - "git push"
+#
+# workspace_rules:
+#   READ: L0
+#   CREATE: L1
+#   MODIFY: L2
+#   DELETE: L2
+#
+# external_rules:
+#   READ: L0
+#   CREATE: L1
+#   MODIFY: L3
+#   DELETE: L3
+```
+
+### 5. `README.md`
+
+A short guide explaining:
+- What each file is and what it does.
+- Which fields to fill in (every `<USER MUST FILL>` marker).
+- How to run `unison dry-run` to validate.
+- How to run `unison run` to start the pipeline.
+
+## Error Handling
+
+| Scenario | Behavior |
+|----------|----------|
+| Source file missing | Migrator reports the missing file and generates a placeholder with a `<!-- MISSING SOURCE -->` comment |
+| `target-demo/` already exists | Migrator overwrites template files but does not delete user-created files |
+| YAML parse error in generated output | Migrator reports the error; dry-run fails |
+| `<USER MUST FILL>` in required fields | Dry-run warns but does not error (user may have filled them in) |
+
+## Implementation Checklist
+
+- [ ] Create `target-demo/` directory structure
+- [ ] Generate `target-pipeline.yaml` from `v2-fix-pipeline.yaml`
+- [ ] Generate `prompts/developer-target.md` from `prompts/developer-v2-fix.md`
+- [ ] Generate `prompts/reviewer-target.md` from `prompts/reviewer-v2-fix.md`
+- [ ] Generate `.unison/policy.yaml` (commented-out example)
+- [ ] Generate `src/__init__.py` (empty placeholder)
+- [ ] Generate `tests/__init__.py` (empty placeholder)
+- [ ] Generate `README.md`
+- [ ] Run `unison dry-run --pipeline target-demo/target-pipeline.yaml`
+- [ ] Verify no Unison source files were modified
+
+
+## PRD
+# Phase 14: Cross-Project Template Migration
+
+## Summary
+
+Unison's configuration patterns — pipeline YAML structure, developer/reviewer
+system prompts, and risk matrix configuration — have been proven effective through
+the V2 integration fix. This phase extracts those patterns into reusable templates
+and validates them by generating a target project skeleton in `target-demo/`.
+The output is a set of generic, well-documented YAML and Markdown templates that
+any Python project can adopt with minimal customization.
+
+## What to Migrate
+
+### 1. Pipeline YAML Structure (`v2-fix-pipeline.yaml`)
+
+The source pipeline defines a two-agent loop with the following structure:
+
+- **`version: "2.0"`** — semantic version string for the pipeline spec format.
+- **`project_root`** — project working directory (`.` for the project root).
+- **`agents`** — a map of agent role names to per-agent configuration blocks.
+  Each block contains:
+  - `role`: the agent's logical role (`developer`, `reviewer`, `planner`, `observer`).
+  - `runtime`: which CLI runner to use (`claude`, `codex`, `hermes`, `openclaw`).
+  - `model`: the LLM model identifier (e.g., `deepseek-v4-pro`, `gpt-5.5`).
+  - `system_prompt_path`: path to the Markdown file containing the agent's
+    system prompt template.
+- **`project`** — project-level settings:
+  - `test_command`: shell command to run the test suite (e.g., `pytest tests/ -q`).
+  - `max_iterations`: safety cap on the dev→review→dev loop.
+- **`budget`** (optional) — token budget constraints:
+  - `max_tokens_per_agent`: per-agent token cap.
+  - `max_total_tokens`: aggregate cap across all agents.
+- **`snapshots`** — snapshot safety net configuration:
+  - `enabled`: toggle snapshots on or off.
+  - `base_dir`: directory for snapshot storage.
+- **`risk_matrix`** — risk evaluation configuration:
+  - `enabled`: toggle the risk matrix on or off.
+  - `l2_audit_log`: path to the audit log for L2-level risk events.
+
+Every field that is project-specific (model name, test command, paths) is replaced
+with a `<USER MUST FILL: description>` marker so the template is safe to copy
+without accidentally leaking Unison defaults.
+
+### 2. Developer Prompt Patterns (`prompts/developer-v2-fix.md`)
+
+The developer prompt encodes a per-iteration workflow that has proven effective
+across eight phases of V2 integration:
+
+1. Read the design document to identify assigned phases.
+2. For each phase, read the original design doc and the reviewer findings.
+3. Read the relevant source and test files.
+4. Implement the fix.
+5. Add or update tests.
+6. Run the test command (must remain green).
+7. Commit with a structured message format: `fix: <phase> <one-line summary>`.
+8. Report completion to the Observer with commit hash and test count.
+
+The prompt also encodes critical constraints:
+- A **frozen contract** — certain files may not be modified (`interfaces.py`,
+  architecture docs, past review decisions), enforced by an explicit deny-list.
+- An **allow-list** of files that may be modified.
+- **Test discipline** — tests must pass at every commit; test count must go up,
+  not down.
+- **Commit format** — each phase has a prescribed commit message template.
+
+In the migrated template, all Unison-specific references (project name, file
+paths, phase names, Codex review paths) are replaced with `<USER MUST FILL>`
+markers. The workflow skeleton is preserved intact.
+
+### 3. Reviewer Prompt Patterns (`prompts/reviewer-v2-fix.md`)
+
+The reviewer prompt defines a verification loop that complements the developer:
+
+1. Pull the latest commits from git.
+2. Review the diff.
+3. Run the test suite (must pass).
+4. For each assigned phase, verify that the Codex finding is actually fixed:
+   - Read the modified source files.
+   - Check that the file:line referenced in the review is now correct.
+   - Check that a new test covers the regression.
+5. Write the review to `reviews/iter-<N>.md` with YAML frontmatter containing
+   `verdict`, `summary`, and `findings`.
+6. Report completion with the verdict.
+
+Key patterns preserved in the template:
+- **Verdict format**: `PASS | REQUEST_CHANGES` with structured findings list.
+- **Verification depth**: each finding checks both code change AND test coverage.
+- **Honesty principle**: half-fixes get `REQUEST_CHANGES`, not a pass.
+- **Contract enforcement**: if the developer is forced to break frozen files,
+  the reviewer flags it as a planning-level failure.
+
+### 4. Risk Matrix Configuration
+
+The risk matrix is defined in `interfaces.py` via `RiskMatrixConfig`:
+
+- `system_critical_paths`: paths that always trigger `L3` (halt) on any write
+  operation. Examples: `ARCHITECTURE.md`, `interfaces.py`, contract documents.
+- `known_safe_external_commands`: commands that are downgraded one risk level
+  when executed outside the workspace. Examples: `pip install`, `git push`.
+- `workspace_rules` and `external_rules`: `Operation × RiskLevel` mappings
+  (e.g., `MODIFY` inside workspace → `L2`, `DELETE` outside workspace → `L3`).
+
+If a policy file exists at `.unison/policy.yaml`, its contents are migrated
+with paths made generic. If no policy file exists, the template includes a
+commented-out example that shows the format.
+
+## Target: Generic Python Project in `target-demo/`
+
+The target project is a minimal Python skeleton at `target-demo/` that
+demonstrates the templates working end-to-end:
+
+```
+target-demo/
+├── target-pipeline.yaml          # migrated pipeline config
+├── prompts/
+│   ├── developer-target.md       # migrated developer prompt
+│   └── reviewer-target.md        # migrated reviewer prompt
+├── .unison/
+│   └── policy.yaml               # migrated risk matrix (if source exists)
+├── src/
+│   └── __init__.py               # placeholder Python package
+├── tests/
+│   └── __init__.py               # placeholder test package
+└── README.md                     # customization guide for adopters
+```
+
+The target project uses Python conventions (`src/` + `tests/`, `pytest`) as
+the default language because Unison itself is a Python project and the template
+patterns were validated in that ecosystem. The `README.md` explains which fields
+to fill in and how to run the dry-run validation.
+
+## Format: YAML Templates with `<USER MUST FILL>` Markers
+
+Every template file follows these formatting rules:
+
+1. **All user-customizable values** are replaced with `<USER MUST FILL: description>`.
+   The description provides enough context that a new adopter can fill it in
+   without reading source code. Examples:
+   - `<USER MUST FILL: e.g., deepseek-v4-pro, gpt-5.5, claude-sonnet-4-6>`
+   - `<USER MUST FILL: e.g., pytest tests/ -q>`
+   - `<USER MUST FILL: your project name, e.g., "My Django App">`
+
+2. **Structural YAML keys** (version, agent role names, runtime identifiers) are
+   preserved as-is because they are part of the Unison protocol contract.
+
+3. **Comments** explain the purpose of each section and what the user must
+   customize. Every generated file includes a header comment:
+   `# Generated from Unison template — customize for your project`
+
+4. **Placeholder paths** use `<PROJECT_ROOT>/...` notation to indicate where
+   project-specific directories should be substituted.
+
+5. The **`.unison/policy.yaml`** template (if generated) includes commented-out
+   example rules showing the `operation × scope × risk_level` mapping syntax.
+
+## Validation: Dry-Run Must Pass
+
+The acceptance criterion for this phase is:
+
+```
+unison dry-run --pipeline target-demo/target-pipeline.yaml
+```
+
+must exit successfully. A dry-run validates:
+- YAML syntax (parseable without errors).
+- All required keys present (`version`, `agents`, `project`).
+- Agent role names are valid (`developer`, `reviewer`, `planner`, `observer`).
+- Runtime identifiers are recognized (`claude`, `codex`, `hermes`, `openclaw`).
+- Path references resolve (system prompt paths exist relative to project root).
+- Test command is a non-empty string.
+- `max_iterations` is a positive integer.
+
+The dry-run does **not** execute agents, run tests, or require model credentials —
+it only validates structural correctness. This means the template can be validated
+immediately after generation, before the user fills in any `<USER MUST FILL>`
+fields
+...[truncated]
+codex
+I’ll run the required dry-run first, then inspect the generated target files and git state. I’ll only write the review file under `reviews/` and avoid touching `src/`.
+exec
+/bin/bash -lc 'PYTHONPATH=/home/sean/projects/unison:/home/sean/projects/unison/src python3 -m unison.cli dry-run --pipeline target-demo/target-pipeline.yaml 2>&1' in /home/sean/projects/unison
+ succeeded in 0ms:
+OK  spec.version = 2.0
+OK  mode = 2-agent
+OK  agents = ['developer', 'reviewer']
+OK  world.root = /home/sean/projects/unison/target-demo
+OK  project.test_command = echo placeholder-test-command
+
+codex
+The dry-run exits successfully and reports all checks as OK. I’m now checking the target skeleton, placeholder coverage, source-leak patterns, and whether source files were modified.
+exec
+/bin/bash -lc "rg -n \"Unison V2 integration fix|~/projects/unison/src/|orchestrator\\.py\" target-demo" in /home/sean/projects/unison
+ exited 1 in 0ms:
+exec
+/bin/bash -lc 'find target-demo -maxdepth 3 -type f | sort' in /home/sean/projects/unison
+ succeeded in 0ms:
+target-demo/.unison/policy.yaml
+target-demo/README.md
+target-demo/prompts/developer-target.md
+target-demo/prompts/reviewer-target.md
+target-demo/src/__init__.py
+target-demo/target-pipeline.yaml
+target-demo/tests/__init__.py
+
+exec
+/bin/bash -lc "rg -n \"<USER MUST FILL|<PROJECT_ROOT>|<PROJECT NAME>|placeholder|TODO|FIXME|/home/sean|~/projects/unison|v2-fix|developer-v2-fix|reviewer-v2-fix|interfaces\\.py\" target-demo" in /home/sean/projects/unison
+ succeeded in 0ms:
+target-demo/prompts/developer-target.md:3:# Developer (Claude Code) — <PROJECT NAME>
+target-demo/prompts/developer-target.md:5:You are the Developer for <USER MUST FILL: your project name, e.g., "My Django App">.
+target-demo/prompts/developer-target.md:12:  `<PROJECT_ROOT>/<USER MUST FILL: e.g., prd/design.md, docs/plan.md>`
+target-demo/prompts/developer-target.md:14:  `<PROJECT_ROOT>/<USER MUST FILL: e.g., prd/review-findings.md, reviews/latest.md>`
+target-demo/prompts/developer-target.md:15:- **Project root**: `<PROJECT_ROOT>/`
+target-demo/prompts/developer-target.md:30:7. Run: <USER MUST FILL: your test command, e.g., pytest tests/ -q> (must remain green, ideally more tests)
+target-demo/prompts/developer-target.md:31:8. git add -A && git commit -m "<USER MUST FILL: your commit format, e.g., "feat: <feature> description">"
+target-demo/prompts/developer-target.md:38:- `<PROJECT_ROOT>/<USER MUST FILL: e.g., interfaces.py, ARCHITECTURE.md>` (Protocols, dataclasses, type signatures)
+target-demo/prompts/developer-target.md:39:- `<PROJECT_ROOT>/<USER MUST FILL: e.g., PRD.md, tech-design.md>` (Contract documents)
+target-demo/prompts/developer-target.md:40:- `<PROJECT_ROOT>/<USER MUST FILL: e.g., reviews/*.md>` (Past decisions)
+target-demo/prompts/developer-target.md:43:- `<PROJECT_ROOT>/<USER MUST FILL: e.g., src/**/*.py>` (Main source — primary work area)
+target-demo/prompts/developer-target.md:44:- `<PROJECT_ROOT>/<USER MUST FILL: e.g., tests/**/*.py>` (Tests — add coverage for changes)
+target-demo/prompts/developer-target.md:50:| <USER MUST FILL: Task 1 name> | <USER MUST FILL: What to implement for task 1> |
+target-demo/prompts/developer-target.md:51:| <USER MUST FILL: Task 2 name> | <USER MUST FILL: What to implement for task 2> |
+target-demo/prompts/developer-target.md:52:| <USER MUST FILL: Task 3 name> | <USER MUST FILL: What to implement for task 3> |
+target-demo/prompts/developer-target.md:57:<USER MUST FILL: e.g., fix: <task name> — <one-line summary>>
+target-demo/prompts/developer-target.md:62:- `<USER MUST FILL: your test command>` must pass at end of every commit
+target-demo/prompts/reviewer-target.md:3:# Reviewer (Codex) — <PROJECT NAME> Verification
+target-demo/prompts/reviewer-target.md:5:You are the Reviewer for <USER MUST FILL: your project name>.
+target-demo/prompts/reviewer-target.md:13:  `<PROJECT_ROOT>/<USER MUST FILL: e.g., prd/review-findings.md>`
+target-demo/prompts/reviewer-target.md:15:  `<PROJECT_ROOT>/<USER MUST FILL: e.g., prd/design.md>`
+target-demo/prompts/reviewer-target.md:16:- **Project root**: `<PROJECT_ROOT>/`
+target-demo/prompts/reviewer-target.md:21:1. cd <PROJECT_ROOT>
+target-demo/prompts/reviewer-target.md:24:4. <USER MUST FILL: your test command>  (must pass)
+target-demo/prompts/reviewer-target.md:30:6. Write review to <PROJECT_ROOT>/<USER MUST FILL: e.g., reviews/iter-N.md>
+target-demo/prompts/reviewer-target.md:47:| <USER MUST FILL: Task 1> | <USER MUST FILL: What to verify for task 1 — code change + test coverage> |
+target-demo/prompts/reviewer-target.md:48:| <USER MUST FILL: Task 2> | <USER MUST FILL: What to verify for task 2 — code change + test coverage> |
+target-demo/prompts/reviewer-target.md:49:| <USER MUST FILL: Task 3> | <USER MUST FILL: What to verify for task 3 — code change + test coverage> |
+target-demo/prompts/reviewer-target.md:58:  - [<USER MUST FILL: severity scale, e.g., critical/major/minor>] <file>:<line> — <issue> — <fix suggestion>
+target-demo/README.md:20:### 1. Fill in `<USER MUST FILL>` markers
+target-demo/README.md:22:Every file contains `<USER MUST FILL: description>` markers. Search for them:
+target-demo/README.md:31:- **Project name**: Replace `<PROJECT NAME>` throughout the prompts
+target-demo/README.md:32:- **File paths**: Replace `<PROJECT_ROOT>/...` with your actual project paths
+target-demo/README.md:90:(v2-fix-pipeline.yaml, prompts/developer-v2-fix.md, prompts/reviewer-v2-fix.md,
+target-demo/README.md:91:interfaces.py). The workflow patterns (read → implement → test → commit → report
+target-demo/src/__init__.py:1:# <USER MUST FILL: your project's Python package>
+target-demo/src/__init__.py:2:# Replace this placeholder with your application code.
+target-demo/tests/__init__.py:1:# <USER MUST FILL: your project's test package>
+target-demo/tests/__init__.py:2:# Replace this placeholder with your test suite.
+target-demo/target-pipeline.yaml:4:# loop. Fill in every <USER MUST FILL> field below before running `unison run`.
+target-demo/target-pipeline.yaml:7:#   1. Replace placeholder model names with your actual models
+target-demo/target-pipeline.yaml:19:    # <USER MUST FILL: your developer model, e.g., deepseek-v4-pro, claude-sonnet-4-6, gpt-5.5>
+target-demo/target-pipeline.yaml:20:    model: "placeholder-dev-model"
+target-demo/target-pipeline.yaml:26:    # <USER MUST FILL: your reviewer model, e.g., gpt-5.5, claude-opus-4-8, deepseek-v4-pro>
+target-demo/target-pipeline.yaml:27:    model: "placeholder-review-model"
+target-demo/target-pipeline.yaml:31:  # <USER MUST FILL: your test command, e.g., pytest tests/ -q, npm test>
+target-demo/target-pipeline.yaml:32:  test_command: "echo placeholder-test-command"
+target-demo/target-pipeline.yaml:36:#   # <USER MUST FILL: daily token limit across all agents, e.g., 1000000>
+target-demo/target-pipeline.yaml:38:#   # <USER MUST FILL: per-agent-task token cap, e.g., 200000>
+target-demo/target-pipeline.yaml:47:#   # <USER MUST FILL: paths that trigger L3 halt on any write, e.g., ARCHITECTURE.md>
+target-demo/target-pipeline.yaml:49:#   # <USER MUST FILL: commands downgraded one risk level externally, e.g., pip install>
+
+exec
+/bin/bash -lc 'git status --short' in /home/sean/projects/unison
+ succeeded in 0ms:
+ M .unison/budget.json
+ M prd/PRD.md
+ M prd/tech-design.md
+ D reviews/iter-1.md
+ M reviews/plan-iter-1.md
+ D reviews/plan-iter-2.md
+?? observer/logs/planner_iter-1_20260619T170712Z.log
+?? observer/logs/planner_iter-1_20260619T171753Z.log
+?? observer/logs/planner_iter-2_20260619T171136Z.log
+?? observer/logs/planner_iter-2_20260619T172150Z.log
+?? observer/logs/reviewer_iter-1_20260619T170934Z.log
+?? observer/logs/reviewer_iter-1_20260619T171907Z.log
+?? reviews/skill-audit.md
+?? target-demo/
+
+exec
+/bin/bash -lc 'git diff -- prompts/developer-v2-fix.md prompts/reviewer-v2-fix.md v2-fix-pipeline.yaml' in /home/sean/projects/unison
+ succeeded in 0ms:
+codex
+The required files exist, and the explicit forbidden leak patterns are absent. I’m reading the generated YAML and prompts now because the main remaining risk is whether placeholder fields are actually marked in the values adopters must edit.
+exec
+/bin/bash -lc 'nl -ba target-demo/target-pipeline.yaml' in /home/sean/projects/unison
+ succeeded in 0ms:
+     1	# Generated from Unison template — customize for your project
+     2	#
+     3	# This pipeline.yaml is a starter template for a two-agent (Developer + Reviewer)
+     4	# loop. Fill in every <USER MUST FILL> field below before running `unison run`.
+     5	#
+     6	# Quick start:
+     7	#   1. Replace placeholder model names with your actual models
+     8	#   2. Set your real test command
+     9	#   3. Run: unison dry-run --pipeline target-demo/target-pipeline.yaml
+    10	#   4. Run: unison run
+    11	
+    12	version: "2.0"
+    13	project_root: "."
+    14	
+    15	agents:
+    16	  developer:
+    17	    role: developer
+    18	    runtime: claude
+    19	    # <USER MUST FILL: your developer model, e.g., deepseek-v4-pro, claude-sonnet-4-6, gpt-5.5>
+    20	    model: "placeholder-dev-model"
+    21	    system_prompt_path: "prompts/developer-target.md"
+    22	
+    23	  reviewer:
+    24	    role: reviewer
+    25	    runtime: codex
+    26	    # <USER MUST FILL: your reviewer model, e.g., gpt-5.5, claude-opus-4-8, deepseek-v4-pro>
+    27	    model: "placeholder-review-model"
+    28	    system_prompt_path: "prompts/reviewer-target.md"
+    29	
+    30	project:
+    31	  # <USER MUST FILL: your test command, e.g., pytest tests/ -q, npm test>
+    32	  test_command: "echo placeholder-test-command"
+    33	
+    34	# Optional: uncomment and fill in to set token budgets
+    35	# budget:
+    36	#   # <USER MUST FILL: daily token limit across all agents, e.g., 1000000>
+    37	#   daily_token_limit: 1000000
+    38	#   # <USER MUST FILL: per-agent-task token cap, e.g., 200000>
+    39	#   per_task_limit: 200000
+    40	
+    41	# Optional: uncomment to customize snapshot retention
+    42	# snapshots:
+    43	#   enabled: true
+    44	
+    45	# Optional: uncomment and fill in to enable risk matrix
+    46	# risk_matrix:
+    47	#   # <USER MUST FILL: paths that trigger L3 halt on any write, e.g., ARCHITECTURE.md>
+    48	#   system_critical_paths: []
+    49	#   # <USER MUST FILL: commands downgraded one risk level externally, e.g., pip install>
+    50	#   known_safe_external_commands: []
+
+exec
+/bin/bash -lc 'nl -ba target-demo/prompts/reviewer-target.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+     1	# Generated from Unison template — customize for your project
+     2	
+     3	# Reviewer (Codex) — <PROJECT NAME> Verification
+     4	
+     5	You are the Reviewer for <USER MUST FILL: your project name>.
+     6	Your job is to verify that the Developer's commits actually fix the issues
+     7	identified in the previous review, and to write a fresh review for
+     8	each iteration.
+     9	
+    10	## Reference
+    11	
+    12	- **Review findings** (the source of truth for what to verify):
+    13	  `<PROJECT_ROOT>/<USER MUST FILL: e.g., prd/review-findings.md>`
+    14	- **Plan's design doc** (for context on intended approach):
+    15	  `<PROJECT_ROOT>/<USER MUST FILL: e.g., prd/design.md>`
+    16	- **Project root**: `<PROJECT_ROOT>/`
+    17	
+    18	## Per-iteration workflow
+    19	
+    20	```
+    21	1. cd <PROJECT_ROOT>
+    22	2. git log --oneline -20  (find Developer's latest commits this iteration)
+    23	3. git diff HEAD~N..HEAD  (review the diff)
+    24	4. <USER MUST FILL: your test command>  (must pass)
+    25	5. For each assigned task, verify the finding is actually fixed:
+    26	     - Read the modified source files
+    27	     - Check that the file:line referenced in the review findings
+    28	       now does what the design says
+    29	     - Check the new test exists and covers the regression
+    30	6. Write review to <PROJECT_ROOT>/<USER MUST FILL: e.g., reviews/iter-N.md>
+    31	   (N = current iteration, matches what Developer reported)
+    32	7. Use YAML frontmatter:
+    33	   ---
+    34	   verdict: PASS | REQUEST_CHANGES
+    35	   summary: one-line
+    36	   findings:
+    37	     - [severity] concrete issue + fix suggestion
+    38	   ---
+    39	```
+    40	
+    41	## Verification depth
+    42	
+    43	For each finding, check **both** the code change AND the test:
+    44	
+    45	| Task | Verify |
+    46	|------|--------|
+    47	| <USER MUST FILL: Task 1> | <USER MUST FILL: What to verify for task 1 — code change + test coverage> |
+    48	| <USER MUST FILL: Task 2> | <USER MUST FILL: What to verify for task 2 — code change + test coverage> |
+    49	| <USER MUST FILL: Task 3> | <USER MUST FILL: What to verify for task 3 — code change + test coverage> |
+    50	
+    51	## Output format
+    52	
+    53	```yaml
+    54	---
+    55	verdict: PASS | REQUEST_CHANGES
+    56	summary: <one line>
+    57	findings:
+    58	  - [<USER MUST FILL: severity scale, e.g., critical/major/minor>] <file>:<line> — <issue> — <fix suggestion>
+    59	---
+    60	```
+    61	
+    62	End with: "Reviewer done. <verdict>."
+    63	
+    64	## Be honest, not generous
+    65	
+    66	If a finding from the previous review is partially fixed (e.g. test
+    67	added but code change doesn't actually call the new function), report it
+    68	as REQUEST_CHANGES with the highest severity level. Don't pass half-fixes.
+    69	
+    70	## Don't change the contract
+    71	
+    72	If Developer is forced to break a frozen/contract file to make the fix work,
+    73	REPORT this. The plan was that those files are frozen; if the implementation
+    74	is impossible without changing them, that's a planning-level failure,
+    75	not a code failure.
+
+exec
+/bin/bash -lc 'nl -ba target-demo/README.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+     1	# Target Demo — Unison Pipeline Template
+     2	
+     3	Generated from the Unison project's V2 integration fix pipeline patterns.
+     4	This is a starter skeleton for adopting Unison's multi-agent pipeline in
+     5	your own Python project.
+     6	
+     7	## Files
+     8	
+     9	| File | Purpose |
+    10	|------|---------|
+    11	| `target-pipeline.yaml` | Pipeline configuration — agent roles, models, test command |
+    12	| `prompts/developer-target.md` | Developer agent system prompt — implements tasks per iteration |
+    13	| `prompts/reviewer-target.md` | Reviewer agent system prompt — verifies fixes, writes reviews |
+    14	| `.unison/policy.yaml` | Risk matrix policy — operation × scope → risk level (commented-out example) |
+    15	| `src/__init__.py` | Placeholder — replace with your application code |
+    16	| `tests/__init__.py` | Placeholder — replace with your test suite |
+    17	
+    18	## Quick Start
+    19	
+    20	### 1. Fill in `<USER MUST FILL>` markers
+    21	
+    22	Every file contains `<USER MUST FILL: description>` markers. Search for them:
+    23	
+    24	```bash
+    25	grep -rn "USER MUST FILL" target-demo/
+    26	```
+    27	
+    28	At minimum, fill in:
+    29	- **Models**: Which LLM models to use for developer and reviewer
+    30	- **Test command**: How to run your test suite (e.g., `pytest tests/ -q`)
+    31	- **Project name**: Replace `<PROJECT NAME>` throughout the prompts
+    32	- **File paths**: Replace `<PROJECT_ROOT>/...` with your actual project paths
+    33	
+    34	### 2. Validate with dry-run
+    35	
+    36	```bash
+    37	unison dry-run --pipeline target-demo/target-pipeline.yaml
+    38	```
+    39	
+    40	A successful dry-run confirms:
+    41	- YAML is parseable
+    42	- All required keys are present
+    43	- Agent roles and runtimes are recognized
+    44	- Path references resolve
+    45	- Test command is non-empty
+    46	- `max_iterations` is a positive integer
+    47	
+    48	### 3. Run the pipeline
+    49	
+    50	```bash
+    51	unison run --pipeline target-demo/target-pipeline.yaml
+    52	```
+    53	
+    54	This starts the dev→review→dev loop. The Orchestrator alternates between
+    55	Developer (implements) and Reviewer (verifies) agents until all tasks pass
+    56	or `max_iterations` is reached.
+    57	
+    58	## Customization Guide
+    59	
+    60	### Adding more agents
+    61	
+    62	Uncomment or add agent blocks under `agents:` in `target-pipeline.yaml`:
+    63	
+    64	```yaml
+    65	agents:
+    66	  planner:
+    67	    role: planner
+    68	    runtime: claude
+    69	    model: <YOUR MODEL>
+    70	    system_prompt_path: "prompts/planner-target.md"
+    71	```
+    72	
+    73	Valid roles: `developer`, `reviewer`, `planner`, `observer`
+    74	Valid runtimes: `claude`, `codex`, `hermes`, `openclaw`
+    75	
+    76	### Enabling the risk matrix
+    77	
+    78	Uncomment the rules in `.unison/policy.yaml` and set `risk_matrix.enabled: true`
+    79	in `target-pipeline.yaml`. The risk matrix blocks dangerous operations (L3 halt),
+    80	auto-allows safe ones (L0/L1), and audits medium-risk ones (L2).
+    81	
+    82	### Adjusting budget limits
+    83	
+    84	Set `budget.max_tokens_per_agent` and `budget.max_total_tokens` to match your
+    85	API tier limits. Set to `0` or remove the `budget:` section to disable caps.
+    86	
+    87	## Template Origin
+    88	
+    89	These templates were extracted from Unison's V2 integration fix pipeline
+    90	(v2-fix-pipeline.yaml, prompts/developer-v2-fix.md, prompts/reviewer-v2-fix.md,
+    91	interfaces.py). The workflow patterns (read → implement → test → commit → report
+    92	for developers; diff → verify → write review for reviewers) proved effective
+    93	across 8 phases of V2 integration.
+
+exec
+/bin/bash -lc 'git diff -- src/unison/orchestrator.py prompts/developer-v2-fix.md prompts/reviewer-v2-fix.md v2-fix-pipeline.yaml' in /home/sean/projects/unison
+ succeeded in 0ms:
+exec
+/bin/bash -lc 'nl -ba target-demo/prompts/developer-target.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+     1	# Generated from Unison template — customize for your project
+     2	
+     3	# Developer (Claude Code) — <PROJECT NAME>
+     4	
+     5	You are the Developer for <USER MUST FILL: your project name, e.g., "My Django App">.
+     6	Your job is to implement features and fixes according to the design doc,
+     7	then report results for Reviewer verification.
+     8	
+     9	## Reference
+    10	
+    11	- **Design doc** (Planner's implementation plan):
+    12	  `<PROJECT_ROOT>/<USER MUST FILL: e.g., prd/design.md, docs/plan.md>`
+    13	- **Review findings** (previous iteration issues to fix):
+    14	  `<PROJECT_ROOT>/<USER MUST FILL: e.g., prd/review-findings.md, reviews/latest.md>`
+    15	- **Project root**: `<PROJECT_ROOT>/`
+    16	
+    17	## Per-iteration workflow
+    18	
+    19	The Planner writes a design doc first. The Reviewer parses it
+    20	and assigns you tasks. Then you implement, the Reviewer verifies, and
+    21	the loop continues.
+    22	
+    23	```
+    24	1. Read the design doc to find which tasks you're assigned this iteration
+    25	2. For each assigned task, read the original specification document
+    26	3. Read the Reviewer's findings from the previous iteration
+    27	4. Read the relevant source and test files
+    28	5. Implement the fix or feature
+    29	6. Add or update tests
+    30	7. Run: <USER MUST FILL: your test command, e.g., pytest tests/ -q> (must remain green, ideally more tests)
+    31	8. git add -A && git commit -m "<USER MUST FILL: your commit format, e.g., "feat: <feature> description">"
+    32	9. Report to Observer: "Task done. commit: <hash>. <N> tests passing."
+    33	```
+    34	
+    35	## Critical: do NOT touch the contract
+    36	
+    37	You may NOT modify:
+    38	- `<PROJECT_ROOT>/<USER MUST FILL: e.g., interfaces.py, ARCHITECTURE.md>` (Protocols, dataclasses, type signatures)
+    39	- `<PROJECT_ROOT>/<USER MUST FILL: e.g., PRD.md, tech-design.md>` (Contract documents)
+    40	- `<PROJECT_ROOT>/<USER MUST FILL: e.g., reviews/*.md>` (Past decisions)
+    41	
+    42	You MAY modify:
+    43	- `<PROJECT_ROOT>/<USER MUST FILL: e.g., src/**/*.py>` (Main source — primary work area)
+    44	- `<PROJECT_ROOT>/<USER MUST FILL: e.g., tests/**/*.py>` (Tests — add coverage for changes)
+    45	
+    46	## Key tasks to implement
+    47	
+    48	| Task | What to do |
+    49	|------|------------|
+    50	| <USER MUST FILL: Task 1 name> | <USER MUST FILL: What to implement for task 1> |
+    51	| <USER MUST FILL: Task 2 name> | <USER MUST FILL: What to implement for task 2> |
+    52	| <USER MUST FILL: Task 3 name> | <USER MUST FILL: What to implement for task 3> |
+    53	
+    54	## Per-task commit format
+    55	
+    56	```
+    57	<USER MUST FILL: e.g., fix: <task name> — <one-line summary>>
+    58	```
+    59	
+    60	## Test discipline
+    61	
+    62	- `<USER MUST FILL: your test command>` must pass at end of every commit
+    63	- Add at least 1 test per task (so Reviewer can verify the fix)
+    64	- Total tests should go UP, not down (we're adding coverage)
+    65	
+    66	## Reporting
+    67	
+    68	After each task commit, write to stdout:
+    69	```
+    70	=== Task done ===
+    71	Commit: <hash>
+    72	Files changed: <list>
+    73	Tests: <COUNT> → <N> passed
+    74	Finding addressed: <short reference to review doc>
+    75	Awaiting Reviewer.
+    76	===
+    77	```
+    78	
+    79	If you hit a code path that requires changing a frozen/contract file,
+    80	STOP and report to Observer. Do not bend the contract.
+
+

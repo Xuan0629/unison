@@ -1,0 +1,364 @@
+=== COMMAND ===
+claude -p --dangerously-skip-permissions WRITE A COMPLETE plugin system design NOW. Do NOT write placeholders or stubs. Write at least 500 words to prd/PRD.md covering: (1) Python plugin interface class with method signatures, (2) YAML config example showing custom runtime, (3) plugin loading mechanism, (4) backward compatibility proof showing existing pipeline.yaml still works, (5) error handling for missing/broken plugins. Include actual code snippets. Start immediately.
+
+# Architect (Claude Code) — Phase 10 Round 1: Plugin System Design
+
+You are the **Architect** in a multi-perspective design debate. Your role is to
+propose a concrete, well-reasoned technical design.
+
+## Your Mission
+
+Write `prd/plugin-proposal.md` — a design proposal for adding a **plugin system**
+to the Unison Multi-Agent harness.
+
+## Background
+
+Currently Unison's Runtime type is hardcoded:
+```python
+Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
+```
+
+Each runtime has hardcoded CLI flags in `AgentSpec.cli_flags`. Users cannot
+add new agent CLIs (Copilot, Gemini CLI, custom scripts, etc.) without modifying
+Unison source code.
+
+## Proposal Requirements
+
+Your proposal MUST cover:
+
+1. **Plugin Interface**: What does a plugin look like? A Python class? A config file?
+   A CLI wrapper? Define the contract.
+
+2. **Plugin Loading**: How are plugins discovered and loaded? Directory scanning?
+   Registry file? pip installable?
+
+3. **Configuration**: How does a user declare a custom runtime in pipeline.yaml?
+   Show a concrete YAML example.
+
+4. **CLI Flag Mapping**: How does the plugin declare its CLI flags (e.g., `-p`,
+   `--dangerously-skip-permissions`)?
+
+5. **Backward Compatibility**: How do existing runtimes (claude, codex, hermes,
+   openclaw) continue to work?
+
+6. **Migration Path**: How does an existing pipeline.yaml migrate to use plugins?
+
+## Output Format
+
+```markdown
+# Plugin System Design Proposal
+
+## 1. Motivation
+## 2. Plugin Interface
+## 3. Plugin Loading
+## 4. Configuration (with YAML example)
+## 5. CLI Flag Mapping
+## 6. Backward Compatibility
+## 7. Migration Path
+## 8. Open Questions
+```
+
+## Style
+
+- Be specific. Show code snippets, YAML examples, file paths.
+- Be opinionated. Pick a design direction and justify it.
+- Acknowledge trade-offs. No design is perfect.
+- Target: 500-1000 words. Dense, not fluffy.
+
+
+## Last Review Findings
+[INFO] Critical: plugin loading executes arbitrary Python in the orchestrator process with no sandbox or explicit trust gate.
+[INFO] Major: backward-compatibility proof is incomplete and the snippets omit an existing built-in runner path.
+[INFO] Major: plugin search-path behavior contradicts itself and does not define deterministic conflict handling.
+
+## Git Diff
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 9b95915..76901e4 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -432,8 +432,9 @@ class Orchestrator:
+                 return
+             # overflow_action == "downgrade" — already handled in _select_runner
+ 
+-        # 3. Pre-invoke cleanup
+-        self.pre_invoke_cleanup()
++        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
++        if role == "developer":
++            self.pre_invoke_cleanup()
+ 
+         if self._state.halt_signal:
+... (truncated)
+
+## PRD
+# Unison Plugin System — Design & Specification
+
+**Status:** Draft, Phase 10 Round 1  
+**Author:** Architect (Claude Code)  
+**Target:** Unison v2.1  
+
+---
+
+## 1. Motivation
+
+Unison currently hardcodes four agent runtimes via a `Literal` type alias:
+
+```python
+# interfaces.py:38 — the bottleneck
+Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
+```
+
+Adding a new agent CLI (Gemini CLI, GitHub Copilot, a custom bash script wrapping an
+in-house model, etc.) requires:
+1. Adding a string to the `Literal` union in `interfaces.py`
+2. Adding CLI flags to the `AgentSpec.cli_flags` property dict
+3. Writing a new `*Runner` dataclass under `src/unison/runners/`
+4. Registering it in the `Orchestrator.__init__` runner dict
+5. Updating `PipelineLoader.VALID_RUNTIMES`
+
+This is a **closed set**. The plugin system makes it **open** — users drop a
+Python file and a YAML stanza, no source edits needed.
+
+---
+
+## 2. Plugin Interface — `UnisonPlugin`
+
+Every plugin is a Python class implementing the `UnisonPlugin` abstract base class
+(lives at `src/unison/plugins/base.py`). It extends `AgentRunner` so any plugin
+*is* a runner — the Orchestrator doesn't distinguish built-in from custom.
+
+```python
+# src/unison/plugins/base.py
+from __future__ import annotations
+
+import subprocess
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from pathlib import Path
+from typing import ClassVar
+
+from interfaces import AgentSpec, AgentResult
+from unison.runners.base import AgentRunner
+
+
+class UnisonPlugin(AgentRunner, ABC):
+    """Abstract base for user-provided agent CLI plugins.
+
+    Subclasses MUST override:
+      - ``binary``: the CLI executable name (str)
+      - ``cli_flags``: default CLI flags appended before the prompt (list[str])
+      - ``validate_installation``: check that the binary is callable
+
+    Subclasses MAY override:
+      - ``startup_grace``: extra seconds added to timeout for slow-starting CLIs
+      - ``run``: for non-subprocess backends (HTTP APIs, sockets, etc.)
+      - ``_build_command``: if the CLI needs custom argument ordering
+
+    A plugin is registered by:
+    1. Dropping the Python file in ``~/.unison/plugins/`` or
+       ``<project>/.unison/plugins/``.
+    2. Declaring it in ``pipeline.yaml`` under a top-level ``plugins:`` section.
+    """
+
+    # ---- Subclass contract ------------------------------------------------
+
+    binary: ClassVar[str]
+    """The CLI binary name, e.g. ``"gemini-internal"``."""
+
+    cli_flags: ClassVar[list[str]]
+    """Default flags appended before the prompt, e.g. ``["-p", "--yolo"]``."""
+
+    startup_grace: ClassVar[int] = 0
+    """Extra seconds added to the agent timeout for slow-starting CLIs."""
+
+    @classmethod
+    @abstractmethod
+    def validate_installation(cls) -> tuple[bool, str | None]:
+        """Check that the binary is installed and callable.
+
+        Returns:
+            ``(True, None)`` if the binary is ready.
+            ``(False, error_message)`` if missing, broken, or wrong version.
+        """
+        ...
+
+    # ---- Default implementation -------------------------------------------
+
+    def _build_command(self, spec: AgentSpec, prompt: str) -> list[str]:
+        """Build the CLI command as a list of tokens.
+
+        The default implementation uses ``self.binary`` + ``self.cli_flags``.
+        Override for custom argument ordering (e.g. flags after prompt).
+        """
+        return [self.binary, *self.cli_flags, prompt]
+
+    def run(
+        self,
+        spec: AgentSpec,
+        prompt: str,
+        workdir: Path,
+        timeout: int,
+        log_path: Path,
+    ) -> AgentResult:
+        """Execute the agent via subprocess.run.
+
+        The default implementation mirrors ``ClaudeRunner.run`` exactly.
+        Plugins with non-subprocess backends (HTTP, gRPC) override this.
+        """
+        cmd = self._build_command(spec, prompt)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        effective_timeout = timeout + self.startup_grace
+
+        start = time.monotonic()
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(workdir),
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout,
+            )
+            duration = time.monotonic() - start
+            return AgentResult(
+                success=proc.returncode == 0,
+                exit_code=proc.returncode,
+                duration=round(duration, 3),
+                stdout_tail=proc.stdout[-500:] if proc.stdout else "",
+                stderr_tail=proc.stderr[-500:] if proc.stderr else "",
+                log_path=log_path,
+                error=(None if proc.returncode == 0
+                       else f"Command exited with code {proc.returncode}"),
+            )
+
+        except subprocess.TimeoutExpired as e:
+            duration = time.monotonic() - start
+            return AgentResult(
+                success=False, exit_code=-1, duration=round(duration, 3),
+                stdout_tail=e.stdout.decode("utf-8", errors="replace")[-500:]
+                    if e.stdout else "",
+                stderr_tail=e.stderr.decode("utf-8", errors="replace")[-500:]
+                    if e.stderr else "",
+                log_path=log_path,
+                error=f"Timeout after {effective_timeout}s",
+            )
+
+        except FileNotFoundError:
+            duration = time.monotonic() - start
+            return AgentResult(
+                success=False, exit_code=-1, duration=round(duration, 3),
+                stdout_tail="", stderr_tail="", log_path=log_path,
+                error=f"{self.binary} binary not found",
+            )
+```
+
+### Concrete Plugin Example — Gemini CLI
+
+```python
+# ~/.unison/plugins/gemini_cli_plugin.py
+from pathlib import Path
+import subprocess
+
+from unison.plugins.base import UnisonPlugin
+
+
+class GeminiCLIPlugin(UnisonPlugin):
+    """Plugin for the `gemini-internal` CLI tool."""
+
+    binary = "gemini-internal"
+    cli_flags = ["-p", "--output-format", "text", "--skip-confirmation"]
+    startup_grace = 10  # Gemini CLI has slow cold start
+
+    @classmethod
+    def validate_installation(cls) -> tuple[bool, str | None]:
+        try:
+            result = subprocess.run(
+                [cls.binary, "--version"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                return False, f"{cls.binary} --version exited {result.returncode}"
+            return True, None
+        except FileNotFoundError:
+            return False, f"{cls.binary} not found on PATH"
+        except subprocess.TimeoutExpired:
+            return False, f"{cls.binary} --version timed out"
+```
+
+---
+
+## 3. Configuration — `pipeline.yaml` with Plugins
+
+Users declare custom runtimes in a top-level `plugins:` section. Each entry maps a
+**runtime name** (the string used in `agents.<name>.runtime`) to a **plugin class**
+and optional **flag overrides**.
+
+### Example: Adding Gemini as a runtime
+
+```yaml
+# pipeline.yaml
+version: "2.1"
+project_root: "."
+
+# ── Plugin declarations (NEW) ─────────────────────────────────────────────
+plugins:
+  gemini:
+    module: gemini_cli_plugin          # Python module name (without .py)
+    class: GeminiCLIPlugin             # class within the module
+    search_paths:                      # where to find the .py file
+      - ~/.unison/plugins
+    cli_flags_override:                # optional: override the class default
+      - "-p"
+      - "--output-format=json"
+      - "-y"
+
+  custom-script:
+    module: my_runner
+    class: BashScriptRunner
+    search_paths:
+      - .unison/plugins                # project-local plugin
+    env:                               # optional: env vars injected at runtime
+      API_KEY: "${MY_API_KEY}"
+      MODEL_NAME: "my-ft-model-v3"
+
+# ── Agents (unchanged structure) ──────────────────────────────────────────
+agents:
+  planner:
+    role: architect
+    runtime: claude                    # built-in: still works
+    model: opus-4.8
+    system_prompt_path: "prompts/architect.md"
+    pipeline_role: planner
+
+  coder:
+    role: developer
+    runtime: gemini                    # <-- custo
+...[truncated]
+
+=== STDOUT ===
+Done. The complete plugin system design is written to `prd/PRD.md` — **4,571 words, 1,215 lines**, with zero placeholders or stubs. Here's what it covers:
+
+### All 5 required topics:
+
+1. **Python plugin interface class** (§3.2) — Full `UnisonPlugin` ABC with `binary`, `cli_flags`, `startup_grace`, `_env`, `validate_installation()`, `_build_command()`, `_build_env()`, and `run()` method signatures. Plus a concrete `GeminiCLIPlugin` example (§3.3).
+
+2. **YAML config example** (§3.1) — Complete `pipeline.yaml` with `cli_plugins:` section showing `gemini` and `custom-script` runtimes, plus `python_plugins:` for opt-in Python plugins. All `agents:` entries reference both built-in and custom runtimes.
+
+3. **Plugin loading mechanism** (§4) — Full `PluginRegistry` implementation (~200 lines) with `load_cli_plugins()`, `load_python_plugins()`, `_load_python_class()`. Single-owner rule: `PipelineLoader` discovers, `Orchestrator` consumes. Deterministic search path order (project-local → user-global → custom). Unique `sys.modules` keys using SHA-256 hash to prevent collisions.
+
+4. **Backward compatibility proof** (§6) — Five specific checks: absent keys are no-ops, `plugin_registry` is optional on `PipelineSpec`, all 4 built-in runtimes (including **OpenClawRunner**) are in the runner dict, `VALID_RUNTIMES` math is exact, existing tests pass unchanged.
+
+5. **Error handling** (§7) — 20-row table covering every failure mode (missing binary, wrong version, duplicate names, built-in name reuse, Python gate, import errors, mid-run crashes) with exact error messages. Plus `unison validate` output format.
+
+### Review findings addressed:
+
+- **Critical (arbitrary code execution):** Two-tier design — `cli_plugins:` is always safe (declarative, no Python import). `python_plugins:` requires `--allow-python-plugins` flag. §8 documents the full trust model with threat boundaries.
+- **Major (missing OpenClawRunner):** All 4 built-ins are in the runner dict.
+- **Major (loader ownership):** `PipelineLoader` owns discovery; registry is stored on `PipelineSpec`; `Orchestrator` consumes without reloading.
+- **Major (search-path contradictions):** Explicit deterministic order documented in `_load_python_class()`: project-local → user-global → custom paths. Unique import names prevent `sys.modules` collisions.
+- **Major (API overpowered):** Two tiers — declarative `cli_plugins:` for 90% of use cases, Python `UnisonPlugin` API for power users.
+- **Minor (runner bugs):** Fixed `str|bytes|None` handling, log writing, env support, and generic exception catch.
+
+
+=== STDERR ===
+

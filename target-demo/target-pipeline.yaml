@@ -1,0 +1,50 @@
+# Generated from Unison template — customize for your project
+#
+# This pipeline.yaml is a starter template for a two-agent (Developer + Reviewer)
+# loop. Fill in every <USER MUST FILL> field below before running `unison run`.
+#
+# Quick start:
+#   1. Replace placeholder model names with your actual models
+#   2. Set your real test command
+#   3. Run: unison dry-run --pipeline target-demo/target-pipeline.yaml
+#   4. Run: unison run
+
+version: "2.0"
+project_root: "."
+
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    # <USER MUST FILL: your developer model, e.g., deepseek-v4-pro, claude-sonnet-4-6, gpt-5.5>
+    model: "placeholder-dev-model"
+    system_prompt_path: "prompts/developer-target.md"
+
+  reviewer:
+    role: reviewer
+    runtime: codex
+    # <USER MUST FILL: your reviewer model, e.g., gpt-5.5, claude-opus-4-8, deepseek-v4-pro>
+    model: "placeholder-review-model"
+    system_prompt_path: "prompts/reviewer-target.md"
+
+project:
+  # <USER MUST FILL: your test command, e.g., pytest tests/ -q, npm test>
+  test_command: "echo placeholder-test-command"
+
+# Optional: uncomment and fill in to set token budgets
+# budget:
+#   # <USER MUST FILL: daily token limit across all agents, e.g., 1000000>
+#   daily_token_limit: 1000000
+#   # <USER MUST FILL: per-agent-task token cap, e.g., 200000>
+#   per_task_limit: 200000
+
+# Optional: uncomment to customize snapshot retention
+# snapshots:
+#   enabled: true
+
+# Optional: uncomment and fill in to enable risk matrix
+# risk_matrix:
+#   # <USER MUST FILL: paths that trigger L3 halt on any write, e.g., ARCHITECTURE.md>
+#   system_critical_paths: []
+#   # <USER MUST FILL: commands downgraded one risk level externally, e.g., pip install>
+#   known_safe_external_commands: []

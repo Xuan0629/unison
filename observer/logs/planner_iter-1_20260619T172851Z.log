@@ -1,0 +1,100 @@
+=== COMMAND ===
+claude -p --dangerously-skip-permissions WRITE A COMPLETE plugin system design NOW. Do NOT write placeholders or stubs. Write at least 500 words to prd/PRD.md covering: (1) Python plugin interface class with method signatures, (2) YAML config example showing custom runtime, (3) plugin loading mechanism, (4) backward compatibility proof showing existing pipeline.yaml still works, (5) error handling for missing/broken plugins. Include actual code snippets. Start immediately.
+
+# Architect (Claude Code) — Phase 10 Round 1: Plugin System Design
+
+You are the **Architect** in a multi-perspective design debate. Your role is to
+propose a concrete, well-reasoned technical design.
+
+## Your Mission
+
+Write `prd/plugin-proposal.md` — a design proposal for adding a **plugin system**
+to the Unison Multi-Agent harness.
+
+## Background
+
+Currently Unison's Runtime type is hardcoded:
+```python
+Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
+```
+
+Each runtime has hardcoded CLI flags in `AgentSpec.cli_flags`. Users cannot
+add new agent CLIs (Copilot, Gemini CLI, custom scripts, etc.) without modifying
+Unison source code.
+
+## Proposal Requirements
+
+Your proposal MUST cover:
+
+1. **Plugin Interface**: What does a plugin look like? A Python class? A config file?
+   A CLI wrapper? Define the contract.
+
+2. **Plugin Loading**: How are plugins discovered and loaded? Directory scanning?
+   Registry file? pip installable?
+
+3. **Configuration**: How does a user declare a custom runtime in pipeline.yaml?
+   Show a concrete YAML example.
+
+4. **CLI Flag Mapping**: How does the plugin declare its CLI flags (e.g., `-p`,
+   `--dangerously-skip-permissions`)?
+
+5. **Backward Compatibility**: How do existing runtimes (claude, codex, hermes,
+   openclaw) continue to work?
+
+6. **Migration Path**: How does an existing pipeline.yaml migrate to use plugins?
+
+## Output Format
+
+```markdown
+# Plugin System Design Proposal
+
+## 1. Motivation
+## 2. Plugin Interface
+## 3. Plugin Loading
+## 4. Configuration (with YAML example)
+## 5. CLI Flag Mapping
+## 6. Backward Compatibility
+## 7. Migration Path
+## 8. Open Questions
+```
+
+## Style
+
+- Be specific. Show code snippets, YAML examples, file paths.
+- Be opinionated. Pick a design direction and justify it.
+- Acknowledge trade-offs. No design is perfect.
+- Target: 500-1000 words. Dense, not fluffy.
+
+
+## Git Diff
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 9b95915..76901e4 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -432,8 +432,9 @@ class Orchestrator:
+                 return
+             # overflow_action == "downgrade" — already handled in _select_runner
+ 
+-        # 3. Pre-invoke cleanup
+-        self.pre_invoke_cleanup()
++        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
++        if role == "developer":
++            self.pre_invoke_cleanup()
+ 
+         if self._state.halt_signal:
+... (truncated)
+
+=== STDOUT ===
+Done. The plugin system design is written to `prd/PRD.md` — **2,715 words** covering all five required areas:
+
+| Requirement | Coverage |
+|---|---|
+| **Python plugin interface** | `UnisonPlugin` ABC with full method signatures: `binary`, `cli_flags`, `validate_installation()`, `run()`, `_build_command()`. Concrete `GeminiCLIPlugin` example. |
+| **YAML config example** | Full `pipeline.yaml` with `plugins:` section showing Gemini and custom-script runtimes, including `cli_flags_override`, `search_paths`, and `env`. |
+| **Plugin loading mechanism** | `PluginRegistry` class with `importlib.util`-based loading, search path resolution (project-local → user-global → custom), and init-time validation. |
+| **Backward compatibility proof** | Five-point proof: absent `plugins:` key is a no-op, `VALID_RUNTIMES` widened to include plugin names at load time, existing runners untouched, `Runtime` type alias becomes `str` (lossless at runtime), existing test suite validates unchanged behavior. |
+| **Error handling** | Table of 8 failure modes (missing file, missing class, wrong base class, binary not found, version mismatch, reserved name, runtime crash, type error) — all detected pre-flight before any agent runs. |
+
+
+=== STDERR ===
+

@@ -1,0 +1,129 @@
+=== COMMAND ===
+claude -p --dangerously-skip-permissions WRITE A COMPLETE PRD NOW. Do not write placeholders, stubs, or 'TBD'. Write at least 400 words covering: (1) scope: scan ~/.hermes/skills/ and ~/.openclaw/agents/, (2) audit dimensions: CLI command validity, file path validity, YAML frontmatter completeness, cross-reference integrity, (3) output format: a table with file/line/type/severity/details/fix columns, (4) constraints: read-only, no modifications. Start writing immediately.
+
+# Skill-Auditor (Claude Code) — Phase 12: Skill Health Audit
+
+You are the **Skill-Auditor**. Scan hermes and openclaw skill files for
+outdated, broken, or incomplete content.
+
+## Your Mission
+
+Write `reviews/skill-audit.md` — a structured audit of all skill files under:
+- `~/.hermes/skills/`
+- `~/.openclaw/agents/`
+
+## Audit Checklist
+
+For each SKILL.md file, check:
+
+1. **CLI Command Validity** (use `which` or `command -v`):
+   - Commands like `hermes config set`, `claude -p`, `codex exec` — are they installed?
+   - Flags like `--dangerously-skip-permissions` — still valid? (check `claude --help`)
+
+2. **File Path Validity** (use `test -f` or `ls`):
+   - Paths like `~/.hermes/config.yaml`, `~/.openclaw/openclaw.json` — do they exist?
+   - Template paths like `templates/` — are they still in the skill dir?
+
+3. **Frontmatter Completeness** (use `python3 -c "import yaml; ..."`):
+   - Has `name`, `description`, `version`, `tags`?
+   - Is `version` valid semver?
+   - Is `description` non-empty and not a placeholder?
+
+4. **Cross-Reference Validity**:
+   - If skill A says "see skill B", does skill B exist?
+   - Use `grep -r "skill.name"` to find references, then verify.
+
+## Output Format
+
+```markdown
+# Skill Health Audit
+
+**Date**: <today>
+**Files scanned**: <N>
+**Issues found**: <N>
+
+## Issues
+
+| # | File | Line | Type | Severity | Details | Suggested Fix |
+|---|------|------|------|----------|---------|----------------|
+| 1 | ~/.hermes/skills/foo/SKILL.md | 12 | broken-command | HIGH | `hermes config set` → flag `--foo` not found | Update to `hermes config ...` |
+| ... |
+
+## Summary by Type
+
+| Type | Count |
+|------|-------|
+| broken-command | N |
+| missing-path | N |
+| incomplete-frontmatter | N |
+| broken-cross-ref | N |
+
+## Clean Skills (no issues)
+- ~/.hermes/skills/bar/SKILL.md
+- ...
+```
+
+## Rules
+
+- Do NOT modify any skill files — READ ONLY.
+- Do NOT modify Unison source code.
+- If `which` returns nothing, mark as `unverifiable` not `broken`.
+- Focus on OBJECTIVE issues, not style preferences.
+- Skip files that are not SKILL.md (e.g., README.md, scripts/).
+
+
+## Git Diff
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 9b95915..76901e4 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -432,8 +432,9 @@ class Orchestrator:
+                 return
+             # overflow_action == "downgrade" — already handled in _select_runner
+ 
+-        # 3. Pre-invoke cleanup
+-        self.pre_invoke_cleanup()
++        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
++        if role == "developer":
++            self.pre_invoke_cleanup()
+ 
+         if self._state.halt_signal:
+... (truncated)
+
+## Design
+# Phase 12: Technical Design
+
+The Skill-Auditor will write the full tech design here.
+
+
+## PRD
+# Phase 12: Skill Health Audit
+
+The Skill-Auditor will write the full audit plan here.
+
+
+=== STDOUT ===
+The audit report is complete at `reviews/skill-audit.md`. Here's a summary of what was found:
+
+## Audit Results at a Glance
+
+| Metric | Value |
+|--------|-------|
+| Files scanned | 103 (97 hermes + 6 openclaw) |
+| Issues found | 53 |
+| Clean skills | 55 |
+
+## Top Issues by Severity
+
+**HIGH (8)** — 8 files have **no YAML frontmatter at all**: 2 hermes imports (`agent_auditor`, `agent_factory`) and all 6 OpenClaw `AGENTS.md` files. The OpenClaw files may be intentionally frontmatter-free (different metadata convention), but the hermes imports are clear gaps.
+
+**MEDIUM (38)** — Three clusters:
+- **22 skills missing `version`** — concentrated in `openclaw-imports/` (16 of 18) plus scattered devops/creative/gaming skills
+- **18 skills missing `tags`** — same `openclaw-imports/` cluster, plus a few creative/devops skills
+- **6 path references** to directories that genuinely don't exist (`~/.openclaw/workspace/skills/`, `~/.openclaw/sessions/`, `~/.openclaw/plugin-runtime-deps/`, `~/.hermes/prefill.json`, `~/.git-credentials`)
+
+**LOW (7+)** — 37 broken `related_skills` cross-references across 20+ skills (the top ghost: `requesting-code-review` at 5 references), plus `docker`/`shortcuts` CLI unavailability on this Linux host.
+
+
+=== STDERR ===
+

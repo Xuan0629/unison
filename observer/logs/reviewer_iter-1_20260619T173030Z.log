@@ -1,0 +1,2108 @@
+=== COMMAND ===
+codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 1: 1. Run tests: test -f prd/PRD.md && test -f prd/tech-design.md && echo 'proposal exists' 2. Write review to /home/sean/projects/unison/reviews/plan-iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Critic (Codex) — Phase 10 Round 1: Plugin System Critique
+
+You are the **Critic** in a multi-perspective design debate. Your role is to find
+weaknesses, edge cases, and risks in the Architect's proposal.
+
+## Your Mission
+
+Review `prd/plugin-proposal.md` (written by the Architect) and produce a
+structured critique. You MUST find at least 3 issues.
+
+## Review Criteria
+
+For each of the following dimensions, identify what the proposal handles well
+and where it falls short:
+
+1. **Completeness**: Does it cover all 7 required sections? What's missing?
+2. **Concreteness**: Are there code snippets and YAML examples, or just hand-waving?
+3. **Backward Compatibility**: Would existing pipeline.yaml files break?
+4. **Security**: Could a malicious plugin execute arbitrary code? Is there sandboxing?
+5. **Complexity**: Is the proposed solution over-engineered for the problem?
+6. **Edge Cases**: What happens when a plugin is missing? When two plugins conflict?
+
+## Output Format
+
+```markdown
+Verdict: PASS | REQUEST_CHANGES
+
+## Strengths
+- <what the proposal does well>
+
+## Issues (at least 3)
+### Issue 1: <title>
+- **Severity**: Critical | Major | Minor
+- **What**: <specific problem>
+- **Why it matters**: <impact>
+- **Suggested fix**: <concrete suggestion>
+
+### Issue 2: ...
+### Issue 3: ...
+
+## Missing Coverage
+- <topics the proposal didn't address>
+
+## Verdict Rationale
+<why PASS or REQUEST_CHANGES>
+```
+
+## Rules
+
+- Be harsh but fair. The Architect can handle it.
+- Every issue must include a suggested fix — "this is bad" is not actionable.
+- If the proposal has fewer than 3 real issues, PASS is acceptable.
+- If REQUEST_CHANGES, the Architect will revise and you will review again.
+
+
+## Git Diff
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 9b95915..76901e4 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -432,8 +432,9 @@ class Orchestrator:
+                 return
+             # overflow_action == "downgrade" — already handled in _select_runner
+ 
+-        # 3. Pre-invoke cleanup
+-        self.pre_invoke_cleanup()
++        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
++        if role == "developer":
++            self.pre_invoke_cleanup()
+ 
+         if self._state.halt_signal:
+... (truncated)
+
+## PRD
+# Unison Plugin System — Design & Specification
+
+**Status:** Draft, Phase 10 Round 1  
+**Author:** Architect (Claude Code)  
+**Target:** Unison v2.1  
+
+---
+
+## 1. Motivation
+
+Unison currently hardcodes four agent runtimes via a `Literal` type alias:
+
+```python
+# interfaces.py:38 — the bottleneck
+Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
+```
+
+Adding a new agent CLI (Gemini CLI, GitHub Copilot, a custom bash script wrapping an
+in-house model, etc.) requires:
+1. Adding a string to the `Literal` union in `interfaces.py`
+2. Adding CLI flags to the `AgentSpec.cli_flags` property dict
+3. Writing a new `*Runner` dataclass under `src/unison/runners/`
+4. Registering it in the `Orchestrator.__init__` runner dict
+5. Updating `PipelineLoader.VALID_RUNTIMES`
+
+This is a **closed set**. The plugin system makes it **open** — users drop a
+Python file and a YAML stanza, no source edits needed.
+
+---
+
+## 2. Plugin Interface — `UnisonPlugin`
+
+Every plugin is a Python class implementing the `UnisonPlugin` abstract base class
+(lives at `src/unison/plugins/base.py`). It extends `AgentRunner` so any plugin
+*is* a runner — the Orchestrator doesn't distinguish built-in from custom.
+
+```python
+# src/unison/plugins/base.py
+from __future__ import annotations
+
+import subprocess
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from pathlib import Path
+from typing import ClassVar
+
+from interfaces import AgentSpec, AgentResult
+from unison.runners.base import AgentRunner
+
+
+class UnisonPlugin(AgentRunner, ABC):
+    """Abstract base for user-provided agent CLI plugins.
+
+    Subclasses MUST override:
+      - ``binary``: the CLI executable name (str)
+      - ``cli_flags``: default CLI flags appended before the prompt (list[str])
+      - ``validate_installation``: check that the binary is callable
+
+    Subclasses MAY override:
+      - ``startup_grace``: extra seconds added to timeout for slow-starting CLIs
+      - ``run``: for non-subprocess backends (HTTP APIs, sockets, etc.)
+      - ``_build_command``: if the CLI needs custom argument ordering
+
+    A plugin is registered by:
+    1. Dropping the Python file in ``~/.unison/plugins/`` or
+       ``<project>/.unison/plugins/``.
+    2. Declaring it in ``pipeline.yaml`` under a top-level ``plugins:`` section.
+    """
+
+    # ---- Subclass contract ------------------------------------------------
+
+    binary: ClassVar[str]
+    """The CLI binary name, e.g. ``"gemini-internal"``."""
+
+    cli_flags: ClassVar[list[str]]
+    """Default flags appended before the prompt, e.g. ``["-p", "--yolo"]``."""
+
+    startup_grace: ClassVar[int] = 0
+    """Extra seconds added to the agent timeout for slow-starting CLIs."""
+
+    @classmethod
+    @abstractmethod
+    def validate_installation(cls) -> tuple[bool, str | None]:
+        """Check that the binary is installed and callable.
+
+        Returns:
+            ``(True, None)`` if the binary is ready.
+            ``(False, error_message)`` if missing, broken, or wrong version.
+        """
+        ...
+
+    # ---- Default implementation -------------------------------------------
+
+    def _build_command(self, spec: AgentSpec, prompt: str) -> list[str]:
+        """Build the CLI command as a list of tokens.
+
+        The default implementation uses ``self.binary`` + ``self.cli_flags``.
+        Override for custom argument ordering (e.g. flags after prompt).
+        """
+        return [self.binary, *self.cli_flags, prompt]
+
+    def run(
+        self,
+        spec: AgentSpec,
+        prompt: str,
+        workdir: Path,
+        timeout: int,
+        log_path: Path,
+    ) -> AgentResult:
+        """Execute the agent via subprocess.run.
+
+        The default implementation mirrors ``ClaudeRunner.run`` exactly.
+        Plugins with non-subprocess backends (HTTP, gRPC) override this.
+        """
+        cmd = self._build_command(spec, prompt)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        effective_timeout = timeout + self.startup_grace
+
+        start = time.monotonic()
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(workdir),
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout,
+            )
+            duration = time.monotonic() - start
+            return AgentResult(
+                success=proc.returncode == 0,
+                exit_code=proc.returncode,
+                duration=round(duration, 3),
+                stdout_tail=proc.stdout[-500:] if proc.stdout else "",
+                stderr_tail=proc.stderr[-500:] if proc.stderr else "",
+                log_path=log_path,
+                error=(None if proc.returncode == 0
+                       else f"Command exited with code {proc.returncode}"),
+            )
+
+        except subprocess.TimeoutExpired as e:
+            duration = time.monotonic() - start
+            return AgentResult(
+                success=False, exit_code=-1, duration=round(duration, 3),
+                stdout_tail=e.stdout.decode("utf-8", errors="replace")[-500:]
+                    if e.stdout else "",
+                stderr_tail=e.stderr.decode("utf-8", errors="replace")[-500:]
+                    if e.stderr else "",
+                log_path=log_path,
+                error=f"Timeout after {effective_timeout}s",
+            )
+
+        except FileNotFoundError:
+            duration = time.monotonic() - start
+            return AgentResult(
+                success=False, exit_code=-1, duration=round(duration, 3),
+                stdout_tail="", stderr_tail="", log_path=log_path,
+                error=f"{self.binary} binary not found",
+            )
+```
+
+### Concrete Plugin Example — Gemini CLI
+
+```python
+# ~/.unison/plugins/gemini_cli_plugin.py
+from pathlib import Path
+import subprocess
+
+from unison.plugins.base import UnisonPlugin
+
+
+class GeminiCLIPlugin(UnisonPlugin):
+    """Plugin for the `gemini-internal` CLI tool."""
+
+    binary = "gemini-internal"
+    cli_flags = ["-p", "--output-format", "text", "--skip-confirmation"]
+    startup_grace = 10  # Gemini CLI has slow cold start
+
+    @classmethod
+    def validate_installation(cls) -> tuple[bool, str | None]:
+        try:
+            result = subprocess.run(
+                [cls.binary, "--version"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                return False, f"{cls.binary} --version exited {result.returncode}"
+            return True, None
+        except FileNotFoundError:
+            return False, f"{cls.binary} not found on PATH"
+        except subprocess.TimeoutExpired:
+            return False, f"{cls.binary} --version timed out"
+```
+
+---
+
+## 3. Configuration — `pipeline.yaml` with Plugins
+
+Users declare custom runtimes in a top-level `plugins:` section. Each entry maps a
+**runtime name** (the string used in `agents.<name>.runtime`) to a **plugin class**
+and optional **flag overrides**.
+
+### Example: Adding Gemini as a runtime
+
+```yaml
+# pipeline.yaml
+version: "2.1"
+project_root: "."
+
+# ── Plugin declarations (NEW) ─────────────────────────────────────────────
+plugins:
+  gemini:
+    module: gemini_cli_plugin          # Python module name (without .py)
+    class: GeminiCLIPlugin             # class within the module
+    search_paths:                      # where to find the .py file
+      - ~/.unison/plugins
+    cli_flags_override:                # optional: override the class default
+      - "-p"
+      - "--output-format=json"
+      - "-y"
+
+  custom-script:
+    module: my_runner
+    class: BashScriptRunner
+    search_paths:
+      - .unison/plugins                # project-local plugin
+    env:                               # optional: env vars injected at runtime
+      API_KEY: "${MY_API_KEY}"
+      MODEL_NAME: "my-ft-model-v3"
+
+# ── Agents (unchanged structure) ──────────────────────────────────────────
+agents:
+  planner:
+    role: architect
+    runtime: claude                    # built-in: still works
+    model: opus-4.8
+    system_prompt_path: "prompts/architect.md"
+    pipeline_role: planner
+
+  coder:
+    role: developer
+    runtime: gemini                    # <-- custo
+...[truncated]
+
+=== STDOUT ===
+Wrote the critique to [reviews/plan-iter-1.md](/home/sean/projects/unison/reviews/plan-iter-1.md).
+
+Verification:
+- Ran `test -f prd/PRD.md && test -f prd/tech-design.md && echo 'proposal exists'` → `proposal exists`
+- Did not modify `src/`
+- Verdict: `REQUEST_CHANGES`
+
+Note: `prd/plugin-proposal.md` is missing; the proposal content appears to be in `prd/PRD.md`, so the review calls out the artifact path mismatch.
+
+
+=== STDERR ===
+Reading additional input from stdin...
+OpenAI Codex v0.141.0
+--------
+workdir: /home/sean/projects/unison
+model: gpt-5.5
+provider: openai-custom
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 019ee0ef-2838-70b1-8870-e07fc6483272
+--------
+user
+Review Iteration 1: 1. Run tests: test -f prd/PRD.md && test -f prd/tech-design.md && echo 'proposal exists' 2. Write review to /home/sean/projects/unison/reviews/plan-iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Critic (Codex) — Phase 10 Round 1: Plugin System Critique
+
+You are the **Critic** in a multi-perspective design debate. Your role is to find
+weaknesses, edge cases, and risks in the Architect's proposal.
+
+## Your Mission
+
+Review `prd/plugin-proposal.md` (written by the Architect) and produce a
+structured critique. You MUST find at least 3 issues.
+
+## Review Criteria
+
+For each of the following dimensions, identify what the proposal handles well
+and where it falls short:
+
+1. **Completeness**: Does it cover all 7 required sections? What's missing?
+2. **Concreteness**: Are there code snippets and YAML examples, or just hand-waving?
+3. **Backward Compatibility**: Would existing pipeline.yaml files break?
+4. **Security**: Could a malicious plugin execute arbitrary code? Is there sandboxing?
+5. **Complexity**: Is the proposed solution over-engineered for the problem?
+6. **Edge Cases**: What happens when a plugin is missing? When two plugins conflict?
+
+## Output Format
+
+```markdown
+Verdict: PASS | REQUEST_CHANGES
+
+## Strengths
+- <what the proposal does well>
+
+## Issues (at least 3)
+### Issue 1: <title>
+- **Severity**: Critical | Major | Minor
+- **What**: <specific problem>
+- **Why it matters**: <impact>
+- **Suggested fix**: <concrete suggestion>
+
+### Issue 2: ...
+### Issue 3: ...
+
+## Missing Coverage
+- <topics the proposal didn't address>
+
+## Verdict Rationale
+<why PASS or REQUEST_CHANGES>
+```
+
+## Rules
+
+- Be harsh but fair. The Architect can handle it.
+- Every issue must include a suggested fix — "this is bad" is not actionable.
+- If the proposal has fewer than 3 real issues, PASS is acceptable.
+- If REQUEST_CHANGES, the Architect will revise and you will review again.
+
+
+## Git Diff
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 9b95915..76901e4 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -432,8 +432,9 @@ class Orchestrator:
+                 return
+             # overflow_action == "downgrade" — already handled in _select_runner
+ 
+-        # 3. Pre-invoke cleanup
+-        self.pre_invoke_cleanup()
++        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
++        if role == "developer":
++            self.pre_invoke_cleanup()
+ 
+         if self._state.halt_signal:
+... (truncated)
+
+## PRD
+# Unison Plugin System — Design & Specification
+
+**Status:** Draft, Phase 10 Round 1  
+**Author:** Architect (Claude Code)  
+**Target:** Unison v2.1  
+
+---
+
+## 1. Motivation
+
+Unison currently hardcodes four agent runtimes via a `Literal` type alias:
+
+```python
+# interfaces.py:38 — the bottleneck
+Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
+```
+
+Adding a new agent CLI (Gemini CLI, GitHub Copilot, a custom bash script wrapping an
+in-house model, etc.) requires:
+1. Adding a string to the `Literal` union in `interfaces.py`
+2. Adding CLI flags to the `AgentSpec.cli_flags` property dict
+3. Writing a new `*Runner` dataclass under `src/unison/runners/`
+4. Registering it in the `Orchestrator.__init__` runner dict
+5. Updating `PipelineLoader.VALID_RUNTIMES`
+
+This is a **closed set**. The plugin system makes it **open** — users drop a
+Python file and a YAML stanza, no source edits needed.
+
+---
+
+## 2. Plugin Interface — `UnisonPlugin`
+
+Every plugin is a Python class implementing the `UnisonPlugin` abstract base class
+(lives at `src/unison/plugins/base.py`). It extends `AgentRunner` so any plugin
+*is* a runner — the Orchestrator doesn't distinguish built-in from custom.
+
+```python
+# src/unison/plugins/base.py
+from __future__ import annotations
+
+import subprocess
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from pathlib import Path
+from typing import ClassVar
+
+from interfaces import AgentSpec, AgentResult
+from unison.runners.base import AgentRunner
+
+
+class UnisonPlugin(AgentRunner, ABC):
+    """Abstract base for user-provided agent CLI plugins.
+
+    Subclasses MUST override:
+      - ``binary``: the CLI executable name (str)
+      - ``cli_flags``: default CLI flags appended before the prompt (list[str])
+      - ``validate_installation``: check that the binary is callable
+
+    Subclasses MAY override:
+      - ``startup_grace``: extra seconds added to timeout for slow-starting CLIs
+      - ``run``: for non-subprocess backends (HTTP APIs, sockets, etc.)
+      - ``_build_command``: if the CLI needs custom argument ordering
+
+    A plugin is registered by:
+    1. Dropping the Python file in ``~/.unison/plugins/`` or
+       ``<project>/.unison/plugins/``.
+    2. Declaring it in ``pipeline.yaml`` under a top-level ``plugins:`` section.
+    """
+
+    # ---- Subclass contract ------------------------------------------------
+
+    binary: ClassVar[str]
+    """The CLI binary name, e.g. ``"gemini-internal"``."""
+
+    cli_flags: ClassVar[list[str]]
+    """Default flags appended before the prompt, e.g. ``["-p", "--yolo"]``."""
+
+    startup_grace: ClassVar[int] = 0
+    """Extra seconds added to the agent timeout for slow-starting CLIs."""
+
+    @classmethod
+    @abstractmethod
+    def validate_installation(cls) -> tuple[bool, str | None]:
+        """Check that the binary is installed and callable.
+
+        Returns:
+            ``(True, None)`` if the binary is ready.
+            ``(False, error_message)`` if missing, broken, or wrong version.
+        """
+        ...
+
+    # ---- Default implementation -------------------------------------------
+
+    def _build_command(self, spec: AgentSpec, prompt: str) -> list[str]:
+        """Build the CLI command as a list of tokens.
+
+        The default implementation uses ``self.binary`` + ``self.cli_flags``.
+        Override for custom argument ordering (e.g. flags after prompt).
+        """
+        return [self.binary, *self.cli_flags, prompt]
+
+    def run(
+        self,
+        spec: AgentSpec,
+        prompt: str,
+        workdir: Path,
+        timeout: int,
+        log_path: Path,
+    ) -> AgentResult:
+        """Execute the agent via subprocess.run.
+
+        The default implementation mirrors ``ClaudeRunner.run`` exactly.
+        Plugins with non-subprocess backends (HTTP, gRPC) override this.
+        """
+        cmd = self._build_command(spec, prompt)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        effective_timeout = timeout + self.startup_grace
+
+        start = time.monotonic()
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(workdir),
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout,
+            )
+            duration = time.monotonic() - start
+            return AgentResult(
+                success=proc.returncode == 0,
+                exit_code=proc.returncode,
+                duration=round(duration, 3),
+                stdout_tail=proc.stdout[-500:] if proc.stdout else "",
+                stderr_tail=proc.stderr[-500:] if proc.stderr else "",
+                log_path=log_path,
+                error=(None if proc.returncode == 0
+                       else f"Command exited with code {proc.returncode}"),
+            )
+
+        except subprocess.TimeoutExpired as e:
+            duration = time.monotonic() - start
+            return AgentResult(
+                success=False, exit_code=-1, duration=round(duration, 3),
+                stdout_tail=e.stdout.decode("utf-8", errors="replace")[-500:]
+                    if e.stdout else "",
+                stderr_tail=e.stderr.decode("utf-8", errors="replace")[-500:]
+                    if e.stderr else "",
+                log_path=log_path,
+                error=f"Timeout after {effective_timeout}s",
+            )
+
+        except FileNotFoundError:
+            duration = time.monotonic() - start
+            return AgentResult(
+                success=False, exit_code=-1, duration=round(duration, 3),
+                stdout_tail="", stderr_tail="", log_path=log_path,
+                error=f"{self.binary} binary not found",
+            )
+```
+
+### Concrete Plugin Example — Gemini CLI
+
+```python
+# ~/.unison/plugins/gemini_cli_plugin.py
+from pathlib import Path
+import subprocess
+
+from unison.plugins.base import UnisonPlugin
+
+
+class GeminiCLIPlugin(UnisonPlugin):
+    """Plugin for the `gemini-internal` CLI tool."""
+
+    binary = "gemini-internal"
+    cli_flags = ["-p", "--output-format", "text", "--skip-confirmation"]
+    startup_grace = 10  # Gemini CLI has slow cold start
+
+    @classmethod
+    def validate_installation(cls) -> tuple[bool, str | None]:
+        try:
+            result = subprocess.run(
+                [cls.binary, "--version"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                return False, f"{cls.binary} --version exited {result.returncode}"
+            return True, None
+        except FileNotFoundError:
+            return False, f"{cls.binary} not found on PATH"
+        except subprocess.TimeoutExpired:
+            return False, f"{cls.binary} --version timed out"
+```
+
+---
+
+## 3. Configuration — `pipeline.yaml` with Plugins
+
+Users declare custom runtimes in a top-level `plugins:` section. Each entry maps a
+**runtime name** (the string used in `agents.<name>.runtime`) to a **plugin class**
+and optional **flag overrides**.
+
+### Example: Adding Gemini as a runtime
+
+```yaml
+# pipeline.yaml
+version: "2.1"
+project_root: "."
+
+# ── Plugin declarations (NEW) ─────────────────────────────────────────────
+plugins:
+  gemini:
+    module: gemini_cli_plugin          # Python module name (without .py)
+    class: GeminiCLIPlugin             # class within the module
+    search_paths:                      # where to find the .py file
+      - ~/.unison/plugins
+    cli_flags_override:                # optional: override the class default
+      - "-p"
+      - "--output-format=json"
+      - "-y"
+
+  custom-script:
+    module: my_runner
+    class: BashScriptRunner
+    search_paths:
+      - .unison/plugins                # project-local plugin
+    env:                               # optional: env vars injected at runtime
+      API_KEY: "${MY_API_KEY}"
+      MODEL_NAME: "my-ft-model-v3"
+
+# ── Agents (unchanged structure) ──────────────────────────────────────────
+agents:
+  planner:
+    role: architect
+    runtime: claude                    # built-in: still works
+    model: opus-4.8
+    system_prompt_path: "prompts/architect.md"
+    pipeline_role: planner
+
+  coder:
+    role: developer
+    runtime: gemini                    # <-- custo
+...[truncated]
+codex
+I’ll verify the proposal files exist, then read the plugin proposal directly so the critique is based on the repo version rather than the truncated prompt. After that I’ll write only the review artifact under `reviews/`.
+exec
+/bin/bash -lc 'mkdir -p reviews && pwd' in /home/sean/projects/unison
+ succeeded in 0ms:
+/home/sean/projects/unison
+
+exec
+/bin/bash -lc "test -f prd/PRD.md && test -f prd/tech-design.md && echo 'proposal exists'" in /home/sean/projects/unison
+ succeeded in 0ms:
+proposal exists
+
+exec
+/bin/bash -lc "sed -n '261,520p' prd/plugin-proposal.md" in /home/sean/projects/unison
+ exited 2 in 0ms:
+sed: can't read prd/plugin-proposal.md: No such file or directory
+
+exec
+/bin/bash -lc "sed -n '1,260p' prd/plugin-proposal.md" in /home/sean/projects/unison
+ exited 2 in 0ms:
+sed: can't read prd/plugin-proposal.md: No such file or directory
+
+codex
+The required existence check passed. The named proposal file is not present at `prd/plugin-proposal.md`, so I’m checking the PRD directory to find the actual proposal file without touching source files.
+exec
+/bin/bash -lc 'find prd -maxdepth 2 -type f -print' in /home/sean/projects/unison
+ succeeded in 0ms:
+prd/tech-design-v2-fix.bak.md
+prd/PRD-phase15.md
+prd/tech-design-phase10.md
+prd/tech-design-phase9.md
+prd/PRD-phase10.md
+prd/PRD-phase12.md
+prd/tech-design-phase12.md
+prd/PRD-v2-fix.bak.md
+prd/PRD-phase14.md
+prd/tech-design-phase11.md
+prd/tech-design-phase14.md
+prd/README-V2-FIX.md
+prd/PRD.md
+prd/PRD-phase9.md
+prd/tech-design-phase9-final.md
+prd/tech-design.md
+prd/PRD-phase9.bak
+prd/PRD-phase11.md
+prd/PRD-phase9-final.md
+
+exec
+/bin/bash -lc 'rg --files prd' in /home/sean/projects/unison
+ succeeded in 0ms:
+prd/PRD-phase9-final.md
+prd/PRD-phase11.md
+prd/PRD-phase9.bak
+prd/tech-design.md
+prd/tech-design-phase9-final.md
+prd/PRD-phase9.md
+prd/PRD.md
+prd/README-V2-FIX.md
+prd/tech-design-phase14.md
+prd/tech-design-phase11.md
+prd/PRD-phase14.md
+prd/PRD-v2-fix.bak.md
+prd/tech-design-phase12.md
+prd/PRD-phase12.md
+prd/PRD-phase10.md
+prd/tech-design-phase9.md
+prd/tech-design-phase10.md
+prd/PRD-phase15.md
+prd/tech-design-v2-fix.bak.md
+
+codex
+There is no `plugin-proposal.md` in `prd/`, but `prd/PRD-phase10.md` and `prd/tech-design-phase10.md` look like the likely source material for this phase. I’m reading those and will note the filename mismatch as a review risk instead of blocking the artifact.
+exec
+/bin/bash -lc "sed -n '1,260p' prd/PRD-phase10.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+# Phase 10: 项目设计/技术选型讨论会 — PRD
+
+## Goal
+
+用 Unison 自定义角色框架（Phase 11 交付）编排多角色设计辩论，产出结构化决策记录。
+
+## 背景
+
+- Phase 11 提供了自定义角色能力（AgentRole=str, pipeline_role, task_instruction）
+- Phase 10 是第一个使用自定义角色的 Phase——dogfooding Phase 11 的产出
+- 多视角辩论是软件设计中的常见需求，但当前无自动化工具支持
+
+## Scope
+
+**辩论主题**：「Unison 是否应该引入 plugin system 支持自定义 runtime？」
+
+场景：当前 Runtime 类型是 `Literal["claude", "codex", "hermes", "openclaw"]`，用户可能想接入其他 CLI agent（如 Copilot、Gemini CLI、自定义脚本）。
+
+**涉及角色**：
+
+| 角色 | pipeline_role | 职责 |
+|------|--------------|------|
+| Architect | planner | 提出 plugin system 设计方案 |
+| Critic | reviewer | 挑战方案，找漏洞和风险 |
+| PM-Analyst | developer | 评估工作量、优先级、与现有 Phase 的冲突 |
+
+4 个角色不可能全部并行——当前 pipeline_role 只有 3 个 slot。折中方案：
+- PM 和 Cost-Analyst 合并为一个角色（PM-Analyst），统一评估"该不该做"的务实层面
+- 辩论流程：Architect → Critic → Architect 修订 → PM-Analyst 评估 → 产出决策记录
+
+**不涉及**：
+- 实际实现 plugin system（这只是辩论主题，不是开发任务）
+- Observer 参与辩论内容（Observer 只记录不干预）
+
+## 验收标准
+
+1. 产出结构化决策记录 `reviews/decision-record.md`
+2. 决策记录包含：提议摘要、批评要点、修订方案、可行性评估、最终建议
+3. 至少 2 轮 Architect↔Critic 往返（展示辩论机制）
+4. 491 tests 不受影响（Phase 10 不写代码，只产出 markdown 文档）
+
+## 约束
+
+- 不修改 Unison 代码
+- 使用 Phase 11 的自定义角色功能
+- 如果 Phase 11 未完成，Phase 10 阻塞等待
+
+exec
+/bin/bash -lc "sed -n '261,620p' prd/PRD-phase10.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+exec
+/bin/bash -lc "sed -n '1,320p' prd/tech-design-phase10.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+# Phase 10: 项目设计/技术选型讨论会 — Technical Design
+
+## 架构决策
+
+### 问题：4 角色 vs 3 pipeline_role slot + 1 Dev slot
+
+当前 pipeline_role 映射到 3 个内建行为：
+- `planner` → 写 PRD/design
+- `developer` → 写代码 → commit → pytest
+- `reviewer` → review → verdict
+
+但 Phase 10 需要 4 个角色：Architect / Critic / PM / Cost-Analyst。
+
+**但 developer slot 的"commit + pytest"流程不适合文档产出。** 因此 Phase 10 全部使用 planner 和 reviewer 行为（读/写文档，review 返回 verdict），不触发 developer 的 git commit + pytest 流程。
+
+### 方案：两轮 pipeline 串行
+
+```
+Round 1 (design debate):        Round 2 (impact analysis):
+  Architect (planner)              PM (planner)
+    ↓ write plugin-proposal.md       ↓ evaluate scope/priority
+  Critic (reviewer)                Cost-Analyst (reviewer)
+    ↓ critique                      ↓ review impact assessment
+  Architect revises                Observer synthesizes
+    ↓                          → decision-record.md
+  Critic final review
+```
+
+每轮是一个独立的 Unison pipeline run。两轮共享上下文（Round 1 产出 → Round 2 输入）。
+
+### 为什么不是 DAG
+
+DAG 的 `exec_stage` 调用 `_invoke_agent_for_role("developer")`，触发 git commit + pytest —— 不适合文档辩论场景。Phase 10 全程使用 planner/reviewer 角色，走 `_run_loop` 路径（planning_active ↔ planning_review），不触发 developer 流程。
+
+## Round 1: 设计辩论
+
+### Pipeline YAML (phase10-round1-pipeline.yaml)
+
+```yaml
+version: "2.0"
+project_root: "."
+
+agents:
+  architect:
+    role: architect
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/architect-phase10.md"
+    pipeline_role: planner
+    task_instruction: "Write a plugin system design proposal to prd/plugin-proposal.md. Cover: runtime interface, plugin loading, configuration, backward compatibility, migration path. Be specific about API surface."
+
+  critic:
+    role: critic
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/critic-phase10.md"
+    pipeline_role: reviewer
+
+project:
+  test_command: "test -f prd/plugin-proposal.md && echo 'proposal exists'"
+  max_iterations: 3
+```
+
+### 流程
+
+1. Architect (planner) → 写 `prd/plugin-proposal.md`
+2. Critic (reviewer) → review，返回 PASS 或 REQUEST_CHANGES
+3. 如果 REQUEST_CHANGES → Architect 修订 → Critic 再 review
+4. 直到 PASS，输出 `prd/plugin-proposal.md` 终稿
+
+## Round 2: 影响评估
+
+### Pipeline YAML (phase10-round2-pipeline.yaml)
+
+```yaml
+version: "2.0"
+project_root: "."
+
+agents:
+  pm:
+    role: pm-analyst
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/pm-phase10.md"
+    pipeline_role: planner
+    task_instruction: "Read prd/plugin-proposal.md. Write impact assessment to prd/impact-assessment.md. Evaluate: scope (LoC estimate), priority vs Phase 12/14, risk to existing 491 tests, alternative approaches."
+
+  cost_analyst:
+    role: cost-analyst
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/cost-analyst-phase10.md"
+    pipeline_role: reviewer
+
+project:
+  test_command: "test -f prd/impact-assessment.md && echo 'assessment exists'"
+  max_iterations: 2
+```
+
+### 流程
+
+1. PM-Analyst (planner) → 写 `prd/impact-assessment.md`
+2. Cost-Analyst (reviewer) → review
+3. 收敛后产出 `prd/impact-assessment.md` 终稿
+
+## Observer 合成
+
+两轮完成后，Observer（Hermes，当前 session）读取两轮产出，合成 `reviews/decision-record.md`：
+
+```markdown
+# Decision Record: Unison Plugin System
+
+## Proposal Summary (Round 1)
+<from prd/plugin-proposal.md>
+
+## Critique Points (Round 1)
+<critic's key concerns>
+
+## Impact Assessment (Round 2)
+<from prd/impact-assessment.md>
+
+## Recommendation
+<combined assessment: GO / NO-GO / NEEDS_MORE_RESEARCH>
+```
+
+## 提示词设计
+
+4 个自定义角色的 prompt 各司其职：
+
+- **Architect**：创造性、具体、API surface 清晰
+- **Critic**：找漏洞、边界情况、安全风险、向后兼容
+- **PM**：工作量、优先级、roadmap 冲突
+- **Cost-Analyst**：API 成本、维护负担、token 开销
+
+## 风险
+
+| 风险 | 应对 |
+|------|------|
+| Planner slot 的 `_should_plan()` 只检查一次 | Planner→Reviewer loop 只在 planning 阶段跑一次，后续走 dev loop。Phase 10 的 pipeline 设为 `max_iterations` 覆盖这个限制 |
+| 两轮之间上下文不共享 | Round 1 的产出文件存在于文件系统，Round 2 的 prompt 明确引用 |
+| Critic 不够 critical | system_prompt 指令强化：必须找出至少 3 个问题 |
+
+## 不做的
+
+- 不实现 plugin system（只是讨论主题）
+- 不修改 Orchestrator 状态机
+- 不修改 interfaces.py
+
+exec
+/bin/bash -lc "sed -n '321,760p' prd/tech-design-phase10.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+codex
+The phase design says the Architect should have written `prd/plugin-proposal.md`, but the repo only has the phase planning docs. I’ll produce the requested review file against the proposal text supplied in the prompt and call out that the expected artifact is missing from disk, because that is directly actionable for the next iteration.
+exec
+/bin/bash -lc 'rg --files reviews' in /home/sean/projects/unison
+ succeeded in 0ms:
+reviews/v1.1-observer-inotify.md
+reviews/design-review-round-6.md
+reviews/v2-context-window.md
+reviews/skill-audit.md
+reviews/v2-multi-reviewer.md
+reviews/design-review-round-4.md
+reviews/design-review-round-1.md
+reviews/design-review-round-2.md
+reviews/v2-schema-migrate.md
+reviews/v2-dag-parallel.md
+reviews/v2-sqlite-channel.md
+reviews/v2-4agent-mode.md
+reviews/v2-parallel-developer.md
+reviews/design-review-round-3.md
+reviews/design-review-round-5.md
+
+exec
+/bin/bash -lc 'git status --short' in /home/sean/projects/unison
+ succeeded in 0ms:
+ M .unison/budget.json
+ M prd/PRD.md
+ M prd/tech-design.md
+ D reviews/iter-1.md
+ D reviews/plan-iter-1.md
+ D reviews/plan-iter-2.md
+?? observer/logs/planner_iter-1_20260619T170712Z.log
+?? observer/logs/planner_iter-1_20260619T171753Z.log
+?? observer/logs/planner_iter-1_20260619T172851Z.log
+?? observer/logs/planner_iter-2_20260619T171136Z.log
+?? observer/logs/planner_iter-2_20260619T172150Z.log
+?? observer/logs/reviewer_iter-1_20260619T170934Z.log
+?? observer/logs/reviewer_iter-1_20260619T171907Z.log
+?? observer/logs/reviewer_iter-2_20260619T172353Z.log
+?? reviews/skill-audit.md
+?? target-demo/
+
+codex
+I have enough to write the critique. The main risks are not cosmetic: the expected proposal artifact is missing, the loader design executes arbitrary Python at config-load time, and runtime openness conflicts with the existing typed/schema validation paths unless the migration is spelled out.
+exec
+/bin/bash -lc "sed -n '1,220p' prd/PRD.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+# Unison Plugin System — Design & Specification
+
+**Status:** Draft, Phase 10 Round 1  
+**Author:** Architect (Claude Code)  
+**Target:** Unison v2.1  
+
+---
+
+## 1. Motivation
+
+Unison currently hardcodes four agent runtimes via a `Literal` type alias:
+
+```python
+# interfaces.py:38 — the bottleneck
+Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
+```
+
+Adding a new agent CLI (Gemini CLI, GitHub Copilot, a custom bash script wrapping an
+in-house model, etc.) requires:
+1. Adding a string to the `Literal` union in `interfaces.py`
+2. Adding CLI flags to the `AgentSpec.cli_flags` property dict
+3. Writing a new `*Runner` dataclass under `src/unison/runners/`
+4. Registering it in the `Orchestrator.__init__` runner dict
+5. Updating `PipelineLoader.VALID_RUNTIMES`
+
+This is a **closed set**. The plugin system makes it **open** — users drop a
+Python file and a YAML stanza, no source edits needed.
+
+---
+
+## 2. Plugin Interface — `UnisonPlugin`
+
+Every plugin is a Python class implementing the `UnisonPlugin` abstract base class
+(lives at `src/unison/plugins/base.py`). It extends `AgentRunner` so any plugin
+*is* a runner — the Orchestrator doesn't distinguish built-in from custom.
+
+```python
+# src/unison/plugins/base.py
+from __future__ import annotations
+
+import subprocess
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from pathlib import Path
+from typing import ClassVar
+
+from interfaces import AgentSpec, AgentResult
+from unison.runners.base import AgentRunner
+
+
+class UnisonPlugin(AgentRunner, ABC):
+    """Abstract base for user-provided agent CLI plugins.
+
+    Subclasses MUST override:
+      - ``binary``: the CLI executable name (str)
+      - ``cli_flags``: default CLI flags appended before the prompt (list[str])
+      - ``validate_installation``: check that the binary is callable
+
+    Subclasses MAY override:
+      - ``startup_grace``: extra seconds added to timeout for slow-starting CLIs
+      - ``run``: for non-subprocess backends (HTTP APIs, sockets, etc.)
+      - ``_build_command``: if the CLI needs custom argument ordering
+
+    A plugin is registered by:
+    1. Dropping the Python file in ``~/.unison/plugins/`` or
+       ``<project>/.unison/plugins/``.
+    2. Declaring it in ``pipeline.yaml`` under a top-level ``plugins:`` section.
+    """
+
+    # ---- Subclass contract ------------------------------------------------
+
+    binary: ClassVar[str]
+    """The CLI binary name, e.g. ``"gemini-internal"``."""
+
+    cli_flags: ClassVar[list[str]]
+    """Default flags appended before the prompt, e.g. ``["-p", "--yolo"]``."""
+
+    startup_grace: ClassVar[int] = 0
+    """Extra seconds added to the agent timeout for slow-starting CLIs."""
+
+    @classmethod
+    @abstractmethod
+    def validate_installation(cls) -> tuple[bool, str | None]:
+        """Check that the binary is installed and callable.
+
+        Returns:
+            ``(True, None)`` if the binary is ready.
+            ``(False, error_message)`` if missing, broken, or wrong version.
+        """
+        ...
+
+    # ---- Default implementation -------------------------------------------
+
+    def _build_command(self, spec: AgentSpec, prompt: str) -> list[str]:
+        """Build the CLI command as a list of tokens.
+
+        The default implementation uses ``self.binary`` + ``self.cli_flags``.
+        Override for custom argument ordering (e.g. flags after prompt).
+        """
+        return [self.binary, *self.cli_flags, prompt]
+
+    def run(
+        self,
+        spec: AgentSpec,
+        prompt: str,
+        workdir: Path,
+        timeout: int,
+        log_path: Path,
+    ) -> AgentResult:
+        """Execute the agent via subprocess.run.
+
+        The default implementation mirrors ``ClaudeRunner.run`` exactly.
+        Plugins with non-subprocess backends (HTTP, gRPC) override this.
+        """
+        cmd = self._build_command(spec, prompt)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        effective_timeout = timeout + self.startup_grace
+
+        start = time.monotonic()
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(workdir),
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout,
+            )
+            duration = time.monotonic() - start
+            return AgentResult(
+                success=proc.returncode == 0,
+                exit_code=proc.returncode,
+                duration=round(duration, 3),
+                stdout_tail=proc.stdout[-500:] if proc.stdout else "",
+                stderr_tail=proc.stderr[-500:] if proc.stderr else "",
+                log_path=log_path,
+                error=(None if proc.returncode == 0
+                       else f"Command exited with code {proc.returncode}"),
+            )
+
+        except subprocess.TimeoutExpired as e:
+            duration = time.monotonic() - start
+            return AgentResult(
+                success=False, exit_code=-1, duration=round(duration, 3),
+                stdout_tail=e.stdout.decode("utf-8", errors="replace")[-500:]
+                    if e.stdout else "",
+                stderr_tail=e.stderr.decode("utf-8", errors="replace")[-500:]
+                    if e.stderr else "",
+                log_path=log_path,
+                error=f"Timeout after {effective_timeout}s",
+            )
+
+        except FileNotFoundError:
+            duration = time.monotonic() - start
+            return AgentResult(
+                success=False, exit_code=-1, duration=round(duration, 3),
+                stdout_tail="", stderr_tail="", log_path=log_path,
+                error=f"{self.binary} binary not found",
+            )
+```
+
+### Concrete Plugin Example — Gemini CLI
+
+```python
+# ~/.unison/plugins/gemini_cli_plugin.py
+from pathlib import Path
+import subprocess
+
+from unison.plugins.base import UnisonPlugin
+
+
+class GeminiCLIPlugin(UnisonPlugin):
+    """Plugin for the `gemini-internal` CLI tool."""
+
+    binary = "gemini-internal"
+    cli_flags = ["-p", "--output-format", "text", "--skip-confirmation"]
+    startup_grace = 10  # Gemini CLI has slow cold start
+
+    @classmethod
+    def validate_installation(cls) -> tuple[bool, str | None]:
+        try:
+            result = subprocess.run(
+                [cls.binary, "--version"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                return False, f"{cls.binary} --version exited {result.returncode}"
+            return True, None
+        except FileNotFoundError:
+            return False, f"{cls.binary} not found on PATH"
+        except subprocess.TimeoutExpired:
+            return False, f"{cls.binary} --version timed out"
+```
+
+---
+
+## 3. Configuration — `pipeline.yaml` with Plugins
+
+Users declare custom runtimes in a top-level `plugins:` section. Each entry maps a
+**runtime name** (the string used in `agents.<name>.runtime`) to a **plugin class**
+and optional **flag overrides**.
+
+### Example: Adding Gemini as a runtime
+
+```yaml
+# pipeline.yaml
+version: "2.1"
+project_root: "."
+
+# ── Plugin declarations (NEW) ─────────────────────────────────────────────
+plugins:
+  gemini:
+    module: gemini_cli_plugin          # Python module name (without .py)
+    class: GeminiCLIPlugin             # class within the module
+    search_paths:                      # where to find the .py file
+      - ~/.unison/plugins
+    cli_flags_override:                # optional: override the class default
+      - "-p"
+      - "--output-format=json"
+
+exec
+/bin/bash -lc "sed -n '1,220p' prd/tech-design.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+codex
+I found the full proposal content in `prd/PRD.md`; `prd/plugin-proposal.md` is still missing, but the substantive draft is available. I’m reading the rest of that file now and will base the critique on it.
+exec
+/bin/bash -lc "sed -n '221,520p' prd/PRD.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+      - "-y"
+
+  custom-script:
+    module: my_runner
+    class: BashScriptRunner
+    search_paths:
+      - .unison/plugins                # project-local plugin
+    env:                               # optional: env vars injected at runtime
+      API_KEY: "${MY_API_KEY}"
+      MODEL_NAME: "my-ft-model-v3"
+
+# ── Agents (unchanged structure) ──────────────────────────────────────────
+agents:
+  planner:
+    role: architect
+    runtime: claude                    # built-in: still works
+    model: opus-4.8
+    system_prompt_path: "prompts/architect.md"
+    pipeline_role: planner
+
+  coder:
+    role: developer
+    runtime: gemini                    # <-- custom plugin runtime
+    model: gemini-2.5-pro
+    system_prompt_path: "prompts/developer.md"
+    pipeline_role: developer
+
+  reviewer:
+    role: reviewer
+    runtime: custom-script             # <-- another custom runtime
+    model: ""
+    system_prompt_path: "prompts/reviewer.md"
+    pipeline_role: reviewer
+
+project:
+  test_command: "pytest tests/ -v"
+  max_iterations: 4
+```
+
+**Key design decision:** The `agents:` section is unchanged. The only addition is
+the top-level `plugins:` block. Existing pipeline.yaml files without a `plugins:`
+key load with zero warnings — backward compatibility is mechanical, not negotiated.
+
+---
+
+## 4. Plugin Loading Mechanism
+
+The loading pipeline is:
+
+```
+pipeline.yaml parsed
+    │
+    ├─ agents: section → AgentSpec dict (unchanged)
+    │
+    └─ plugins: section → PluginRegistry (NEW)
+            │
+            ├─ For each entry:
+            │   1. Resolve search_paths → find <module>.py
+            │   2. importlib.import_module() the module
+            │   3. getattr(module, class_name) → class object
+            │   4. issubclass check against UnisonPlugin
+            │   5. class.validate_installation() → (ok, err)
+            │   6. class() → instance → store in registry
+            │
+            └─ Registry is injected into Orchestrator
+```
+
+### PluginRegistry implementation
+
+```python
+# src/unison/plugins/registry.py
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+from unison.plugins.base import UnisonPlugin
+
+
+class PluginLoadError(Exception):
+    """Raised when a plugin cannot be loaded (missing file, bad class, etc.)."""
+    def __init__(self, runtime_name: str, reason: str):
+        self.runtime_name = runtime_name
+        self.reason = reason
+        super().__init__(f"Plugin '{runtime_name}': {reason}")
+
+
+class PluginRegistry:
+    """Holds loaded plugin instances, keyed by runtime name.
+
+    The Orchestrator queries this registry before falling back to its
+    built-in runner dict. Built-in runtimes (claude, codex, hermes,
+    openclaw) bypass the registry — they're hardcoded for speed and trust.
+    """
+
+    BUILTIN_RUNTIMES: frozenset[str] = frozenset({
+        "claude", "codex", "hermes", "openclaw"
+    })
+
+    def __init__(self) -> None:
+        self._plugins: dict[str, UnisonPlugin] = {}
+
+    def load_from_config(
+        self, plugins_raw: dict[str, Any], pipeline_dir: Path
+    ) -> None:
+        """Load all plugins declared in the pipeline.yaml ``plugins:`` block.
+
+        Args:
+            plugins_raw: The parsed ``plugins:`` dict from pipeline.yaml.
+            pipeline_dir: Directory containing pipeline.yaml (for resolving
+                          relative search_paths).
+
+        Raises:
+            PluginLoadError: On any load failure. The orchestrator catches
+                             this at init time and halts before any agent runs.
+        """
+        for runtime_name, cfg in plugins_raw.items():
+            if not isinstance(cfg, dict):
+                raise PluginLoadError(
+                    runtime_name, "plugin definition must be a mapping"
+                )
+            if runtime_name in self.BUILTIN_RUNTIMES:
+                raise PluginLoadError(
+                    runtime_name,
+                    f"'{runtime_name}' is a built-in runtime and cannot be "
+                    f"overridden by a plugin. Use a different name."
+                )
+
+            module_name = cfg.get("module")
+            class_name = cfg.get("class")
+            if not module_name or not class_name:
+                raise PluginLoadError(
+                    runtime_name,
+                    "plugin definition requires 'module' and 'class' fields"
+                )
+
+            # Resolve search paths
+            raw_paths = cfg.get("search_paths", ["~/.unison/plugins"])
+            search_paths: list[Path] = []
+            for p in raw_paths:
+                resolved = Path(os.path.expanduser(p))
+                if not resolved.is_absolute():
+                    resolved = (pipeline_dir / resolved).resolve()
+                search_paths.append(resolved)
+
+            # Find and load the module
+            plugin_class = self._load_class(
+                runtime_name, module_name, class_name, search_paths
+            )
+
+            # Validate installation
+            ok, err = plugin_class.validate_installation()
+            if not ok:
+                raise PluginLoadError(
+                    runtime_name,
+                    f"installation check failed: {err}"
+                )
+
+            # Instantiate — cli_flags_override replaces the class default
+            instance = plugin_class()
+            if "cli_flags_override" in cfg:
+                instance.cli_flags = cfg["cli_flags_override"]  # type: ignore[attr-defined]
+
+            self._plugins[runtime_name] = instance
+
+    def _load_class(
+        self,
+        runtime_name: str,
+        module_name: str,
+        class_name: str,
+        search_paths: list[Path],
+    ) -> type[UnisonPlugin]:
+        """Find, import, and validate a plugin class."""
+        module_file = f"{module_name}.py"
+
+        # Find the .py file
+        found_path: Path | None = None
+        for sp in search_paths:
+            candidate = sp / module_file
+            if candidate.is_file():
+                found_path = candidate
+                break
+
+        if found_path is None:
+            searched = ", ".join(str(p) for p in search_paths)
+            raise PluginLoadError(
+                runtime_name,
+                f"module '{module_file}' not found in search paths: [{searched}]"
+            )
+
+        # Import it
+        spec = importlib.util.spec_from_file_location(module_name, str(found_path))
+        if spec is None or spec.loader is None:
+            raise PluginLoadError(
+                runtime_name,
+                f"could not create import spec for {found_path}"
+            )
+
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module  # register so relative imports work
+        spec.loader.exec_module(module)
+
+        # Get the class
+        plugin_class = getattr(module, class_name, None)
+        if plugin_class is None:
+            raise PluginLoadError(
+                runtime_name,
+                f"class '{class_name}' not found in '{found_path}'"
+            )
+
+        if not issubclass(plugin_class, UnisonPlugin):
+            raise PluginLoadError(
+                runtime_name,
+                f"class '{class_name}' does not subclass UnisonPlugin"
+            )
+
+        return plugin_class
+
+    def get(self, runtime_name: str) -> UnisonPlugin | None:
+        """Return a loaded plugin instance, or None if not found."""
+        return self._plugins.get(runtime_name)
+
+    def has(self, runtime_name: str) -> bool:
+        """Check if a plugin is registered under this runtime name."""
+        return runtime_name in self._plugins
+```
+
+### Orchestrator integration
+
+```python
+# orchestrator.py — modified __init__
+def __init__(self, spec: PipelineSpec, dry_run: bool = False) -> None:
+    ...
+    # Built-in runners (unchanged)
+    self._runners: dict[str, Any] = {
+        "claude": ClaudeRunner(),
+        "codex": CodexRunner(),
+        "hermes": HermesRunner(),
+    }
+    # Plugin registry
+    self._plugin_registry = PluginRegistry()
+    self._plugin_registry.load_from_config(
+        spec.plugins_raw, spec.world.root
+    )
+
+def _get_runner(self, runtime: str):
+    """Resolve a runtime name to a runner instance.
+
+    Order: built-in dict → plugin registry → error.
+    """
+    if runner := self._runners.get(runtime):
+        return runner
+    if runner := self._plugin_registry.get(runtime):
+        return runner
+    raise RuntimeError(f"Unknown runtime: {runtime!r}")
+```
+
+---
+
+## 5. CLI Flag Mapping
+
+The `cli_flags` are how a plugin declares its equivalent of Claude's
+`--dangerously-skip-permissions`. The contract:
+
+1. **Class default:** `cli_flags: ClassVar[list[str]]` on the plugin class.
+2. **Config override:** `cli_flags_override: [list]` in pipeline.yaml takes
+   precedence. This lets users tweak flags per-pipeline without editing Python.
+3. **Merge vs. replace:** The override *replaces* the class default entirely.
+   This is deliberate — partial merges are error-prone with positional flags.
+   If you need class defaults plus extras, put both in the override list.
+
+4. **AgentSpec.cli_flags is deprecated for plugins.** For built-in runtimes,
+   `AgentSpec.cli_flags` continues to work as today. For plugin runtimes, the
+   orchestrator calls `runner.cli_flags` directly on the instance.
+
+```python
+# The orchestrator builds the command like this:
+def _build_agent_cmd(self, spec: AgentSpec, prompt: str) -> list[str]:
+    runner = self._get_runner(spec.runtime)
+    return runner._build_command(spec, prompt)
+    # For plugins, _build_command uses self.binary + self.cli_flags
+    # For built-ins, _build_command uses hardcoded binary + spec.cli_flags
+```
+
+---
+
+## 6. Backward Compatibility — Proof
+
+**Claim:** Every existing `pipeline.yaml` works without modification.
+
+**Proof by construction:**
+
+1. **`plugins:` section is absent → no-op.** The `PipelineLoader.load` method
+   checks `raw.get("plugins")`. If absent or `None`, it skips plugin loading
+   entirely. The `PluginRegistry` stays empty.
+
+2. **`VALID_RUNTIMES` becomes `VALID_RUNTIMES ∪ registered_plugins`.** The
+
+exec
+/bin/bash -lc "sed -n '521,900p' prd/PRD.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+   `_build_agents` validator changes from:
+
+   ```python
+   # BEFORE (hardcoded)
+   VALID_RUNTIMES: frozenset[str] = frozenset(
+       {"claude", "codex", "hermes", "openclaw"}
+   )
+   if runtime not in self.VALID_RUNTIMES:
+       raise PipelineValidationError(...)
+   ```
+
+   to:
+
+   ```python
+   # AFTER (open)
+   BUILTIN_RUNTIMES: frozenset[str] = frozenset(
+       {"claude", "codex", "hermes", "openclaw"}
+   )
+   # Resolve plugins first, then validate
+   plugin_names = frozenset(self._plugin_registry.list_names())
+   valid = BUILTIN_RUNTIMES | plugin_names
+   if runtime not in valid:
+       raise PipelineValidationError(
+           f"Invalid runtime '{runtime}' for agent '{key}'. "
+           f"Valid runtimes: {sorted(valid)}"
+       )
+   ```
+
+3. **Existing runners are untouched.** `ClaudeRunner`, `CodexRunner`,
+   `HermesRunner` are unchanged. The orchestrator's runner dict still maps
+   `"claude" → ClaudeRunner()` etc. The lookup order prefers built-ins.
+
+4. **`Runtime` type alias becomes `str`.** In `interfaces.py`:
+
+   ```python
+   # BEFORE
+   Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
+
+   # AFTER
+   Runtime: TypeAlias = str  # open set; validated at load time
+   ```
+
+   This is the only breaking change to the type system, but it's
+   **backward compatible at runtime** because validation still happens
+   in `PipelineLoader._build_agents`. Static type checkers will widen
+   from `Literal[...]` to `str`, which is lossless in the direction
+   existing code uses it (reading `spec.runtime`, never matching on it).
+
+5. **Test:** The existing test suite (`pytest tests/`) validates:
+   - `phase14-pipeline.yaml` loads without a `plugins:` key
+   - All four built-in runtimes resolve to their correct runners
+   - `AgentSpec.cli_flags` returns the correct flags for each built-in
+
+   No existing test needs modification.
+
+---
+
+## 7. Migration Path
+
+For users who want to migrate a pipeline to use a custom runtime:
+
+**Step 1:** Write a plugin class (see §2 example) and drop it in
+`~/.unison/plugins/`.
+
+**Step 2:** Add a `plugins:` section to `pipeline.yaml`:
+
+```yaml
+plugins:
+  gemini:
+    module: gemini_cli_plugin
+    class: GeminiCLIPlugin
+```
+
+**Step 3:** Change the agent's `runtime:` field:
+
+```yaml
+# BEFORE
+agents:
+  developer:
+    runtime: claude
+
+# AFTER
+agents:
+  developer:
+    runtime: gemini
+```
+
+**Step 4:** Run `unison validate` (new subcommand) to check plugin loading:
+
+```
+$ unison validate pipeline.yaml
+✓ Built-in runtimes: claude, codex, hermes, openclaw
+✓ Plugin 'gemini' loaded from ~/.unison/plugins/gemini_cli_plugin.py
+✓ Agent 'developer': runtime 'gemini' → GeminiCLIPlugin (binary: gemini-internal)
+✓ All agents validated.
+Ready to run.
+```
+
+No other changes needed. The `system_prompt_path`, `model`, `role`, and
+`pipeline_role` fields work identically for plugin runtimes.
+
+---
+
+## 8. Error Handling
+
+| Failure Mode | When Detected | Behavior |
+|---|---|---|
+| `plugins:` key missing | Pipeline load | No-op; built-ins only |
+| Plugin `.py` file not found | `PluginRegistry.load_from_config` | `PluginLoadError` raised; orchestrator halts before any agent runs |
+| Class not found in module | `PluginRegistry._load_class` | `PluginLoadError` with "class 'X' not found in 'path'" |
+| Class doesn't subclass `UnisonPlugin` | `PluginRegistry._load_class` | `PluginLoadError` with "does not subclass UnisonPlugin" |
+| Binary not on PATH | `validate_installation()` | `PluginLoadError` with "binary not found on PATH" |
+| Binary wrong version | `validate_installation()` | `PluginLoadError` with version mismatch details |
+| Runtime named after built-in | `PluginRegistry.load_from_config` | `PluginLoadError` — built-in names are reserved |
+| Plugin crashes mid-run | `runner.run()` → subprocess timeout/error | `AgentResult(success=False, error=...)` — same as built-in runner failures |
+| `cli_flags_override` is not a list | `PluginRegistry.load_from_config` | `PluginLoadError` with type error |
+
+All plugin load errors are **pre-flight** — they happen during
+`Orchestrator.__init__`, before any agent is invoked. The user sees a clear
+error message and the pipeline never starts. This is the same contract as
+today's `PipelineValidationError`.
+
+```python
+# orchestrator.py — init-time guard
+try:
+    self._plugin_registry.load_from_config(
+        spec.plugins_raw, spec.world.root
+    )
+except PluginLoadError as e:
+    raise PipelineValidationError(
+        f"Plugin loading failed:\n  {e}"
+    ) from e
+```
+
+---
+
+## 9. Plugin Search Path Resolution
+
+Plugins are discovered from (in order):
+
+1. **Project-local:** `<project_root>/.unison/plugins/` — takes priority
+2. **User-global:** `~/.unison/plugins/` — fallback
+3. **Custom paths:** declared in `search_paths:` per-plugin
+
+If multiple paths contain `module.py`, the first match wins. This lets a
+project pin a specific plugin version while the user keeps a different one
+globally.
+
+```python
+# Resolution order for module "gemini_cli_plugin":
+#   1. <project>/.unison/plugins/gemini_cli_plugin.py
+#   2. ~/.unison/plugins/gemini_cli_plugin.py
+#   3. Any paths in search_paths: (checked in order)
+```
+
+---
+
+## 10. Open Questions
+
+1. **pip-installable plugins?** The current design uses file-based discovery.
+   A future iteration could support entry points (`unison.plugins` group in
+   `pyproject.toml`). Deferred to v2.2.
+
+2. **Plugin sandboxing?** Plugins run in the same process as the orchestrator.
+   A malicious plugin could do anything. For now, the trust model is "you
+   wrote it or you trust the author." Sandboxing (subprocess isolation) is
+   deferred.
+
+3. **Hot reload?** Plugins are loaded once at orchestrator init. If you edit
+   a plugin during a pipeline run, changes take effect on the next `unison run`.
+   This matches the existing runner behavior.
+
+4. **Non-subprocess plugins?** The `UnisonPlugin.run()` method is overridable.
+   An HTTP-based plugin (e.g., for OpenClaw's API) would override `run()` to
+   use `requests.post` instead of `subprocess.run`. The `AgentRunner` Protocol
+   doesn't care how `AgentResult` is produced.
+
+---
+
+## 11. File Changes Summary
+
+| File | Change |
+|---|---|
+| `interfaces.py` | `Runtime` type alias: `Literal[...]` → `str`. `AgentSpec.cli_flags` gains plugin-aware logic. |
+| `src/unison/plugins/base.py` | **NEW.** `UnisonPlugin` ABC with `binary`, `cli_flags`, `validate_installation`, default `run()`. |
+| `src/unison/plugins/registry.py` | **NEW.** `PluginRegistry` with `load_from_config`, `_load_class`, `get`, `has`. |
+| `src/unison/plugins/__init__.py` | **NEW.** Re-exports `UnisonPlugin`, `PluginRegistry`, `PluginLoadError`. |
+| `src/unison/pipeline.py` | `VALID_RUNTIMES` split into `BUILTIN_RUNTIMES` + plugin names. `load()` parses `plugins:` section. `PipelineSpec` gains `plugins_raw: dict`. |
+| `src/unison/orchestrator.py` | Runner dict gains `_plugin_registry`. `_get_runner()` resolves built-in → plugin → error. |
+| `src/unison/cli.py` | New `unison validate` subcommand for pre-flight plugin checks. |
+| `tests/test_plugins.py` | **NEW.** Tests for load, missing, broken, override, backward compat. |
+
+---
+
+## 12. Summary
+
+The plugin system adds one new ABC (`UnisonPlugin`), one new YAML section
+(`plugins:`), and a registry that bridges them. Existing pipelines work exactly
+as before. Users add custom runtimes by writing a ~30-line Python class and a
+~6-line YAML stanza. Error messages are pre-flight and specific. The design is
+minimal — no new dependency, no config file format change, no runner rewrite.
+
+codex
+I’m going to create `reviews/plan-iter-1.md` now. It will use the requested frontmatter and keep the critique actionable, with REQUEST_CHANGES because several risks need design changes rather than wording tweaks.
+apply patch
+patch: completed
+/home/sean/projects/unison/reviews/plan-iter-1.md
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..14e51c06414a5739bec707874cd5f49cbeaae1c9
+--- /dev/null
++++ b/reviews/plan-iter-1.md
+@@ -0,0 +1,65 @@
++---
++verdict: REQUEST_CHANGES
++summary: "The proposal is concrete and covers the major sections, but it defers the core security problem, has loader/search-path inconsistencies, and leaves backward-compatibility gaps that could break existing runtimes."
++findings:
++  - "Critical: plugin loading executes arbitrary Python in the orchestrator process with no sandbox or explicit trust gate."
++  - "Major: backward-compatibility proof is incomplete and the snippets omit an existing built-in runner path."
++  - "Major: plugin search-path behavior contradicts itself and does not define deterministic conflict handling."
++  - "Major: the proposed Python subclass API is more powerful and complex than the likely first use case requires."
++  - "Minor: default runner implementation has correctness gaps around logs and timeout output handling."
++---
++
++Verdict: REQUEST_CHANGES
++
++## Strengths
++- The proposal is concrete: it includes an ABC, registry code, YAML examples, validation flow, error table, migration path, and file-change summary.
++- It preserves the existing `agents:` shape, which is the right compatibility instinct.
++- It explicitly reserves built-in runtime names and tries to fail before invoking agents when plugin loading fails.
++- It acknowledges the key tradeoff that plugin runtimes require widening `Runtime` from a closed `Literal` to an open string.
++
++## Issues
++### Issue 1: Arbitrary code execution is accepted as the default trust model
++- **Severity**: Critical
++- **What**: The loader imports project-local and user-global Python files with `spec.loader.exec_module(module)`, then calls plugin class methods in-process. Section 10 acknowledges that a malicious plugin can do anything and defers sandboxing.
++- **Why it matters**: A pipeline from an untrusted repo can execute arbitrary Python during validation, before any agent run and before the user sees a meaningful trust boundary. This is worse than running a configured CLI because import-time code gets full access to credentials, repo contents, and the orchestrator process.
++- **Suggested fix**: Make Python plugins opt-in behind an explicit trust gate such as `unison run --allow-python-plugins` or a per-project trust record. For v2.1, prefer a declarative CLI plugin schema (`binary`, `args`, `env`, `timeout_grace`) that runs only subprocesses. If Python plugins remain, load them in a separate worker process with a reduced environment and document the threat model as a first-class section, not an open question.
++
++### Issue 2: Backward compatibility proof misses an existing built-in runtime path
++- **Severity**: Major
++- **What**: The proposal repeatedly lists `openclaw` as a built-in runtime, but the orchestrator integration snippet only registers `claude`, `codex`, and `hermes`. A valid existing `runtime: openclaw` pipeline could pass loader validation and then fail `_get_runner()`.
++- **Why it matters**: This directly contradicts the "every existing pipeline works" claim. The plugin system touches runtime resolution, so built-in parity has to be exact.
++- **Suggested fix**: Include `OpenClawRunner()` in the runner map or explain why it is resolved elsewhere. Add a backward-compatibility test that loads and resolves every built-in in `BUILTIN_RUNTIMES`, not just validates names.
++
++### Issue 3: Loader ordering and validation lifecycle are underspecified
++- **Severity**: Major
++- **What**: Section 6 says `VALID_RUNTIMES` becomes built-ins plus registered plugins and that plugins are resolved before `_build_agents`, but Section 4 loads plugins in `Orchestrator.__init__` from `spec.plugins_raw`. Those cannot both be the only source of truth: `PipelineLoader` must validate agent runtimes before it returns a usable `PipelineSpec`, while `Orchestrator` only exists after loading.
++- **Why it matters**: This can produce either false validation failures for plugin runtimes or duplicated plugin loading in both loader and orchestrator. It also makes `unison validate` ambiguous because validation would need the same registry lifecycle as execution.
++- **Suggested fix**: Define a single owner for plugin discovery. Recommended: `PipelineLoader` parses `plugins`, constructs a `PluginRegistry` or `RuntimeRegistry`, validates agents against it, and stores the registry on `PipelineSpec`. `Orchestrator` should consume that already-validated registry instead of reloading plugins.
++
++### Issue 4: Search-path and conflict behavior contradict each other
++- **Severity**: Major
++- **What**: The implementation defaults `search_paths` to `["~/.unison/plugins"]`, while Section 9 says discovery order is project-local, user-global, then custom paths. If `search_paths` is supplied, the snippet appears to replace defaults rather than append after them. Conflict handling is only "first match wins" and does not cover duplicate runtime keys, duplicate module names, symlinks, or module cache collisions from `sys.modules[module_name]`.
++- **Why it matters**: Plugins are a supply-chain boundary. Ambiguous path precedence can cause a project plugin, global plugin, or custom plugin to shadow another unexpectedly. `sys.modules[module_name]` also lets two configured plugins with the same module filename interfere with each other.
++- **Suggested fix**: Specify one deterministic path algorithm and test it. Use unique import module names derived from runtime name plus resolved path hash instead of raw `module_name`. Detect duplicate runtime keys if the YAML parser supports it, reject built-in collisions as proposed, and print the exact resolved plugin path in validation output.
++
++### Issue 5: The first version is overpowered for the common CLI use case
++- **Severity**: Major
++- **What**: A custom runtime must be a Python subclass that can override `run()`, mutate class variables via instance assignment, and execute arbitrary code. Most examples only need `binary`, args, env, and timeout behavior.
++- **Why it matters**: The proposal adds a broad extension API before proving that Unison needs arbitrary in-process runner logic. This increases security risk, test surface, and future compatibility burden.
++- **Suggested fix**: Split the design into two tiers: a stable declarative `cli_plugins:` schema for command-based runtimes in v2.1, and an experimental Python runner API for trusted local development. The declarative path should cover Gemini/custom script examples without user Python.
++
++### Issue 6: Default runner snippet has correctness gaps
++- **Severity**: Minor
++- **What**: `subprocess.run(..., text=True)` means `TimeoutExpired.stdout` and `stderr` may already be strings, so unconditional `.decode(...)` can fail. The runner creates `log_path.parent` but never writes stdout/stderr to `log_path`, even though `AgentResult.log_path` implies a log exists. `env` is shown in YAML but not applied in `_build_command()` or `run()`.
++- **Why it matters**: These are small implementation bugs, but they weaken confidence in the proposal's "mirrors ClaudeRunner.run exactly" claim and will produce confusing diagnostics for failed plugin runs.
++- **Suggested fix**: Add a small helper to normalize `str | bytes | None`, write captured output to `log_path` consistently with built-in runners, validate and merge `env` into the subprocess environment, and include tests for timeout, env injection, and log creation.
++
++## Missing Coverage
++- The expected file `prd/plugin-proposal.md` is missing from the repo; the proposal content currently appears in `prd/PRD.md`. The phase design says the Architect should write `prd/plugin-proposal.md`, so the artifact path needs to be fixed.
++- No concrete sandbox or trust model beyond "deferred"; this is not enough for project-local executable extensions.
++- No detailed migration story for existing code that pattern-matches on `Runtime` literals or calls `AgentSpec.cli_flags` outside the orchestrator.
++- No schema validation details for `plugins:` fields such as `env`, `startup_grace`, invalid flag types, unknown keys, relative paths, or YAML duplicate keys.
++- No tests for conflict resolution, path precedence, module cache isolation, built-in name collisions, missing plugin behavior, or all built-in runtime resolution.
++
++## Verdict Rationale
++The proposal handles the high-level shape well and includes useful snippets, but it is not ready to pass. The largest issue is security: importing arbitrary repo-local Python during validation is a major trust boundary change and cannot be left as a deferred open question. Backward compatibility and loader ownership also need tightening before implementation, because the current design can validate a runtime in one layer and fail to resolve it in another.
+
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..14e51c06414a5739bec707874cd5f49cbeaae1c9
+--- /dev/null
++++ b/reviews/plan-iter-1.md
+@@ -0,0 +1,65 @@
++---
++verdict: REQUEST_CHANGES
++summary: "The proposal is concrete and covers the major sections, but it defers the core security problem, has loader/search-path inconsistencies, and leaves backward-compatibility gaps that could break existing runtimes."
++findings:
++  - "Critical: plugin loading executes arbitrary Python in the orchestrator process with no sandbox or explicit trust gate."
++  - "Major: backward-compatibility proof is incomplete and the snippets omit an existing built-in runner path."
++  - "Major: plugin search-path behavior contradicts itself and does not define deterministic conflict handling."
++  - "Major: the proposed Python subclass API is more powerful and complex than the likely first use case requires."
++  - "Minor: default runner implementation has correctness gaps around logs and timeout output handling."
++---
++
++Verdict: REQUEST_CHANGES
++
++## Strengths
++- The proposal is concrete: it includes an ABC, registry code, YAML examples, validation flow, error table, migration path, and file-change summary.
++- It preserves the existing `agents:` shape, which is the right compatibility instinct.
++- It explicitly reserves built-in runtime names and tries to fail before invoking agents when plugin loading fails.
++- It acknowledges the key tradeoff that plugin runtimes require widening `Runtime` from a closed `Literal` to an open string.
++
++## Issues
++### Issue 1: Arbitrary code execution is accepted as the default trust model
++- **Severity**: Critical
++- **What**: The loader imports project-local and user-global Python files with `spec.loader.exec_module(module)`, then calls plugin class methods in-process. Section 10 acknowledges that a malicious plugin can do anything and defers sandboxing.
++- **Why it matters**: A pipeline from an untrusted repo can execute arbitrary Python during validation, before any agent run and before the user sees a meaningful trust boundary. This is worse than running a configured CLI because import-time code gets full access to credentials, repo contents, and the orchestrator process.
++- **Suggested fix**: Make Python plugins opt-in behind an explicit trust gate such as `unison run --allow-python-plugins` or a per-project trust record. For v2.1, prefer a declarative CLI plugin schema (`binary`, `args`, `env`, `timeout_grace`) that runs only subprocesses. If Python plugins remain, load them in a separate worker process with a reduced environment and document the threat model as a first-class section, not an open question.
++
++### Issue 2: Backward compatibility proof misses an existing built-in runtime path
++- **Severity**: Major
++- **What**: The proposal repeatedly lists `openclaw` as a built-in runtime, but the orchestrator integration snippet only registers `claude`, `codex`, and `hermes`. A valid existing `runtime: openclaw` pipeline could pass loader validation and then fail `_get_runner()`.
++- **Why it matters**: This directly contradicts the "every existing pipeline works" claim. The plugin system touches runtime resolution, so built-in parity has to be exact.
++- **Suggested fix**: Include `OpenClawRunner()` in the runner map or explain why it is resolved elsewhere. Add a backward-compatibility test that loads and resolves every built-in in `BUILTIN_RUNTIMES`, not just validates names.
++
++### Issue 3: Loader ordering and validation lifecycle are underspecified
++- **Severity**: Major
++- **What**: Section 6 says `VALID_RUNTIMES` becomes built-ins plus registered plugins and that plugins are resolved before `_build_agents`, but Section 4 loads plugins in `Orchestrator.__init__` from `spec.plugins_raw`. Those cannot both be the only source of truth: `PipelineLoader` must validate agent runtimes before it returns a usable `PipelineSpec`, while `Orchestrator` only exists after loading.
++- **Why it matters**: This can produce either false validation failures for plugin runtimes or duplicated plugin loading in both loader and orchestrator. It also makes `unison validate` ambiguous because validation would need the same registry lifecycle as execution.
++- **Suggested fix**: Define a single owner for plugin discovery. Recommended: `PipelineLoader` parses `plugins`, constructs a `PluginRegistry` or `RuntimeRegistry`, validates agents against it, and stores the registry on `PipelineSpec`. `Orchestrator` should consume that already-validated registry instead of reloading plugins.
++
++### Issue 4: Search-path and conflict behavior contradict each other
++- **Severity**: Major
++- **What**: The implementation defaults `search_paths` to `["~/.unison/plugins"]`, while Section 9 says discovery order is project-local, user-global, then custom paths. If `search_paths` is supplied, the snippet appears to replace defaults rather than append after them. Conflict handling is only "first match wins" and does not cover duplicate runtime keys, duplicate module names, symlinks, or module cache collisions from `sys.modules[module_name]`.
++- **Why it matters**: Plugins are a supply-chain boundary. Ambiguous path precedence can cause a project plugin, global plugin, or custom plugin to shadow another unexpectedly. `sys.modules[module_name]` also lets two configured plugins with the same module filename interfere with each other.
++- **Suggested fix**: Specify one deterministic path algorithm and test it. Use unique import module names derived from runtime name plus resolved path hash instead of raw `module_name`. Detect duplicate runtime keys if the YAML parser supports it, reject built-in collisions as proposed, and print the exact resolved plugin path in validation output.
++
++### Issue 5: The first version is overpowered for the common CLI use case
++- **Severity**: Major
++- **What**: A custom runtime must be a Python subclass that can override `run()`, mutate class variables via instance assignment, and execute arbitrary code. Most examples only need `binary`, args, env, and timeout behavior.
++- **Why it matters**: The proposal adds a broad extension API before proving that Unison needs arbitrary in-process runner logic. This increases security risk, test surface, and future compatibility burden.
++- **Suggested fix**: Split the design into two tiers: a stable declarative `cli_plugins:` schema for command-based runtimes in v2.1, and an experimental Python runner API for trusted local development. The declarative path should cover Gemini/custom script examples without user Python.
++
++### Issue 6: Default runner snippet has correctness gaps
++- **Severity**: Minor
++- **What**: `subprocess.run(..., text=True)` means `TimeoutExpired.stdout` and `stderr` may already be strings, so unconditional `.decode(...)` can fail. The runner creates `log_path.parent` but never writes stdout/stderr to `log_path`, even though `AgentResult.log_path` implies a log exists. `env` is shown in YAML but not applied in `_build_command()` or `run()`.
++- **Why it matters**: These are small implementation bugs, but they weaken confidence in the proposal's "mirrors ClaudeRunner.run exactly" claim and will produce confusing diagnostics for failed plugin runs.
++- **Suggested fix**: Add a small helper to normalize `str | bytes | None`, write captured output to `log_path` consistently with built-in runners, validate and merge `env` into the subprocess environment, and include tests for timeout, env injection, and log creation.
++
++## Missing Coverage
++- The expected file `prd/plugin-proposal.md` is missing from the repo; the proposal content currently appears in `prd/PRD.md`. The phase design says the Architect should write `prd/plugin-proposal.md`, so the artifact path needs to be fixed.
++- No concrete sandbox or trust model beyond "deferred"; this is not enough for project-local executable extensions.
++- No detailed migration story for existing code that pattern-matches on `Runtime` literals or calls `AgentSpec.cli_flags` outside the orchestrator.
++- No schema validation details for `plugins:` fields such as `env`, `startup_grace`, invalid flag types, unknown keys, relative paths, or YAML duplicate keys.
++- No tests for conflict resolution, path precedence, module cache isolation, built-in name collisions, missing plugin behavior, or all built-in runtime resolution.
++
++## Verdict Rationale
++The proposal handles the high-level shape well and includes useful snippets, but it is not ready to pass. The largest issue is security: importing arbitrary repo-local Python during validation is a major trust boundary change and cannot be left as a deferred open question. Backward compatibility and loader ownership also need tightening before implementation, because the current design can validate a runtime in one layer and fail to resolve it in another.
+
+codex
+The review file is written. I’m doing a quick sanity check on the frontmatter and confirming no `src/` files were modified by this turn.
+exec
+/bin/bash -lc 'git status --short src reviews/plan-iter-1.md prd/plugin-proposal.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+ M reviews/plan-iter-1.md
+
+exec
+/bin/bash -lc "sed -n '1,240p' reviews/plan-iter-1.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+---
+verdict: REQUEST_CHANGES
+summary: "The proposal is concrete and covers the major sections, but it defers the core security problem, has loader/search-path inconsistencies, and leaves backward-compatibility gaps that could break existing runtimes."
+findings:
+  - "Critical: plugin loading executes arbitrary Python in the orchestrator process with no sandbox or explicit trust gate."
+  - "Major: backward-compatibility proof is incomplete and the snippets omit an existing built-in runner path."
+  - "Major: plugin search-path behavior contradicts itself and does not define deterministic conflict handling."
+  - "Major: the proposed Python subclass API is more powerful and complex than the likely first use case requires."
+  - "Minor: default runner implementation has correctness gaps around logs and timeout output handling."
+---
+
+Verdict: REQUEST_CHANGES
+
+## Strengths
+- The proposal is concrete: it includes an ABC, registry code, YAML examples, validation flow, error table, migration path, and file-change summary.
+- It preserves the existing `agents:` shape, which is the right compatibility instinct.
+- It explicitly reserves built-in runtime names and tries to fail before invoking agents when plugin loading fails.
+- It acknowledges the key tradeoff that plugin runtimes require widening `Runtime` from a closed `Literal` to an open string.
+
+## Issues
+### Issue 1: Arbitrary code execution is accepted as the default trust model
+- **Severity**: Critical
+- **What**: The loader imports project-local and user-global Python files with `spec.loader.exec_module(module)`, then calls plugin class methods in-process. Section 10 acknowledges that a malicious plugin can do anything and defers sandboxing.
+- **Why it matters**: A pipeline from an untrusted repo can execute arbitrary Python during validation, before any agent run and before the user sees a meaningful trust boundary. This is worse than running a configured CLI because import-time code gets full access to credentials, repo contents, and the orchestrator process.
+- **Suggested fix**: Make Python plugins opt-in behind an explicit trust gate such as `unison run --allow-python-plugins` or a per-project trust record. For v2.1, prefer a declarative CLI plugin schema (`binary`, `args`, `env`, `timeout_grace`) that runs only subprocesses. If Python plugins remain, load them in a separate worker process with a reduced environment and document the threat model as a first-class section, not an open question.
+
+### Issue 2: Backward compatibility proof misses an existing built-in runtime path
+- **Severity**: Major
+- **What**: The proposal repeatedly lists `openclaw` as a built-in runtime, but the orchestrator integration snippet only registers `claude`, `codex`, and `hermes`. A valid existing `runtime: openclaw` pipeline could pass loader validation and then fail `_get_runner()`.
+- **Why it matters**: This directly contradicts the "every existing pipeline works" claim. The plugin system touches runtime resolution, so built-in parity has to be exact.
+- **Suggested fix**: Include `OpenClawRunner()` in the runner map or explain why it is resolved elsewhere. Add a backward-compatibility test that loads and resolves every built-in in `BUILTIN_RUNTIMES`, not just validates names.
+
+### Issue 3: Loader ordering and validation lifecycle are underspecified
+- **Severity**: Major
+- **What**: Section 6 says `VALID_RUNTIMES` becomes built-ins plus registered plugins and that plugins are resolved before `_build_agents`, but Section 4 loads plugins in `Orchestrator.__init__` from `spec.plugins_raw`. Those cannot both be the only source of truth: `PipelineLoader` must validate agent runtimes before it returns a usable `PipelineSpec`, while `Orchestrator` only exists after loading.
+- **Why it matters**: This can produce either false validation failures for plugin runtimes or duplicated plugin loading in both loader and orchestrator. It also makes `unison validate` ambiguous because validation would need the same registry lifecycle as execution.
+- **Suggested fix**: Define a single owner for plugin discovery. Recommended: `PipelineLoader` parses `plugins`, constructs a `PluginRegistry` or `RuntimeRegistry`, validates agents against it, and stores the registry on `PipelineSpec`. `Orchestrator` should consume that already-validated registry instead of reloading plugins.
+
+### Issue 4: Search-path and conflict behavior contradict each other
+- **Severity**: Major
+- **What**: The implementation defaults `search_paths` to `["~/.unison/plugins"]`, while Section 9 says discovery order is project-local, user-global, then custom paths. If `search_paths` is supplied, the snippet appears to replace defaults rather than append after them. Conflict handling is only "first match wins" and does not cover duplicate runtime keys, duplicate module names, symlinks, or module cache collisions from `sys.modules[module_name]`.
+- **Why it matters**: Plugins are a supply-chain boundary. Ambiguous path precedence can cause a project plugin, global plugin, or custom plugin to shadow another unexpectedly. `sys.modules[module_name]` also lets two configured plugins with the same module filename interfere with each other.
+- **Suggested fix**: Specify one deterministic path algorithm and test it. Use unique import module names derived from runtime name plus resolved path hash instead of raw `module_name`. Detect duplicate runtime keys if the YAML parser supports it, reject built-in collisions as proposed, and print the exact resolved plugin path in validation output.
+
+### Issue 5: The first version is overpowered for the common CLI use case
+- **Severity**: Major
+- **What**: A custom runtime must be a Python subclass that can override `run()`, mutate class variables via instance assignment, and execute arbitrary code. Most examples only need `binary`, args, env, and timeout behavior.
+- **Why it matters**: The proposal adds a broad extension API before proving that Unison needs arbitrary in-process runner logic. This increases security risk, test surface, and future compatibility burden.
+- **Suggested fix**: Split the design into two tiers: a stable declarative `cli_plugins:` schema for command-based runtimes in v2.1, and an experimental Python runner API for trusted local development. The declarative path should cover Gemini/custom script examples without user Python.
+
+### Issue 6: Default runner snippet has correctness gaps
+- **Severity**: Minor
+- **What**: `subprocess.run(..., text=True)` means `TimeoutExpired.stdout` and `stderr` may already be strings, so unconditional `.decode(...)` can fail. The runner creates `log_path.parent` but never writes stdout/stderr to `log_path`, even though `AgentResult.log_path` implies a log exists. `env` is shown in YAML but not applied in `_build_command()` or `run()`.
+- **Why it matters**: These are small implementation bugs, but they weaken confidence in the proposal's "mirrors ClaudeRunner.run exactly" claim and will produce confusing diagnostics for failed plugin runs.
+- **Suggested fix**: Add a small helper to normalize `str | bytes | None`, write captured output to `log_path` consistently with built-in runners, validate and merge `env` into the subprocess environment, and include tests for timeout, env injection, and log creation.
+
+## Missing Coverage
+- The expected file `prd/plugin-proposal.md` is missing from the repo; the proposal content currently appears in `prd/PRD.md`. The phase design says the Architect should write `prd/plugin-proposal.md`, so the artifact path needs to be fixed.
+- No concrete sandbox or trust model beyond "deferred"; this is not enough for project-local executable extensions.
+- No detailed migration story for existing code that pattern-matches on `Runtime` literals or calls `AgentSpec.cli_flags` outside the orchestrator.
+- No schema validation details for `plugins:` fields such as `env`, `startup_grace`, invalid flag types, unknown keys, relative paths, or YAML duplicate keys.
+- No tests for conflict resolution, path precedence, module cache isolation, built-in name collisions, missing plugin behavior, or all built-in runtime resolution.
+
+## Verdict Rationale
+The proposal handles the high-level shape well and includes useful snippets, but it is not ready to pass. The largest issue is security: importing arbitrary repo-local Python during validation is a major trust boundary change and cannot be left as a deferred open question. Backward compatibility and loader ownership also need tightening before implementation, because the current design can validate a runtime in one layer and fail to resolve it in another.
+
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..14e51c06414a5739bec707874cd5f49cbeaae1c9
+--- /dev/null
++++ b/reviews/plan-iter-1.md
+@@ -0,0 +1,65 @@
++---
++verdict: REQUEST_CHANGES
++summary: "The proposal is concrete and covers the major sections, but it defers the core security problem, has loader/search-path inconsistencies, and leaves backward-compatibility gaps that could break existing runtimes."
++findings:
++  - "Critical: plugin loading executes arbitrary Python in the orchestrator process with no sandbox or explicit trust gate."
++  - "Major: backward-compatibility proof is incomplete and the snippets omit an existing built-in runner path."
++  - "Major: plugin search-path behavior contradicts itself and does not define deterministic conflict handling."
++  - "Major: the proposed Python subclass API is more powerful and complex than the likely first use case requires."
++  - "Minor: default runner implementation has correctness gaps around logs and timeout output handling."
++---
++
++Verdict: REQUEST_CHANGES
++
++## Strengths
++- The proposal is concrete: it includes an ABC, registry code, YAML examples, validation flow, error table, migration path, and file-change summary.
++- It preserves the existing `agents:` shape, which is the right compatibility instinct.
++- It explicitly reserves built-in runtime names and tries to fail before invoking agents when plugin loading fails.
++- It acknowledges the key tradeoff that plugin runtimes require widening `Runtime` from a closed `Literal` to an open string.
++
++## Issues
++### Issue 1: Arbitrary code execution is accepted as the default trust model
++- **Severity**: Critical
++- **What**: The loader imports project-local and user-global Python files with `spec.loader.exec_module(module)`, then calls plugin class methods in-process. Section 10 acknowledges that a malicious plugin can do anything and defers sandboxing.
++- **Why it matters**: A pipeline from an untrusted repo can execute arbitrary Python during validation, before any agent run and before the user sees a meaningful trust boundary. This is worse than running a configured CLI because import-time code gets full access to credentials, repo contents, and the orchestrator process.
++- **Suggested fix**: Make Python plugins opt-in behind an explicit trust gate such as `unison run --allow-python-plugins` or a per-project trust record. For v2.1, prefer a declarative CLI plugin schema (`binary`, `args`, `env`, `timeout_grace`) that runs only subprocesses. If Python plugins remain, load them in a separate worker process with a reduced environment and document the threat model as a first-class section, not an open question.
++
++### Issue 2: Backward compatibility proof misses an existing built-in runtime path
++- **Severity**: Major
++- **What**: The proposal repeatedly lists `openclaw` as a built-in runtime, but the orchestrator integration snippet only registers `claude`, `codex`, and `hermes`. A valid existing `runtime: openclaw` pipeline could pass loader validation and then fail `_get_runner()`.
++- **Why it matters**: This directly contradicts the "every existing pipeline works" claim. The plugin system touches runtime resolution, so built-in parity has to be exact.
++- **Suggested fix**: Include `OpenClawRunner()` in the runner map or explain why it is resolved elsewhere. Add a backward-compatibility test that loads and resolves every built-in in `BUILTIN_RUNTIMES`, not just validates names.
++
++### Issue 3: Loader ordering and validation lifecycle are underspecified
++- **Severity**: Major
++- **What**: Section 6 says `VALID_RUNTIMES` becomes built-ins plus registered plugins and that plugins are resolved before `_build_agents`, but Section 4 loads plugins in `Orchestrator.__init__` from `spec.plugins_raw`. Those cannot both be the only source of truth: `PipelineLoader` must validate agent runtimes before it returns a usable `PipelineSpec`, while `Orchestrator` only exists after loading.
++- **Why it matters**: This can produce either false validation failures for plugin runtimes or duplicated plugin loading in both loader and orchestrator. It also makes `unison validate` ambiguous because validation would need the same registry lifecycle as execution.
++- **Suggested fix**: Define a single owner for plugin discovery. Recommended: `PipelineLoader` parses `plugins`, constructs a `PluginRegistry` or `RuntimeRegistry`, validates agents against it, and stores the registry on `PipelineSpec`. `Orchestrator` should consume that already-validated registry instead of reloading plugins.
++
++### Issue 4: Search-path and conflict behavior contradict each other
++- **Severity**: Major
++- **What**: The implementation defaults `search_paths` to `["~/.unison/plugins"]`, while Section 9 says discovery order is project-local, user-global, then custom paths. If `search_paths` is supplied, the snippet appears to replace defaults rather than append after them. Conflict handling is only "first match wins" and does not cover duplicate runtime keys, duplicate module names, symlinks, or module cache collisions from `sys.modules[module_name]`.
++- **Why it matters**: Plugins are a supply-chain boundary. Ambiguous path precedence can cause a project plugin, global plugin, or custom plugin to shadow another unexpectedly. `sys.modules[module_name]` also lets two configured plugins with the same module filename interfere with each other.
++- **Suggested fix**: Specify one deterministic path algorithm and test it. Use unique import module names derived from runtime name plus resolved path hash instead of raw `module_name`. Detect duplicate runtime keys if the YAML parser supports it, reject built-in collisions as proposed, and print the exact resolved plugin path in validation output.
++
++### Issue 5: The first version is overpowered for the common CLI use case
++- **Severity**: Major
++- **What**: A custom runtime must be a Python subclass that can override `run()`, mutate class variables via instance assignment, and execute arbitrary code. Most examples only need `binary`, args, env, and timeout behavior.
++- **Why it matters**: The proposal adds a broad extension API before proving that Unison needs arbitrary in-process runner logic. This increases security risk, test surface, and future compatibility burden.
++- **Suggested fix**: Split the design into two tiers: a stable declarative `cli_plugins:` schema for command-based runtimes in v2.1, and an experimental Python runner API for trusted local development. The declarative path should cover Gemini/custom script examples without user Python.
++
++### Issue 6: Default runner snippet has correctness gaps
++- **Severity**: Minor
++- **What**: `subprocess.run(..., text=True)` means `TimeoutExpired.stdout` and `stderr` may already be strings, so unconditional `.decode(...)` can fail. The runner creates `log_path.parent` but never writes stdout/stderr to `log_path`, even though `AgentResult.log_path` implies a log exists. `env` is shown in YAML but not applied in `_build_command()` or `run()`.
++- **Why it matters**: These are small implementation bugs, but they weaken confidence in the proposal's "mirrors ClaudeRunner.run exactly" claim and will produce confusing diagnostics for failed plugin runs.
++- **Suggested fix**: Add a small helper to normalize `str | bytes | None`, write captured output to `log_path` consistently with built-in runners, validate and merge `env` into the subprocess environment, and include tests for timeout, env injection, and log creation.
++
++## Missing Coverage
++- The expected file `prd/plugin-proposal.md` is missing from the repo; the proposal content currently appears in `prd/PRD.md`. The phase design says the Architect should write `prd/plugin-proposal.md`, so the artifact path needs to be fixed.
++- No concrete sandbox or trust model beyond "deferred"; this is not enough for project-local executable extensions.
++- No detailed migration story for existing code that pattern-matches on `Runtime` literals or calls `AgentSpec.cli_flags` outside the orchestrator.
++- No schema validation details for `plugins:` fields such as `env`, `startup_grace`, invalid flag types, unknown keys, relative paths, or YAML duplicate keys.
++- No tests for conflict resolution, path precedence, module cache isolation, built-in name collisions, missing plugin behavior, or all built-in runtime resolution.
++
++## Verdict Rationale
++The proposal handles the high-level shape well and includes useful snippets, but it is not ready to pass. The largest issue is security: importing arbitrary repo-local Python during validation is a major trust boundary change and cannot be left as a deferred open question. Backward compatibility and loader ownership also need tightening before implementation, because the current design can validate a runtime in one layer and fail to resolve it in another.
+
+codex
+Wrote the critique to [reviews/plan-iter-1.md](/home/sean/projects/unison/reviews/plan-iter-1.md).
+
+Verification:
+- Ran `test -f prd/PRD.md && test -f prd/tech-design.md && echo 'proposal exists'` → `proposal exists`
+- Did not modify `src/`
+- Verdict: `REQUEST_CHANGES`
+
+Note: `prd/plugin-proposal.md` is missing; the proposal content appears to be in `prd/PRD.md`, so the review calls out the artifact path mismatch.
+diff --git a/reviews/plan-iter-1.md b/reviews/plan-iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..14e51c06414a5739bec707874cd5f49cbeaae1c9
+--- /dev/null
++++ b/reviews/plan-iter-1.md
+@@ -0,0 +1,65 @@
++---
++verdict: REQUEST_CHANGES
++summary: "The proposal is concrete and covers the major sections, but it defers the core security problem, has loader/search-path inconsistencies, and leaves backward-compatibility gaps that could break existing runtimes."
++findings:
++  - "Critical: plugin loading executes arbitrary Python in the orchestrator process with no sandbox or explicit trust gate."
++  - "Major: backward-compatibility proof is incomplete and the snippets omit an existing built-in runner path."
++  - "Major: plugin search-path behavior contradicts itself and does not define deterministic conflict handling."
++  - "Major: the proposed Python subclass API is more powerful and complex than the likely first use case requires."
++  - "Minor: default runner implementation has correctness gaps around logs and timeout output handling."
++---
++
++Verdict: REQUEST_CHANGES
++
++## Strengths
++- The proposal is concrete: it includes an ABC, registry code, YAML examples, validation flow, error table, migration path, and file-change summary.
++- It preserves the existing `agents:` shape, which is the right compatibility instinct.
++- It explicitly reserves built-in runtime names and tries to fail before invoking agents when plugin loading fails.
++- It acknowledges the key tradeoff that plugin runtimes require widening `Runtime` from a closed `Literal` to an open string.
++
++## Issues
++### Issue 1: Arbitrary code execution is accepted as the default trust model
++- **Severity**: Critical
++- **What**: The loader imports project-local and user-global Python files with `spec.loader.exec_module(module)`, then calls plugin class methods in-process. Section 10 acknowledges that a malicious plugin can do anything and defers sandboxing.
++- **Why it matters**: A pipeline from an untrusted repo can execute arbitrary Python during validation, before any agent run and before the user sees a meaningful trust boundary. This is worse than running a configured CLI because import-time code gets full access to credentials, repo contents, and the orchestrator process.
++- **Suggested fix**: Make Python plugins opt-in behind an explicit trust gate such as `unison run --allow-python-plugins` or a per-project trust record. For v2.1, prefer a declarative CLI plugin schema (`binary`, `args`, `env`, `timeout_grace`) that runs only subprocesses. If Python plugins remain, load them in a separate worker process with a reduced environment and document the threat model as a first-class section, not an open question.
++
++### Issue 2: Backward compatibility proof misses an existing built-in runtime path
++- **Severity**: Major
++- **What**: The proposal repeatedly lists `openclaw` as a built-in runtime, but the orchestrator integration snippet only registers `claude`, `codex`, and `hermes`. A valid existing `runtime: openclaw` pipeline could pass loader validation and then fail `_get_runner()`.
++- **Why it matters**: This directly contradicts the "every existing pipeline works" claim. The plugin system touches runtime resolution, so built-in parity has to be exact.
++- **Suggested fix**: Include `OpenClawRunner()` in the runner map or explain why it is resolved elsewhere. Add a backward-compatibility test that loads and resolves every built-in in `BUILTIN_RUNTIMES`, not just validates names.
++
++### Issue 3: Loader ordering and validation lifecycle are underspecified
++- **Severity**: Major
++- **What**: Section 6 says `VALID_RUNTIMES` becomes built-ins plus registered plugins and that plugins are resolved before `_build_agents`, but Section 4 loads plugins in `Orchestrator.__init__` from `spec.plugins_raw`. Those cannot both be the only source of truth: `PipelineLoader` must validate agent runtimes before it returns a usable `PipelineSpec`, while `Orchestrator` only exists after loading.
++- **Why it matters**: This can produce either false validation failures for plugin runtimes or duplicated plugin loading in both loader and orchestrator. It also makes `unison validate` ambiguous because validation would need the same registry lifecycle as execution.
++- **Suggested fix**: Define a single owner for plugin discovery. Recommended: `PipelineLoader` parses `plugins`, constructs a `PluginRegistry` or `RuntimeRegistry`, validates agents against it, and stores the registry on `PipelineSpec`. `Orchestrator` should consume that already-validated registry instead of reloading plugins.
++
++### Issue 4: Search-path and conflict behavior contradict each other
++- **Severity**: Major
++- **What**: The implementation defaults `search_paths` to `["~/.unison/plugins"]`, while Section 9 says discovery order is project-local, user-global, then custom paths. If `search_paths` is supplied, the snippet appears to replace defaults rather than append after them. Conflict handling is only "first match wins" and does not cover duplicate runtime keys, duplicate module names, symlinks, or module cache collisions from `sys.modules[module_name]`.
++- **Why it matters**: Plugins are a supply-chain boundary. Ambiguous path precedence can cause a project plugin, global plugin, or custom plugin to shadow another unexpectedly. `sys.modules[module_name]` also lets two configured plugins with the same module filename interfere with each other.
++- **Suggested fix**: Specify one deterministic path algorithm and test it. Use unique import module names derived from runtime name plus resolved path hash instead of raw `module_name`. Detect duplicate runtime keys if the YAML parser supports it, reject built-in collisions as proposed, and print the exact resolved plugin path in validation output.
++
++### Issue 5: The first version is overpowered for the common CLI use case
++- **Severity**: Major
++- **What**: A custom runtime must be a Python subclass that can override `run()`, mutate class variables via instance assignment, and execute arbitrary code. Most examples only need `binary`, args, env, and timeout behavior.
++- **Why it matters**: The proposal adds a broad extension API before proving that Unison needs arbitrary in-process runner logic. This increases security risk, test surface, and future compatibility burden.
++- **Suggested fix**: Split the design into two tiers: a stable declarative `cli_plugins:` schema for command-based runtimes in v2.1, and an experimental Python runner API for trusted local development. The declarative path should cover Gemini/custom script examples without user Python.
++
++### Issue 6: Default runner snippet has correctness gaps
++- **Severity**: Minor
++- **What**: `subprocess.run(..., text=True)` means `TimeoutExpired.stdout` and `stderr` may already be strings, so unconditional `.decode(...)` can fail. The runner creates `log_path.parent` but never writes stdout/stderr to `log_path`, even though `AgentResult.log_path` implies a log exists. `env` is shown in YAML but not applied in `_build_command()` or `run()`.
++- **Why it matters**: These are small implementation bugs, but they weaken confidence in the proposal's "mirrors ClaudeRunner.run exactly" claim and will produce confusing diagnostics for failed plugin runs.
++- **Suggested fix**: Add a small helper to normalize `str | bytes | None`, write captured output to `log_path` consistently with built-in runners, validate and merge `env` into the subprocess environment, and include tests for timeout, env injection, and log creation.
++
++## Missing Coverage
++- The expected file `prd/plugin-proposal.md` is missing from the repo; the proposal content currently appears in `prd/PRD.md`. The phase design says the Architect should write `prd/plugin-proposal.md`, so the artifact path needs to be fixed.
++- No concrete sandbox or trust model beyond "deferred"; this is not enough for project-local executable extensions.
++- No detailed migration story for existing code that pattern-matches on `Runtime` literals or calls `AgentSpec.cli_flags` outside the orchestrator.
++- No schema validation details for `plugins:` fields such as `env`, `startup_grace`, invalid flag types, unknown keys, relative paths, or YAML duplicate keys.
++- No tests for conflict resolution, path precedence, module cache isolation, built-in name collisions, missing plugin behavior, or all built-in runtime resolution.
++
++## Verdict Rationale
++The proposal handles the high-level shape well and includes useful snippets, but it is not ready to pass. The largest issue is security: importing arbitrary repo-local Python during validation is a major trust boundary change and cannot be left as a deferred open question. Backward compatibility and loader ownership also need tightening before implementation, because the current design can validate a runtime in one layer and fail to resolve it in another.
+
+tokens used
+31,713
+

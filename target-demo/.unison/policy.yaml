@@ -1,0 +1,36 @@
+# Generated from Unison template — customize for your project
+#
+# Risk matrix policy — define what operations are allowed, audited, or blocked.
+# Format: operation × scope → risk_level
+#
+# Risk levels:
+#   L0: auto_allow — always permit, no audit
+#   L1: auto_allow_session — permit after first approval this session
+#   L2: observer_evaluate — post-hoc audit via rule engine
+#   L3: halt — unconditionally deny, halt pipeline, notify operator
+#
+# Operations: READ, CREATE, MODIFY, DELETE
+# Scopes: workspace (inside project), external (outside project)
+#
+# Uncomment and customize the sections below for your project.
+
+# system_critical_paths:
+#   - "<PROJECT_ROOT>/<USER MUST FILL: e.g., ARCHITECTURE.md>"
+#   - "<PROJECT_ROOT>/<USER MUST FILL: e.g., interfaces.py, contracts/>"
+
+# known_safe_external_commands:
+#   - "<USER MUST FILL: e.g., pip install>"
+#   - "<USER MUST FILL: e.g., git push>"
+#   - "<USER MUST FILL: e.g., npm install>"
+
+# workspace_rules:
+#   READ: L0
+#   CREATE: L1
+#   MODIFY: L2
+#   DELETE: L2
+
+# external_rules:
+#   READ: L0
+#   CREATE: L1
+#   MODIFY: L3
+#   DELETE: L3

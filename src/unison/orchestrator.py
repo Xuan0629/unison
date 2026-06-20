@@ -30,6 +30,7 @@ from unison.budget import BudgetTracker
 from unison.runners.claude import ClaudeRunner
 from unison.runners.codex import CodexRunner
 from unison.runners.hermes import HermesRunner
+from unison.runners.openclaw import OpenClawRunner
 
 
 # ============================================================================
@@ -79,10 +80,11 @@ class Orchestrator:
         )
 
         # -- runner routing (runtime name → runner instance) ------------------
-        self._runners: dict[str, ClaudeRunner | CodexRunner | HermesRunner] = {
+        self._runners: dict[str, ClaudeRunner | CodexRunner | HermesRunner | OpenClawRunner] = {
             "claude": ClaudeRunner(),
             "codex": CodexRunner(),
             "hermes": HermesRunner(),
+            "openclaw": OpenClawRunner(),
         }
 
         # -- completion detection + verdict parsing ----------------------------
