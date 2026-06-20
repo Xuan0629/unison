@@ -1,0 +1,294 @@
+=== COMMAND ===
+claude -p --dangerously-skip-permissions Implement log key masking per prd/PRD.md. Add mask_secrets() function that scans text for API key patterns (sk-..., Bearer ..., api_key=...) and replaces with [REDACTED]. Use in all runner log writing. Add to src/unison/runners/base.py or new utils.py. pytest tests/test_orchestrator.py -q must pass. git add -A && git commit.
+
+# Developer — Unison code review fix
+
+Implement the fix per the approved PRD and tech-design.
+
+1. Read prd/PRD.md and prd/tech-design.md
+2. Modify only the files specified in the design
+3. Keep tests green — run the test command first
+4. git add -A && git commit with a descriptive message
+
+
+## Last Review Findings
+[INFO] src/unison/runners/base.py:35 only masks unquoted NAME_API_KEY=value assignments. Common prompt/env-file forms such as OPENAI_API_KEY="plain-token" or FOO_API_KEY='plain-token' are not redacted unless the value also matches another generic pattern or is already present in os.environ, so embedded API keys can still be written verbatim to runner logs.
+
+## Git Diff
+diff --git a/observer/logs/developer_iter-1_20260620T074132Z.log b/observer/logs/developer_iter-1_20260620T074132Z.log
+new file mode 100644
+index 0000000..460e1a9
+--- /dev/null
++++ b/observer/logs/developer_iter-1_20260620T074132Z.log
+@@ -0,0 +1,290 @@
++=== COMMAND ===
++claude -p --dangerously-skip-permissions Implement log key masking per prd/PRD.md. Add mask_secrets() function that scans text for API key patterns (sk-..., Bearer ..., api_key=...) and replaces with [REDACTED]. Use in all runner log writing. Add to src/unison/runners/base.py or new utils.py. pytest tests/test_orchestrator.py -q must pass. git add -A && git commit.
++
++# Developer — Unison code review fix
++
++Implement the fix per the approved PRD and tech-design.
++
+... (truncated)
+
+diff --git a/observer/logs/developer_iter-1_20260620T073120Z.log b/observer/logs/developer_iter-1_20260620T073120Z.log
++new file mode 100644
++index 0000000..3f745dc
++--- /dev/null
+++++ b/observer/logs/developer_iter-1_20260620T073120Z.log
++@@ -0,0 +1,303 @@
+++=== COMMAND ===
+++claude -p --dangerously-skip-permissions Refactor runners per prd/PRD.md. Create BaseRunner in src/unison/runners/base.py with shared subprocess.run, timeout handling, log writing, AgentResult construction. Make ClaudeRunner, CodexRunner, HermesRunner subclass BaseRunner with only binary name overrides. Keep OpenClawRunner unchanged. pytest tests/ -q must pass (all 500+ tests). git add -A && git commit.
+++
+++# Developer — Unison code review fix
+++
+++Implement the fix per the approved PRD and tech-design.
+++
+++1. Read prd/PRD.md and prd/tech-design.md
++... (truncated)
++
++
+
+diff --git a/.unison/budget.json b/.unison/budget.json
+++deleted file mode 100644
+++index 17eb78a..0000000
+++--- a/.unison/budget.json
++++++ /dev/null
+++@@ -1,19 +0,0 @@
+++-{
+++-  "date": "2026-06-20",
+++-  "daily_used": 3574,
+++-  "task_used": 3574,
+++-  "phases": [
+++-    {
+++-      "phase": "developer",
+++-      "iter_n": 1,
+++-      "tokens_used": 2359,
+++-      "timestamp": "2026-06-20T07:22:41.165622+00:00"
+++-    },
+++-    {
+++-      "phase": "reviewer",
+++-      "iter_n": 1,
+++-      "tokens_used": 1215,
+++... (truncated)
+++
+++
++
++
+
+diff --git a/observer/logs/developer_iter-2_20260620T072740Z.log b/observer/logs/developer_iter-2_20260620T072740Z.log
+++new file mode 100644
+++index 0000000..269f107
+++--- /dev/null
++++++ b/observer/logs/developer_iter-2_20260620T072740Z.log
+++@@ -0,0 +1,169 @@
++++=== COMMAND ===
++++claude -p --dangerously-skip-permissions Implement snapshot exclude_patterns per prd/PRD.md. Add exclude_patterns field to SnapshotConfig in interfaces.py (optional, default=['~/.hermes/.env', '~/.openclaw/**/auth-profiles.json']). Filter paths in snapshot.py before copying. Add test_sensitive_excluded to tests/test_snapshot.py. pytest tests/test_snapshot.py -q must pass (12+). git add -A && git commit.
++++
++++# Developer — Unison code review fix
++++
++++Implement the fix per the approved PRD and tech-design.
++++
++++1. Read prd/PRD.md and prd/tech-design.md
++++2. Modify only the files specified in the design
++++3. Keep tests green — run the test command first
++++4. git add -A && git commit with a descriptive message
++++
++++
++++## Last Review Findings
++++[INFO] src/unison/snapshot.py:68 leaves FileSnapshotManager.exclude_patterns empty by default, so FileSnapshotManager(base_dir=...) still allows snapshots of ~/.hermes/.env and ~/.openclaw/**/auth-profiles.json unless callers manually pass patterns; the PRD requires these sensitive paths to be excluded by default.
++++[INFO] src/unison/pipeline.py:337-343 omits exclude_patterns when building SnapshotConfig from YAML, so user-provided snapshot exclusions are silently ignored.
++++
++++## Git Diff
++++
+++
+++
++
++
+
+diff --git a/interfaces.py b/interfaces.py
++++index 8922797..58592bf 100644
++++--- a/interfaces.py
+++++++ b/interfaces.py
++++@@ -206,6 +206,10 @@ class SnapshotConfig:
++++         "~/.hermes/skills/",
++++         "~/.openclaw/agents/",
++++     ])
+++++    exclude_patterns: list[str] = field(default_factory=lambda: [
+++++        "~/.hermes/.env",
+++++        "~/.openclaw/**/auth-profiles.json",
+++++    ])
++++... (truncated)
++++
++++
+++
+++
++
++
+
+diff --git a/src/unison/snapshot.py b/src/unison/snapshot.py
++++index ca7be1d..7b3f32a 100644
++++--- a/src/unison/snapshot.py
+++++++ b/src/unison/snapshot.py
++++@@ -6,6 +6,7 @@ at ``base_dir/manifest.json`` mapping audit_ids to their SnapshotRecord.
++++ 
++++ from __future__ import annotations
++++ 
+++++import fnmatch
++++ import json
++++ import shutil
++++ import uuid
++++@@ -64,6 +65,34 @@ class FileSnapshotManager:
++++     base_dir: Path
++++     retention_hours: int = 168
++++     max_slots: int = 100
+++++    exclude_patterns: list[str] = field(default_factory=list)
+++++
+++++    # ------------------------------------------------------------------
+++++    # public helpers
+++++    # ------------------------------------------------------------------
+++++
+++++    def _should_snapshot(self, path: Path) -> bool:
+++++        """Return False if *path* matches any exclude pattern."""
+++++        if not self.exclude_patterns:
+++++            return True
+++++
+++++        resolved = str(path.resolve())
+++++        for pattern in self.exclude_patterns:
+++++            # Expand ~ to user's home directory
+++++            if pattern.startswith("~"):
+++++                expanded = str(Path(pattern).expanduser().resolve())
+++++                if fnmatch.fnmatch(resolved, expanded):
+++++                    return False
+++++            # Match just the filename for simple patterns (e.g. "*.env")
+++++            if fnmatch.fnmatch(path.name, pattern):
+++++                return False
+++++            # Path.match for globstar (**) support
+++++            try:
+++++                if path.match(pattern):
+++++                    return False
+++++            except (ValueError, OSError):
+++++                pass
+++++        return True
++++ 
++++     # ------------------------------------------------------------------
++++     # internal helpers
++++@@ -122,7 +151,15 @@ class FileSnapshotManager:
++++         """Take a snapshot of *path* (file or directory).
++++ 
++++         Returns a ``SnapshotRecord`` describing the snapshot.
+++++
+++++        Raises:
+++++            ValueError: If *path* matches an ``exclude_pattern``.
++++         """
+++++        if not self._should_snapshot(path):
+++++            raise ValueError(
+++++                f"Path {path} matches an exclude pattern, snapshot skipped"
+++++            )
+++++
++++         audit_id = uuid.uuid4().hex
++++         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
++++ 
++++
++++
++++
+++
+++
++
++
+
+diff --git a/tests/test_snapshot.py b/tests/test_snapshot.py
++++index 80e973a..f602327 100644
++++--- a/tests/test_snapshot.py
+++++++ b/tests/test_snapshot.py
++++@@ -181,6 +181,25 @@ class TestFileSnapshotManager:
++++         assert record.snapshot_path.stat().st_mode == original.stat().st_mode
++++ 
++++ 
+++++    def test_sensitive_excluded(self, tmp_path):
+++++        """Sensitive files matching exclude_patterns are rejected."""
+++++        sm = FileSnapshotManager(
+++++            base_dir=tmp_path / "snapshots",
+++++            exclude_patterns=["*.env", "*.secret"],
+++++        )
+++++
+++++        env_file = tmp_path / ".env"
+++++        env_file.write_text("API_KEY=secret123")
+++++
+++++        with pytest.raises(ValueError, match="exclude"):
+++++            sm.snapshot(
+++++                path=env_file,
+++++                operation=Operation.MODIFY,
+++++                agent="developer",
+++++                iteration=1,
+++++            )
+++++
+++++
++++ class TestSnapshotRecord:
++++     """SnapshotRecord dataclass tests."""
++++ 
++++
++++
++++## Design
++++# fix
++++
++++
++++## PRD
++++# Fix: Exclude sensitive paths from snapshots
++++
++++## Problem
++++Snapshots store files unencrypted. Manifest contains full resolved paths.
++++If snapshot captures .env or auth config, API keys leak.
++++
++++## Solution
++++Add 'exclude_patterns' to SnapshotConf
+...[diff truncated]
+
+## Design
+# dag
+
+
+## PRD
+# Fix: DAG orphan thread cooperative cancellation
+
+## Problem
+DAGScheduler.execute_parallel() shuts down the thread pool with
+wait=False, cancel_futures=True. This only cancels pending futures,
+not running threads. Running threads continue modifying files after
+the scheduler considers the stage failed.
+
+## Solution
+Add cooperative cancellation:
+1. threading.Event flag in DAGScheduler
+2. Passed to executor callable via closure
+3. Stage deadline exceeded → set event
+4. Executor callable checks event.is_set() before file writes and git commits
+5. Document DAG mode as experimental in ARCHITECTURE.md
+
+This is a safety net, not a complete solution (Python can't kill threads).
+
+## Acceptance
+- test_pipeline.py tests pass (119+)
+- ARCHITECTURE.md updated
+- Event flag doesn't affect normal (non-timeout) execution
+
+
+=== STDOUT ===
+Done. Here's a summary of the fix:
+
+**Problem:** The `mask_secrets()` regex patterns in `src/unison/runners/base.py` only matched unquoted API key values. Forms like `OPENAI_API_KEY="plain-token"` and `FOO_API_KEY='plain-token'` passed through unmasked because `"` and `'` were explicitly excluded from the value character class.
+
+**Fix:** Extended all three value-assignment patterns (`api_key=`, `*_API_KEY=`, `*_SECRET=`) to match three forms:
+- `KEY=value` (unquoted — already worked)
+- `KEY="value"` (double-quoted — **new**)
+- `KEY='value'` (single-quoted — **new**)
+
+Changed the regex from single exclusion-based classes like `[^\s\"'$`]+` to alternations: `([^\s"'$`]+|"[^"]*"|'[^']*')`.
+
+**Verification:**
+- `pytest tests/test_orchestrator.py -q` — 16 passed ✓
+- Manual tests for all quoted/unquoted variants — all passed ✓
+- Committed as `0cc208c`
+
+
+=== STDERR ===
+

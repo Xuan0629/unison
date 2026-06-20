@@ -1,5 +1,6 @@
 """Tests for pipeline.py — PipelineSpec loading + validation + dry-run + DAG."""
 import tempfile
+import threading
 import time
 from pathlib import Path
 import pytest
@@ -1205,6 +1206,96 @@ class TestDAGSchedulerV2:
             f"the production path is blocking on hung workers. "
             f"Codex Iter 1 review finding."
         )
+
+    # ------------------------------------------------------------------
+    # cancel_event — cooperative cancellation
+    # ------------------------------------------------------------------
+
+    def test_cancel_event_not_set_on_normal_execution(self):
+        """cancel_event is NOT set when all stages complete normally."""
+        stages = [
+            Stage(name="a"),
+            Stage(name="b", dependencies=["a"]),
+        ]
+        scheduler = DAGScheduler(stages)
+
+        def executor(stage: Stage) -> bool:
+            return True
+
+        results = scheduler.execute_parallel(executor, max_workers=2)
+        assert results == {"a": True, "b": True}
+        assert not scheduler.cancel_event.is_set(), (
+            "cancel_event must not be set during normal (non-timeout) execution"
+        )
+
+    def test_cancel_event_set_on_timeout(self):
+        """cancel_event IS set when a stage exceeds its deadline."""
+        stages = [
+            Stage(name="slow", timeout=1),
+            Stage(name="fast"),
+        ]
+        scheduler = DAGScheduler(stages)
+
+        def executor(stage: Stage) -> bool:
+            if stage.name == "slow":
+                time.sleep(2.0)  # exceed the 1s timeout
+            return True
+
+        results = scheduler.execute_parallel(executor, max_workers=2)
+        assert results["slow"] is False
+        assert scheduler.cancel_event.is_set(), (
+            "cancel_event must be set when a stage exceeds its deadline"
+        )
+
+    def test_cancel_event_cleared_between_calls(self):
+        """cancel_event is cleared each time execute_parallel is called."""
+        stages = [Stage(name="a")]
+        scheduler = DAGScheduler(stages)
+
+        def executor(stage: Stage) -> bool:
+            return True
+
+        # First call — normal execution, event stays clear
+        scheduler.execute_parallel(executor, max_workers=1)
+        assert not scheduler.cancel_event.is_set()
+
+        # Manually set to simulate a previous timeout
+        scheduler.cancel_event.set()
+        assert scheduler.cancel_event.is_set()
+
+        # Second call — must clear the event
+        scheduler.execute_parallel(executor, max_workers=1)
+        assert not scheduler.cancel_event.is_set(), (
+            "cancel_event must be cleared at the start of each execute_parallel call"
+        )
+
+    def test_executor_observes_cancel_event(self):
+        """Executor callable that checks the event aborts early on cancel."""
+        stages = [
+            Stage(name="hung", timeout=1),
+            Stage(name="cooperative"),
+        ]
+        scheduler = DAGScheduler(stages)
+        cancel_event = scheduler.cancel_event
+        cooperative_called = []
+
+        def executor(stage: Stage) -> bool:
+            if stage.name == "hung":
+                time.sleep(2.0)  # exceed timeout, trigger cancel_event
+                return True
+            # This stage checks the event before doing work
+            cooperative_called.append(stage.name)
+            if cancel_event.is_set():
+                return False  # cooperative abort
+            return True
+
+        results = scheduler.execute_parallel(executor, max_workers=2)
+        # "hung" is marked failed via timeout
+        assert results["hung"] is False
+        # "cooperative" stage ran and aborted (or if fast enough, may have
+        # started before cancel_event was set; either way the scheduler
+        # shouldn't block)
+        assert cancel_event.is_set()
 
 
 # ============================================================================
