@@ -1,0 +1,2286 @@
+=== COMMAND ===
+codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 2: 1. Run tests: python3 -m pytest tests/test_orchestrator.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-2.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Git Diff
+diff --git a/.unison/budget.json b/.unison/budget.json
+new file mode 100644
+index 0000000..035732e
+--- /dev/null
++++ b/.unison/budget.json
+@@ -0,0 +1,19 @@
++{
++  "date": "2026-06-20",
++  "daily_used": 3656,
++  "task_used": 3656,
++  "phases": [
++    {
++      "phase": "developer",
++      "iter_n": 1,
++      "tokens_used": 2366,
++      "timestamp": "2026-06-20T07:43:32.538181+00:00"
++    },
++    {
++      "phase": "reviewer",
++      "iter_n": 1,
++      "tokens_used": 1290,
++      "timestamp": "2026-06-20T07:49:33.177872+00:00"
+... (truncated)
+
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index 16fb3d1..2610ca3 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -151,6 +151,26 @@ halt_signal 触发条件（任意循环中）:
+ Planner 和 Developer 循环的唯一区别是 **产出物不同**（PRD vs 代码），
+ 以及 **Reviewer 的审查维度不同**（需求完整性 vs 代码质量）。
+ 
++### DAG Mode (Experimental)
++
++When ``pipeline.yaml`` includes a ``dag:`` section, the orchestrator uses
++``DAGScheduler`` to execute stages in parallel according to their
++dependency graph.  Each stage maps to a set of agents and a deadline.
++
++**Status: Experimental.**  DAG mode has cooperative cancellation
++(``threading.Event``) and deadline-aware scheduling, but the following
++limitations apply:
++
++- Python threads cannot be forcibly killed — a timed-out stage's
++  thread continues to run until the agent subprocess exits on its own.
++  The ``cancel_event`` flag is a cooperative signal that executor
++  callables should check before file-system mutations.
++- Failure propagation across parallel groups is best-effort.
++- Only one agent per stage is supported in the current implementation.
++
++Use ``pipeline.yaml`` without ``dag:`` for the stable sequential
++Developer ↔ Reviewer loop.
++
+ **每次 agent 调用前的 pre-invoke 清理**:
+ ```
+ git reset --hard HEAD && git clean -fd
+
+
+diff --git a/observer/logs/reviewer_iter-1_20260620T074332Z.log b/observer/logs/reviewer_iter-1_20260620T074332Z.log
+new file mode 100644
+index 0000000..fae321b
+--- /dev/null
++++ b/observer/logs/reviewer_iter-1_20260620T074332Z.log
+@@ -0,0 +1,1372 @@
++=== COMMAND ===
++codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 1: 1. Run tests: python3 -m pytest tests/test_orchestrator.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
++
++# Reviewer — Unison code review fix
++
++Review the current iteration's output.
++
++Plan review: check PRD/tech-design for correctness, completeness, feasibility.
++Dev review: check code changes match the design, tests pass, no regressions.
++
++Output:
++```
++verdict: PASS | REQUEST_CHANGES
++summary: <1-line>
++findings:
++  - <specific issue if any>
++```
++
++
++## Git Diff
++
+
+diff --git a/src/unison/runners/base.py b/src/unison/runners/base.py
++index a2a32bc..8eb1db4 100644
++--- a/src/unison/runners/base.py
+++++ b/src/unison/runners/base.py
++@@ -5,6 +5,8 @@ timeout handling, log writing, and AgentResult construction.
++ Subclasses (ClaudeRunner, CodexRunner, HermesRunner) override
++ only _build_command and optionally _effective_timeout.
++ """
+++import os
+++import re
++ import subprocess
++... (truncated)
++@@ -13,6 +15,69 @@ from pathlib import Path
++ from interfaces import AgentSpec, AgentResult
++ 
++ 
+++# ------------------------------------------------------------------
+++# secret masking
+++# ------------------------------------------------------------------
+++
+++_REDACTED = "[REDACTED]"
+++
+++# Patterns that match API keys / secrets in text
+++_SECRET_PATTERNS: list[tuple[str, str]] = [
+++    # Anthropic keys: sk-ant-<chars>
+++    (r"sk-ant-[a-zA-Z0-9\-_]+", _REDACTED),
+++    # OpenAI / generic keys: sk-<chars>
+++    (r"sk-[a-zA-Z0-9\-_]+", _REDACTED),
+++    # Bearer tokens: Bearer <token>
+++    (r"Bearer\s+[a-zA-Z0-9\-_.+/=]+", f"Bearer {_REDACTED}"),
+++    # api_key= value (unquoted)
+++    (r"api_key=[a-zA-Z0-9\-_.+/=]+", f"api_key={_REDACTED}"),
+++    # Env-var assignments for keys ending in _API_KEY (KEY=value form)
+++    (r"([a-zA-Z_][a-zA-Z0-9_]*_API_KEY)=[^\s\"'$`]+", rf"\1={_REDACTED}"),
+++    # Env-var assignments for keys ending in _SECRET
+++    (r"([a-zA-Z_][a-zA-Z0-9_]*_SECRET)=[^\s\"'$`]+", rf"\1={_REDACTED}"),
+++]
+++
+++
+++def _env_value_patterns() -> list[tuple[str, str]]:
+++    """Build patterns for current-os.environ API-key values.
+++
+++    Any value present in an os.environ key ending in ``_API_KEY`` is
+++    treated as a secret and redacted wherever it appears.
+++    """
+++    patterns: list[tuple[str, str]] = []
+++    for name, val in os.environ.items():
+++        if val and (name.endswith("_API_KEY") or name.endswith("_SECRET")):
+++            # Escape the literal value for use in a regex
+++            escaped = re.escape(val)
+++            patterns.append((escaped, _REDACTED))
+++    return patterns
+++
+++
+++def mask_secrets(text: str) -> str:
+++    """Replace API keys and secrets in *text* with ``[REDACTED]``.
+++
+++    Covers these forms:
+++
+++    * ``sk-ant-...`` (Anthropic keys)
+++    * ``sk-...`` (OpenAI / generic keys)
+++    * ``Bearer <token>``
+++    * ``api_key=<value>``
+++    * ``<NAME>_API_KEY=<value>``
+++    * ``<NAME>_SECRET=<value>``
+++    * Any value found in an os.environ entry whose name ends in
+++      ``_API_KEY`` or ``_SECRET``
+++    """
+++    for pattern, replacement in _SECRET_PATTERNS:
+++        text = re.sub(pattern, replacement, text)
+++
+++    # Environment-value patterns are built at call time so they
+++    # always reflect the current process environment.
+++    for pattern, replacement in _env_value_patterns():
+++        text = re.sub(pattern, replacement, text)
+++
+++    return text
+++
+++
++ @dataclass
++ class BaseRunner:
++     """Shared subprocess.run, timeout handling, log writing.
++@@ -62,12 +127,17 @@ class BaseRunner:
++     def _write_log(
++         self, log_path: Path, cmd: list[str], stdout: str, stderr: str
++     ) -> None:
++-        """Write the invocation log to *log_path*."""
+++        """Write the invocation log to *log_path*.
+++
+++        All text sections are passed through :func:`mask_secrets` so
+++        API keys are replaced with ``[REDACTED]`` before being written
+++        to disk.
+++        """
++         log_path.parent.mkdir(parents=True, exist_ok=True)
++         log_path.write_text(
++-            f"=== COMMAND ===\n{' '.join(cmd)}\n\n"
++-            f"=== STDOUT ===\n{stdout}\n\n"
++-            f"=== STDERR ===\n{stderr}\n",
+++            f"=== COMMAND ===\n{mask_secrets(' '.join(cmd))}\n\n"
+++            f"=== STDOUT ===\n{mask_secrets(stdout)}\n\n"
+++            f"=== STDERR ===\n{mask_secrets(stderr)}\n",
++             encoding="utf-8",
++         )
++ 
++
++
++## Design
++# keymask
++
++
++## PRD
++# Fix: API key masking in runner logs
++
++## Problem
++Runner log files contain full prompts including API keys passed via environment
++or embedded in the prompt text. This is a security risk.
++
++## Solution
++Add mask_secrets(text: str) -> str utility that replaces:
++- sk-... (OpenAI keys)
++- sk-ant-... (Anthropic keys)
++- Bearer <token>
++- api_key=<value>
++- Values of os.environ keys ending in _API_KEY
++
++With "[REDACTED]". Apply to log writing in all runners.
++
++## Implementation
++- New function in src/unison/runners/base.py or new src/unison/utils.py
++- Call mask_secrets() before writing log files
++- Preserve format and context, only mask the values
++
++## Acceptance
++- Existing tests pass
++- Manual verification: logs contain [REDACTED] not actual keys
++
++
++=== STDOUT ===
++Wrote the review to [reviews/iter-1.md](/home/sean/projects/unison/reviews/iter-1.md).
++
++Verdict: `REQUEST_CHANGES`
++
++Test run completed: `python3 -m pytest tests/test_orchestrator.py -q` passed with `16 passed in 0.11s`.
++
++No `src/` files were modified.
++
++
++=== STDERR ===
++Reading additional input from stdin...
++OpenAI Codex v0.141.0
++--------
++workdir: /home/sean/projects/unison
++model: gpt-5.5
++provider: openai-custom
++approval: never
++sandbox: danger-full-access
++reasoning effort: high
++reasoning summaries: none
++session id: 019ee3fc-241e-7532-828e-01ac33ee330e
++--------
++user
++Review Iteration 1: 1. Run tests: python3 -m pytest tests/test_orchestrator.py -q 2. Write review to /home/sean/projects/unison/r
+...[diff truncated]
+
+## Design
+# dag
+
+
+## PRD
+# Fix: DAG orphan thread cooperative cancellation
+
+## Problem
+DAGScheduler.execute_parallel() shuts down the thread pool with
+wait=False, cancel_futures=True. This only cancels pending futures,
+not running threads. Running threads continue modifying files after
+the scheduler considers the stage failed.
+
+## Solution
+Add cooperative cancellation:
+1. threading.Event flag in DAGScheduler
+2. Passed to executor callable via closure
+3. Stage deadline exceeded → set event
+4. Executor callable checks event.is_set() before file writes and git commits
+5. Document DAG mode as experimental in ARCHITECTURE.md
+
+This is a safety net, not a complete solution (Python can't kill threads).
+
+## Acceptance
+- test_pipeline.py tests pass (119+)
+- ARCHITECTURE.md updated
+- Event flag doesn't affect normal (non-timeout) execution
+
+
+=== STDOUT ===
+Wrote the review to [iter-2.md](/home/sean/projects/unison/reviews/iter-2.md).
+
+Verdict: `REQUEST_CHANGES`
+
+Test run completed: `python3 -m pytest tests/test_orchestrator.py -q` passed with `16 passed in 0.13s`.
+
+No `src/` files were modified.
+
+
+=== STDERR ===
+Reading additional input from stdin...
+OpenAI Codex v0.141.0
+--------
+workdir: /home/sean/projects/unison
+model: gpt-5.5
+provider: openai-custom
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 019ee402-982c-7303-98bf-2dd763063e16
+--------
+user
+Review Iteration 2: 1. Run tests: python3 -m pytest tests/test_orchestrator.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-2.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Git Diff
+diff --git a/.unison/budget.json b/.unison/budget.json
+new file mode 100644
+index 0000000..035732e
+--- /dev/null
++++ b/.unison/budget.json
+@@ -0,0 +1,19 @@
++{
++  "date": "2026-06-20",
++  "daily_used": 3656,
++  "task_used": 3656,
++  "phases": [
++    {
++      "phase": "developer",
++      "iter_n": 1,
++      "tokens_used": 2366,
++      "timestamp": "2026-06-20T07:43:32.538181+00:00"
++    },
++    {
++      "phase": "reviewer",
++      "iter_n": 1,
++      "tokens_used": 1290,
++      "timestamp": "2026-06-20T07:49:33.177872+00:00"
+... (truncated)
+
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index 16fb3d1..2610ca3 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -151,6 +151,26 @@ halt_signal 触发条件（任意循环中）:
+ Planner 和 Developer 循环的唯一区别是 **产出物不同**（PRD vs 代码），
+ 以及 **Reviewer 的审查维度不同**（需求完整性 vs 代码质量）。
+ 
++### DAG Mode (Experimental)
++
++When ``pipeline.yaml`` includes a ``dag:`` section, the orchestrator uses
++``DAGScheduler`` to execute stages in parallel according to their
++dependency graph.  Each stage maps to a set of agents and a deadline.
++
++**Status: Experimental.**  DAG mode has cooperative cancellation
++(``threading.Event``) and deadline-aware scheduling, but the following
++limitations apply:
++
++- Python threads cannot be forcibly killed — a timed-out stage's
++  thread continues to run until the agent subprocess exits on its own.
++  The ``cancel_event`` flag is a cooperative signal that executor
++  callables should check before file-system mutations.
++- Failure propagation across parallel groups is best-effort.
++- Only one agent per stage is supported in the current implementation.
++
++Use ``pipeline.yaml`` without ``dag:`` for the stable sequential
++Developer ↔ Reviewer loop.
++
+ **每次 agent 调用前的 pre-invoke 清理**:
+ ```
+ git reset --hard HEAD && git clean -fd
+
+
+diff --git a/observer/logs/reviewer_iter-1_20260620T074332Z.log b/observer/logs/reviewer_iter-1_20260620T074332Z.log
+new file mode 100644
+index 0000000..fae321b
+--- /dev/null
++++ b/observer/logs/reviewer_iter-1_20260620T074332Z.log
+@@ -0,0 +1,1372 @@
++=== COMMAND ===
++codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 1: 1. Run tests: python3 -m pytest tests/test_orchestrator.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
++
++# Reviewer — Unison code review fix
++
++Review the current iteration's output.
++
++Plan review: check PRD/tech-design for correctness, completeness, feasibility.
++Dev review: check code changes match the design, tests pass, no regressions.
++
++Output:
++```
++verdict: PASS | REQUEST_CHANGES
++summary: <1-line>
++findings:
++  - <specific issue if any>
++```
++
++
++## Git Diff
++
+
+diff --git a/src/unison/runners/base.py b/src/unison/runners/base.py
++index a2a32bc..8eb1db4 100644
++--- a/src/unison/runners/base.py
+++++ b/src/unison/runners/base.py
++@@ -5,6 +5,8 @@ timeout handling, log writing, and AgentResult construction.
++ Subclasses (ClaudeRunner, CodexRunner, HermesRunner) override
++ only _build_command and optionally _effective_timeout.
++ """
+++import os
+++import re
++ import subprocess
++... (truncated)
++@@ -13,6 +15,69 @@ from pathlib import Path
++ from interfaces import AgentSpec, AgentResult
++ 
++ 
+++# ------------------------------------------------------------------
+++# secret masking
+++# ------------------------------------------------------------------
+++
+++_REDACTED = "[REDACTED]"
+++
+++# Patterns that match API keys / secrets in text
+++_SECRET_PATTERNS: list[tuple[str, str]] = [
+++    # Anthropic keys: sk-ant-<chars>
+++    (r"sk-ant-[a-zA-Z0-9\-_]+", _REDACTED),
+++    # OpenAI / generic keys: sk-<chars>
+++    (r"sk-[a-zA-Z0-9\-_]+", _REDACTED),
+++    # Bearer tokens: Bearer <token>
+++    (r"Bearer\s+[a-zA-Z0-9\-_.+/=]+", f"Bearer {_REDACTED}"),
+++    # api_key= value (unquoted)
+++    (r"api_key=[a-zA-Z0-9\-_.+/=]+", f"api_key={_REDACTED}"),
+++    # Env-var assignments for keys ending in _API_KEY (KEY=value form)
+++    (r"([a-zA-Z_][a-zA-Z0-9_]*_API_KEY)=[^\s\"'$`]+", rf"\1={_REDACTED}"),
+++    # Env-var assignments for keys ending in _SECRET
+++    (r"([a-zA-Z_][a-zA-Z0-9_]*_SECRET)=[^\s\"'$`]+", rf"\1={_REDACTED}"),
+++]
+++
+++
+++def _env_value_patterns() -> list[tuple[str, str]]:
+++    """Build patterns for current-os.environ API-key values.
+++
+++    Any value present in an os.environ key ending in ``_API_KEY`` is
+++    treated as a secret and redacted wherever it appears.
+++    """
+++    patterns: list[tuple[str, str]] = []
+++    for name, val in os.environ.items():
+++        if val and (name.endswith("_API_KEY") or name.endswith("_SECRET")):
+++            # Escape the literal value for use in a regex
+++            escaped = re.escape(val)
+++            patterns.append((escaped, _REDACTED))
+++    return patterns
+++
+++
+++def mask_secrets(text: str) -> str:
+++    """Replace API keys and secrets in *text* with ``[REDACTED]``.
+++
+++    Covers these forms:
+++
+++    * ``sk-ant-...`` (Anthropic keys)
+++    * ``sk-...`` (OpenAI / generic keys)
+++    * ``Bearer <token>``
+++    * ``api_key=<value>``
+++    * ``<NAME>_API_KEY=<value>``
+++    * ``<NAME>_SECRET=<value>``
+++    * Any value found in an os.environ entry whose name ends in
+++      ``_API_KEY`` or ``_SECRET``
+++    """
+++    for pattern, replacement in _SECRET_PATTERNS:
+++        text = re.sub(pattern, replacement, text)
+++
+++    # Environment-value patterns are built at call time so they
+++    # always reflect the current process environment.
+++    for pattern, replacement in _env_value_patterns():
+++        text = re.sub(pattern, replacement, text)
+++
+++    return text
+++
+++
++ @dataclass
++ class BaseRunner:
++     """Shared subprocess.run, timeout handling, log writing.
++@@ -62,12 +127,17 @@ class BaseRunner:
++     def _write_log(
++         self, log_path: Path, cmd: list[str], stdout: str, stderr: str
++     ) -> None:
++-        """Write the invocation log to *log_path*."""
+++        """Write the invocation log to *log_path*.
+++
+++        All text sections are passed through :func:`mask_secrets` so
+++        API keys are replaced with ``[REDACTED]`` before being written
+++        to disk.
+++        """
++         log_path.parent.mkdir(parents=True, exist_ok=True)
++         log_path.write_text(
++-            f"=== COMMAND ===\n{' '.join(cmd)}\n\n"
++-            f"=== STDOUT ===\n{stdout}\n\n"
++-            f"=== STDERR ===\n{stderr}\n",
+++            f"=== COMMAND ===\n{mask_secrets(' '.join(cmd))}\n\n"
+++            f"=== STDOUT ===\n{mask_secrets(stdout)}\n\n"
+++            f"=== STDERR ===\n{mask_secrets(stderr)}\n",
++             encoding="utf-8",
++         )
++ 
++
++
++## Design
++# keymask
++
++
++## PRD
++# Fix: API key masking in runner logs
++
++## Problem
++Runner log files contain full prompts including API keys passed via environment
++or embedded in the prompt text. This is a security risk.
++
++## Solution
++Add mask_secrets(text: str) -> str utility that replaces:
++- sk-... (OpenAI keys)
++- sk-ant-... (Anthropic keys)
++- Bearer <token>
++- api_key=<value>
++- Values of os.environ keys ending in _API_KEY
++
++With "[REDACTED]". Apply to log writing in all runners.
++
++## Implementation
++- New function in src/unison/runners/base.py or new src/unison/utils.py
++- Call mask_secrets() before writing log files
++- Preserve format and context, only mask the values
++
++## Acceptance
++- Existing tests pass
++- Manual verification: logs contain [REDACTED] not actual keys
++
++
++=== STDOUT ===
++Wrote the review to [reviews/iter-1.md](/home/sean/projects/unison/reviews/iter-1.md).
++
++Verdict: `REQUEST_CHANGES`
++
++Test run completed: `python3 -m pytest tests/test_orchestrator.py -q` passed with `16 passed in 0.11s`.
++
++No `src/` files were modified.
++
++
++=== STDERR ===
++Reading additional input from stdin...
++OpenAI Codex v0.141.0
++--------
++workdir: /home/sean/projects/unison
++model: gpt-5.5
++provider: openai-custom
++approval: never
++sandbox: danger-full-access
++reasoning effort: high
++reasoning summaries: none
++session id: 019ee3fc-241e-7532-828e-01ac33ee330e
++--------
++user
++Review Iteration 1: 1. Run tests: python3 -m pytest tests/test_orchestrator.py -q 2. Write review to /home/sean/projects/unison/r
+...[diff truncated]
+
+## Design
+# dag
+
+
+## PRD
+# Fix: DAG orphan thread cooperative cancellation
+
+## Problem
+DAGScheduler.execute_parallel() shuts down the thread pool with
+wait=False, cancel_futures=True. This only cancels pending futures,
+not running threads. Running threads continue modifying files after
+the scheduler considers the stage failed.
+
+## Solution
+Add cooperative cancellation:
+1. threading.Event flag in DAGScheduler
+2. Passed to executor callable via closure
+3. Stage deadline exceeded → set event
+4. Executor callable checks event.is_set() before file writes and git commits
+5. Document DAG mode as experimental in ARCHITECTURE.md
+
+This is a safety net, not a complete solution (Python can't kill threads).
+
+## Acceptance
+- test_pipeline.py tests pass (119+)
+- ARCHITECTURE.md updated
+- Event flag doesn't affect normal (non-timeout) execution
+
+codex
+I’ll run the requested test first, then inspect the current diff and relevant scheduler code enough to write a grounded review. I’ll only write the review file under `reviews/` and leave `src/` untouched.
+exec
+/bin/bash -lc 'git diff -- src/unison tests ARCHITECTURE.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+exec
+/bin/bash -lc 'rg -n "DAGScheduler|execute_parallel|cancel_event|deadline|dag:" -S src tests ARCHITECTURE.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+ARCHITECTURE.md:156:When ``pipeline.yaml`` includes a ``dag:`` section, the orchestrator uses
+ARCHITECTURE.md:157:``DAGScheduler`` to execute stages in parallel according to their
+ARCHITECTURE.md:158:dependency graph.  Each stage maps to a set of agents and a deadline.
+ARCHITECTURE.md:161:(``threading.Event``) and deadline-aware scheduling, but the following
+ARCHITECTURE.md:166:  The ``cancel_event`` flag is a cooperative signal that executor
+ARCHITECTURE.md:171:Use ``pipeline.yaml`` without ``dag:`` for the stable sequential
+tests/test_reviewer_pool.py:118:# execute_parallel tests
+tests/test_reviewer_pool.py:123:    """ReviewerPool.execute_parallel tests."""
+tests/test_reviewer_pool.py:140:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:161:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:176:        verdicts = pool.execute_parallel(code_path, review_fn=_slow_pass)
+tests/test_reviewer_pool.py:401:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:421:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_pipeline.py:9:from unison.pipeline import DAGScheduler, PipelineLoader, PipelineValidationError
+tests/test_pipeline.py:637:# TestDAGScheduler — V2 DAG 多 phase 并行测试
+tests/test_pipeline.py:689:class TestDAGSchedulerBuild:
+tests/test_pipeline.py:690:    """DAGScheduler 构建图测试。"""
+tests/test_pipeline.py:694:        scheduler = DAGScheduler([])
+tests/test_pipeline.py:701:        scheduler = DAGScheduler([s])
+tests/test_pipeline.py:711:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:726:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:739:            DAGScheduler(stages)
+tests/test_pipeline.py:747:            DAGScheduler(stages)
+tests/test_pipeline.py:750:class TestDAGSchedulerCycleDetection:
+tests/test_pipeline.py:751:    """DAGScheduler 环检测测试。"""
+tests/test_pipeline.py:759:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:770:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:780:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:790:            DAGScheduler(stages)
+tests/test_pipeline.py:798:            DAGScheduler(stages)
+tests/test_pipeline.py:808:            DAGScheduler(stages)
+tests/test_pipeline.py:811:class TestDAGSchedulerTopologicalSort:
+tests/test_pipeline.py:812:    """DAGScheduler 拓扑排序测试。"""
+tests/test_pipeline.py:816:        scheduler = DAGScheduler([])
+tests/test_pipeline.py:821:        scheduler = DAGScheduler([Stage(name="a")])
+tests/test_pipeline.py:831:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:845:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:859:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:865:class TestDAGSchedulerReadyStages:
+tests/test_pipeline.py:866:    """DAGScheduler ready_stages 测试。"""
+tests/test_pipeline.py:874:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:886:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:897:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:908:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:920:class TestDAGSchedulerExecuteParallel:
+tests/test_pipeline.py:921:    """DAGScheduler execute_parallel 测试。"""
+tests/test_pipeline.py:943:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:945:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:960:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:961:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:974:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:982:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:997:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:1005:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1018:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:1024:        results = scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1033:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:1040:        results = scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1044:    def test_execute_parallel_execution(self):
+tests/test_pipeline.py:1051:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:1063:        results = scheduler.execute_parallel(executor, max_workers=3)
+tests/test_pipeline.py:1069:        # V2 deadline-aware loop poll interval = 10ms（见
+tests/test_pipeline.py:1076:# TestDAGSchedulerV2 — V2 deadline-aware executor + daemon factory
+tests/test_pipeline.py:1080:class TestDAGSchedulerV2:
+tests/test_pipeline.py:1081:    """V2 DAGScheduler tests — deadline-aware execution, daemon pool."""
+tests/test_pipeline.py:1097:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:1105:        results = scheduler.execute_parallel(
+tests/test_pipeline.py:1123:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:1131:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1151:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:1158:        results = scheduler.execute_parallel(
+tests/test_pipeline.py:1188:        scheduler = DAGScheduler(stages)
+tests/test_pipeline.py:1196:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1219:        """V2 YAML with dag: entries loads spec.dag as a non-empty list[Stage]."""
+tests/test_pipeline.py:1235:dag:
+tests/test_pipeline.py:1404:dag:
+src/unison/orchestrator.py:282:        """Run development via DAGScheduler when spec.dag is configured."""
+src/unison/orchestrator.py:283:        from unison.pipeline import DAGScheduler
+src/unison/orchestrator.py:289:        scheduler = DAGScheduler(self.spec.dag)
+src/unison/orchestrator.py:290:        cancel_event = scheduler.cancel_event
+src/unison/orchestrator.py:295:            if cancel_event.is_set():
+src/unison/orchestrator.py:307:        scheduler.execute_parallel(executor=exec_stage, max_workers=4)
+src/unison/orchestrator.py:757:        verdicts = pool.execute_parallel(world.root, review_fn=review_one)
+src/unison/pipeline.py:25:    ``DAGScheduler.execute_parallel``'s finally block — not from
+src/unison/pipeline.py:35:    the deadline-aware scheduler because orphan worker threads do
+src/unison/pipeline.py:440:# DAGScheduler — V2 多 phase 并行调度器
+src/unison/pipeline.py:444:class DAGScheduler:
+src/unison/pipeline.py:453:        scheduler = DAGScheduler(stages)
+src/unison/pipeline.py:454:        results = scheduler.execute_parallel(executor=my_executor, max_workers=4)
+src/unison/pipeline.py:468:        self.cancel_event = threading.Event()
+src/unison/pipeline.py:469:        """Set when any stage exceeds its deadline.
+src/unison/pipeline.py:471:        Executor callables should check ``cancel_event.is_set()``
+src/unison/pipeline.py:615:    def execute_parallel(
+src/unison/pipeline.py:626:        Uses a deadline-aware loop with ``wait(FIRST_COMPLETED)`` so
+src/unison/pipeline.py:630:        Sets ``self.cancel_event`` when any stage exceeds its
+src/unison/pipeline.py:631:        deadline.  Executor callables should check
+src/unison/pipeline.py:632:        ``cancel_event.is_set()`` before file-system mutations so
+src/unison/pipeline.py:653:            # hung stage would cause `execute_parallel` to block
+src/unison/pipeline.py:662:        self.cancel_event.clear()
+src/unison/pipeline.py:666:            # Map: future -> (stage, deadline)
+src/unison/pipeline.py:677:                # by the deadline check below; the only cost is
+src/unison/pipeline.py:701:                    self.cancel_event.set()
+tests/test_orchestrator.py:684:dag:
+src/unison/reviewer_pool.py:26:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+src/unison/reviewer_pool.py:34:    # execute_parallel
+src/unison/reviewer_pool.py:37:    def execute_parallel(
+
+exec
+/bin/bash -lc 'python3 -m pytest tests/test_orchestrator.py -q' in /home/sean/projects/unison
+ succeeded in 355ms:
+................                                                         [100%]
+16 passed in 0.13s
+
+codex
+The requested test suite passes. The initial scoped diff output was empty, so I’m checking status and the specific files mentioned by the DAG implementation to make sure the review reflects the actual working tree rather than only the pasted excerpt.
+exec
+/bin/bash -lc "sed -n '440,735p' src/unison/pipeline.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+# DAGScheduler — V2 多 phase 并行调度器
+# ============================================================================
+
+
+class DAGScheduler:
+    """DAG 调度器。解析依赖关系，调度 Stage 并行执行。
+
+    用法::
+
+        stages = [
+            Stage(name="a", dependencies=[]),
+            Stage(name="b", dependencies=["a"]),
+        ]
+        scheduler = DAGScheduler(stages)
+        results = scheduler.execute_parallel(executor=my_executor, max_workers=4)
+    """
+
+    def __init__(self, stages: list[Stage]) -> None:
+        """构建依赖图并检测环。
+
+        Args:
+            stages: DAG 中的 Stage 列表。
+
+        Raises:
+            ValueError: 如果依赖图包含环，或依赖引用了不存在的 Stage。
+        """
+        self.stages: list[Stage] = stages
+        self._graph: dict[str, set[str]] = {}  # stage_name → dependencies
+        self.cancel_event = threading.Event()
+        """Set when any stage exceeds its deadline.
+
+        Executor callables should check ``cancel_event.is_set()``
+        before file-system mutations so orphan threads stop
+        modifying files after the scheduler has given up on the stage.
+        """
+
+        # 校验：Stage name 唯一
+        seen: set[str] = set()
+        for stage in stages:
+            if stage.name in seen:
+                raise ValueError(
+                    f"Duplicate Stage name: {stage.name!r}"
+                )
+            seen.add(stage.name)
+
+        # 校验：依赖的 Stage 必须存在
+        for stage in stages:
+            for dep in stage.dependencies:
+                if dep not in seen:
+                    raise ValueError(
+                        f"Stage {stage.name!r} depends on unknown "
+                        f"Stage {dep!r}"
+                    )
+
+        self._build_graph()
+
+        # 检测环
+        if self._has_cycle():
+            raise ValueError("DAG contains a cycle")
+
+    def _build_graph(self) -> None:
+        """构建依赖图：stage_name → set of dependency names。"""
+        for stage in self.stages:
+            self._graph[stage.name] = set(stage.dependencies)
+
+    def _has_cycle(self) -> bool:
+        """检测依赖图是否有环（DFS）。
+
+        Returns:
+            ``True`` 如果图中存在环。
+        """
+        visited: set[str] = set()
+        rec_stack: set[str] = set()
+
+        def dfs(node: str) -> bool:
+            visited.add(node)
+            rec_stack.add(node)
+
+            for dep in self._graph.get(node, set()):
+                if dep not in visited:
+                    if dfs(dep):
+                        return True
+                elif dep in rec_stack:
+                    return True
+
+            rec_stack.remove(node)
+            return False
+
+        for node in self._graph:
+            if node not in visited:
+                if dfs(node):
+                    return True
+        return False
+
+    def topological_sort(self) -> list[str]:
+        """返回拓扑排序的 Stage name 列表（依赖在前，被依赖在后）。
+
+        使用 Kahn 算法（BFS 入度归零）。
+
+        Returns:
+            拓扑排序的 Stage name 列表。
+
+        Raises:
+            ValueError: 如果图中包含环（正常情况下不应发生，因为
+                ``__init__`` 已检测）。
+        """
+        # 计算入度：每个 Stage 有多少个未满足的依赖
+        in_degree: dict[str, int] = {name: 0 for name in self._graph}
+        for node, deps in self._graph.items():
+            # node 依赖 deps 中的每个 Stage，所以 node 的入度 = len(deps)
+            in_degree[node] = len(deps)
+
+        # 入度为 0 的节点没有依赖，可以先执行
+        queue = [name for name, degree in in_degree.items() if degree == 0]
+        result: list[str] = []
+
+        while queue:
+            node = queue.pop(0)
+            result.append(node)
+
+            # 找到依赖 node 的 Stage，减少其入度
+            for other, deps in self._graph.items():
+                if node in deps:
+                    in_degree[other] -= 1
+                    if in_degree[other] == 0:
+                        queue.append(other)
+
+        if len(result) != len(self._graph):
+            raise ValueError("DAG contains a cycle")
+
+        return result
+
+    def _ready(self, completed: set[str], failed: set[str],
+               in_flight: set[str] | None = None) -> list[Stage]:
+        """Return stages whose dependencies are all in *completed* and none
+        are in *failed*, excluding stages already in *completed*, *failed*,
+        or *in_flight*.
+
+        Args:
+            completed: Successfully completed stage names.
+            failed: Failed stage names.
+            in_flight: Stage names whose futures are still active in
+                the executor (not yet completed or failed). These
+                should not be re-submitted even if they are not yet
+                in *completed* — a race where `wait` returned
+                multiple done futures at once but only one was
+                processed before `_ready` ran again would otherwise
+                cause duplicate dispatch.
+        """
+        if in_flight is None:
+            in_flight = set()
+        ready: list[Stage] = []
+        for stage in self.stages:
+            if (stage.name in completed
+                    or stage.name in failed
+                    or stage.name in in_flight):
+                continue
+            if all(dep in completed for dep in stage.dependencies):
+                if not any(dep in failed for dep in stage.dependencies):
+                    ready.append(stage)
+        return ready
+
+    def ready_stages(self, completed: set[str]) -> list[Stage]:
+        """Return stages whose dependencies are all in *completed*.
+
+        (Public API preserved for backward compatibility.)
+        """
+        ready: list[Stage] = []
+        for stage in self.stages:
+            if stage.name in completed:
+                continue
+            if all(dep in completed for dep in stage.dependencies):
+                ready.append(stage)
+        return ready
+
+    def execute_parallel(
+        self,
+        executor: callable,
+        max_workers: int = 4,
+        pool_factory: callable = None,
+    ) -> dict[str, bool]:
+        """并行执行 DAG。
+
+        无依赖的 Stage 同时提交到线程池。每完成一个 Stage 即检查是否有
+        新的 Stage 变得可执行。依赖失败 Stage 的后续 Stage 自动标记失败。
+
+        Uses a deadline-aware loop with ``wait(FIRST_COMPLETED)`` so
+        overdue stages are marked failed without blocking on their
+        underlying thread.
+
+        Sets ``self.cancel_event`` when any stage exceeds its
+        deadline.  Executor callables should check
+        ``cancel_event.is_set()`` before file-system mutations so
+        orphan threads stop modifying files after the scheduler has
+        abandoned the stage (cooperative cancellation — Python
+        cannot kill threads).
+
+        Args:
+            executor: 执行单个 Stage 的可调用对象
+                ``(stage: Stage) -> bool``。
+            max_workers: 最大并行数。
+            pool_factory: Thread pool factory callable (injectable for tests).
+                Defaults to ``ThreadPoolExecutor``.
+
+        Returns:
+            ``{stage_name: success}`` 的映射。
+        """
+        from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+
+        if pool_factory is None:
+            # Default to a non-blocking pool: on shutdown the executor
+            # does NOT wait for running workers (we already marked
+            # overdue stages failed in the loop). Without this, a
+            # hung stage would cause `execute_parallel` to block
+            # until the worker finishes, even though the scheduler
+            # has already given up on it.
+            pool_factory = _NonWaitingThreadPoolExecutor
+
+        completed: set[str] = set()
+        failed: set[str] = set()
+        results: dict[str, bool] = {}
+
+        self.cancel_event.clear()
+
+        pool = pool_factory(max_workers=max_workers)
+        try:
+            # Map: future -> (stage, deadline)
+            futures: dict = {}
+            in_flight: set[str] = set()
+            for stage in self._ready(completed, failed, in_flight):
+                fut = pool.submit(executor, stage)
+                futures[fut] = (stage, time.monotonic() + stage.timeout)
+                in_flight.add(stage.name)
+
+            while futures:
+                # Poll interval: 10ms (was 50ms) to keep latency low
+                # for normal completion. Hung stages are still detected
+                # by the deadline check below; the only cost is
+                # ~100 wakeups/sec when stages are running.
+                done, _ = wait(futures, timeout=0.01,
+                               return_when=FIRST_COMPLETED)
+                now = time.monotonic()
+
+                # Process completions
+                for f in done:
+                    stage, _ = futures.pop(f)
+                    try:
+                        success = f.result()
+                        results[stage.name] = success
+                        (completed if success else failed).add(stage.name)
+                    except Exception:
+                        results[stage.name] = False
+                        failed.add(stage.name)
+                    in_flight.discard(stage.name)
+
+                # Detect overdue running stages
+                overdue = [
+                    (f, s) for f, (s, d) in futures.items()
+                    if now >= d
+                ]
+                if overdue:
+                    self.cancel_event.set()
+                for f, stage in overdue:
+                    futures.pop(f)
+                    results[stage.name] = False
+                    failed.add(stage.name)
+                    in_flight.discard(stage.name)
+
+                # Submit newly-ready stages (excluding in_flight to
+                # avoid re-dispatching a stage whose future we haven't
+                # processed yet — the `_ready` race fix).
+                new_ready = self._ready(completed, failed, in_flight)
+                for stage in new_ready:
+                    fut = pool.submit(executor, stage)
+                    futures[fut] = (stage, time.monotonic() + stage.timeout)
+                    in_flight.add(stage.name)
+
+            # Propagate failure to descendants
+            for stage in self.stages:
+                if stage.name in results:
+                    continue
+                if any(dep in failed for dep in stage.dependencies):
+                    results[stage.name] = False
+                    failed.add(stage.name)
+        finally:
+            # Non-blocking shutdown: do not wait for running workers
+            # (which may include timed-out stages whose Python threads
+            # we cannot kill). cancel_futures cancels PENDING futures.
+            # This is what makes the production default path safe
+            # under hung-stage scenarios (Codex Iter 1 review).
+            pool.shutdown(wait=False, cancel_futures=True)
+
+        return results
+
+exec
+/bin/bash -lc "sed -n '260,320p' src/unison/orchestrator.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+            self._run_loop(
+                active_phase="planning_active",
+                review_phase="planning_review",
+                review_of="PRD + tech-design",
+            )
+
+        if self._state.halt_signal:
+            return
+
+        # ---- Phase 2: Development --------------------------------------------
+        # V2: route to DAG scheduler when dag is configured
+        if self.spec.dag is not None:
+            self._run_dag_development()
+        else:
+            self._run_linear_development()
+
+        if not self._state.halt_signal:
+            self._state.transition("done", "orchestrator",
+                                   note="pipeline complete")
+            self._save_checkpoint()
+
+    def _run_dag_development(self) -> None:
+        """Run development via DAGScheduler when spec.dag is configured."""
+        from unison.pipeline import DAGScheduler
+
+        self._state.transition("dev_active", "orchestrator",
+                               iter_n=1, note="starting DAG development")
+        self._save_checkpoint()
+
+        scheduler = DAGScheduler(self.spec.dag)
+        cancel_event = scheduler.cancel_event
+
+        def exec_stage(stage):
+            # Cooperative cancellation: if another stage timed out,
+            # don't start file-system mutations.
+            if cancel_event.is_set():
+                return False
+            # Use stage.agents when available, fall back to default developer
+            if stage.agents:
+                for _role_name, agent_spec in stage.agents.items():
+                    pr = agent_spec.effective_role
+                    self._invoke_agent_for_role(pr, 1)
+                    break  # one agent per stage for now
+            else:
+                self._invoke_agent_for_role("developer", 1)
+            return self._state.last_dev_commit is not None
+
+        scheduler.execute_parallel(executor=exec_stage, max_workers=4)
+
+    def _run_linear_development(self) -> None:
+        """Run the standard linear dev_active ↔ dev_review loop (V1 mode)."""
+        self._state.transition("dev_active", "orchestrator",
+                               iter_n=1, note="starting development loop")
+        self._save_checkpoint()
+
+        self._run_loop(
+            active_phase="dev_active",
+            review_phase="dev_review",
+            review_of="code + tests",
+        )
+
+
+exec
+/bin/bash -lc 'git diff --stat' in /home/sean/projects/unison
+ succeeded in 0ms:
+ .unison/budget.json | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+exec
+/bin/bash -lc 'git status --short' in /home/sean/projects/unison
+ succeeded in 0ms:
+ M .unison/budget.json
+?? observer/logs/developer_iter-2_20260620T074933Z.log
+
+exec
+/bin/bash -lc "sed -n '1080,1210p' tests/test_pipeline.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+class TestDAGSchedulerV2:
+    """V2 DAGScheduler tests — deadline-aware execution, daemon pool."""
+
+    def test_dag_scheduler_returns_on_hung_stage(self):
+        """Hung stage does not block the scheduler; marked failed on timeout."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        class DaemonThreadPool(ThreadPoolExecutor):
+            """ThreadPoolExecutor that doesn't block on hung threads at shutdown."""
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                self.shutdown(wait=False)
+                return False
+
+        stages = [
+            Stage(name="hung", timeout=1),  # 1-second timeout
+            Stage(name="fast"),
+        ]
+        scheduler = DAGScheduler(stages)
+
+        def executor(stage: Stage) -> bool:
+            if stage.name == "hung":
+                time.sleep(60)  # way past the 1s timeout
+            return True
+
+        start = time.monotonic()
+        results = scheduler.execute_parallel(
+            executor, max_workers=2, pool_factory=DaemonThreadPool,
+        )
+        elapsed = time.monotonic() - start
+
+        # "hung" stage should be marked failed because of timeout
+        assert results["hung"] is False
+        # "fast" stage should succeed
+        assert results["fast"] is True
+        # The scheduler returns within timeout + reasonable grace period
+        assert elapsed < 5.0, f"Expected <5s elapsed, got {elapsed:.2f}s"
+
+    def test_dag_scheduler_submits_newly_ready_after_completion(self):
+        """Stage B becomes ready only after A completes."""
+        stages = [
+            Stage(name="a"),
+            Stage(name="b", dependencies=["a"]),
+        ]
+        scheduler = DAGScheduler(stages)
+
+        submission_order: list[str] = []
+
+        def executor(stage: Stage) -> bool:
+            submission_order.append(stage.name)
+            return True
+
+        results = scheduler.execute_parallel(executor, max_workers=2)
+        assert results == {"a": True, "b": True}
+        # "a" must be submitted before "b"
+        assert submission_order.index("a") < submission_order.index("b")
+
+    def test_dag_scheduler_daemon_factory_for_tests(self):
+        """DaemonThreadPool factory returns cleanly without blocking on hung threads."""
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        class DaemonThreadPool(ThreadPoolExecutor):
+            """ThreadPoolExecutor subclass that doesn't block on shutdown."""
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                self.shutdown(wait=False)
+                return False
+
+        stages = [
+            Stage(name="a"),
+            Stage(name="b"),
+        ]
+        scheduler = DAGScheduler(stages)
+
+        def executor(stage: Stage) -> bool:
+            return True
+
+        before_count = len(threading.enumerate())
+
+        results = scheduler.execute_parallel(
+            executor, max_workers=2, pool_factory=DaemonThreadPool
+        )
+        assert results == {"a": True, "b": True}
+
+        # Pool threads should have been cleaned up (shutdown was called)
+        after_count = len(threading.enumerate())
+        # Thread count should be close to before (allow for minor fluctuation)
+        assert abs(after_count - before_count) <= 2, \
+            f"Expected ~{before_count} threads, got {after_count}"
+
+    def test_dag_scheduler_default_path_returns_on_hung_stage(self):
+        """Production default path (no pool_factory injected) must
+        return within timeout + grace even when a stage hangs.
+
+        Codex Iter 1 review found that the previous default used
+        ``with ThreadPoolExecutor(...) as pool:`` which calls
+        ``shutdown(wait=True)`` on exit, blocking until the hung
+        worker finishes. The fix is the explicit
+        ``pool.shutdown(wait=False, cancel_futures=True)`` in the
+        finally block, combined with the
+        ``_NonWaitingThreadPoolExecutor`` default factory.
+
+        This test exercises the production default by NOT passing
+        ``pool_factory`` — it must still return promptly.
+        """
+        stages = [
+            Stage(name="hung", timeout=1),
+            Stage(name="fast"),
+        ]
+        scheduler = DAGScheduler(stages)
+
+        def executor(stage: Stage) -> bool:
+            if stage.name == "hung":
+                time.sleep(2.0)  # way past the 1s timeout
+            return True
+
+        start = time.monotonic()
+        results = scheduler.execute_parallel(executor, max_workers=2)
+        elapsed = time.monotonic() - start
+
+        assert results["hung"] is False
+        assert results["fast"] is True
+        # Default path must return within timeout + small grace.
+        # We allow 1.6s (timeout=1.0s + 0.5s grace + 0.1s CI noise).
+        assert elapsed < 1.6, (
+            f"Default path returned in {elapsed:.3f}s — "
+            f"the production path is blocking on hung workers. "
+            f"Codex Iter 1 review finding."
+        )
+
+
+# ============================================================================
+
+codex
+The working tree currently shows only budget/log artifacts as unstaged, so the DAG code under review appears to already be in `HEAD`. I’m reading the iteration-2 developer log and committed context to identify whether the fix addressed the previous review finding.
+exec
+/bin/bash -lc "sed -n '1,80p' src/unison/pipeline.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+"""
+pipeline.py — PipelineSpec loading + validation + dry-run
+=========================================================
+万物一心（Unison）Multi-Agent Collaboration Bridge
+
+Loads ``pipeline.yaml``, validates required fields and runtimes,
+constructs an immutable ``PipelineSpec``, and provides a ``dry_run``
+check for prompt-file existence.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any
+
+
+class _NonWaitingThreadPoolExecutor(ThreadPoolExecutor):
+    """ThreadPoolExecutor marker subclass for the production default.
+
+    The non-blocking behavior comes from the explicit
+    ``pool.shutdown(wait=False, cancel_futures=True)`` call in
+    ``DAGScheduler.execute_parallel``'s finally block — not from
+    overriding ``__exit__``. This subclass exists so the production
+    default can be distinguished from a user-supplied default
+    ``ThreadPoolExecutor`` and so future maintainers see the
+    rationale at the import site.
+
+    If you want to make the daemon-exit behavior more robust (e.g.
+    set ``thread.daemon = True`` on the worker threads), subclass
+    and override ``_adjust_thread_count`` here. The current
+    ``shutdown(wait=False, cancel_futures=True)`` is sufficient for
+    the deadline-aware scheduler because orphan worker threads do
+    not block process exit if the harness returns promptly.
+    """
+
+import yaml
+
+from interfaces import (
+    AgentSpec,
+    BootstrapConfig,
+    BudgetConfig,
+    PipelineSpec,
+    ProjectConfig,
+    ReviewerConfig,
+    RiskMatrixConfig,
+    SnapshotConfig,
+    Stage,
+    WorktreeConfig,
+    World,
+)
+
+# ============================================================================
+# Exceptions
+# ============================================================================
+
+
+class PipelineValidationError(Exception):
+    """Raised when pipeline.yaml fails validation.
+
+    Carries a human-readable message suitable for CLI output.
+    """
+
+    pass
+
+
+# ============================================================================
+# PipelineLoader
+# ============================================================================
+
+
+class PipelineLoader:
+    """Load and validate ``pipeline.yaml`` configuration files.
+
+    Usage::
+
+        loader = PipelineLoader()
+        spec = loader.load(Path("path/to/pipeline.yaml"))
+
+exec
+/bin/bash -lc "sed -n '1,220p' observer/logs/developer_iter-2_20260620T074933Z.log" in /home/sean/projects/unison
+ succeeded in 0ms:
+=== COMMAND ===
+claude -p --dangerously-skip-permissions Implement log key masking per prd/PRD.md. Add mask_secrets() function that scans text for API key patterns (sk-..., Bearer ..., api_key=...) and replaces with [REDACTED]. Use in all runner log writing. Add to src/unison/runners/base.py or new utils.py. pytest tests/test_orchestrator.py -q must pass. git add -A && git commit.
+
+# Developer — Unison code review fix
+
+Implement the fix per the approved PRD and tech-design.
+
+1. Read prd/PRD.md and prd/tech-design.md
+2. Modify only the files specified in the design
+3. Keep tests green — run the test command first
+4. git add -A && git commit with a descriptive message
+
+
+## Last Review Findings
+[INFO] src/unison/runners/base.py:35 only masks unquoted NAME_API_KEY=value assignments. Common prompt/env-file forms such as OPENAI_API_KEY="plain-token" or FOO_API_KEY='plain-token' are not redacted unless the value also matches another generic pattern or is already present in os.environ, so embedded API keys can still be written verbatim to runner logs.
+
+## Git Diff
+diff --git a/observer/logs/developer_iter-1_20260620T074132Z.log b/observer/logs/developer_iter-1_20260620T074132Z.log
+new file mode 100644
+index 0000000..460e1a9
+--- /dev/null
++++ b/observer/logs/developer_iter-1_20260620T074132Z.log
+@@ -0,0 +1,290 @@
++=== COMMAND ===
++claude -p --dangerously-skip-permissions Implement log key masking per prd/PRD.md. Add mask_secrets() function that scans text for API key patterns (sk-..., Bearer ..., api_key=...) and replaces with [REDACTED]. Use in all runner log writing. Add to src/unison/runners/base.py or new utils.py. pytest tests/test_orchestrator.py -q must pass. git add -A && git commit.
++
++# Developer — Unison code review fix
++
++Implement the fix per the approved PRD and tech-design.
++
+... (truncated)
+
+diff --git a/observer/logs/developer_iter-1_20260620T073120Z.log b/observer/logs/developer_iter-1_20260620T073120Z.log
++new file mode 100644
++index 0000000..3f745dc
++--- /dev/null
+++++ b/observer/logs/developer_iter-1_20260620T073120Z.log
++@@ -0,0 +1,303 @@
+++=== COMMAND ===
+++claude -p --dangerously-skip-permissions Refactor runners per prd/PRD.md. Create BaseRunner in src/unison/runners/base.py with shared subprocess.run, timeout handling, log writing, AgentResult construction. Make ClaudeRunner, CodexRunner, HermesRunner subclass BaseRunner with only binary name overrides. Keep OpenClawRunner unchanged. pytest tests/ -q must pass (all 500+ tests). git add -A && git commit.
+++
+++# Developer — Unison code review fix
+++
+++Implement the fix per the approved PRD and tech-design.
+++
+++1. Read prd/PRD.md and prd/tech-design.md
++... (truncated)
++
++
+
+diff --git a/.unison/budget.json b/.unison/budget.json
+++deleted file mode 100644
+++index 17eb78a..0000000
+++--- a/.unison/budget.json
++++++ /dev/null
+++@@ -1,19 +0,0 @@
+++-{
+++-  "date": "2026-06-20",
+++-  "daily_used": 3574,
+++-  "task_used": 3574,
+++-  "phases": [
+++-    {
+++-      "phase": "developer",
+++-      "iter_n": 1,
+++-      "tokens_used": 2359,
+++-      "timestamp": "2026-06-20T07:22:41.165622+00:00"
+++-    },
+++-    {
+++-      "phase": "reviewer",
+++-      "iter_n": 1,
+++-      "tokens_used": 1215,
+++... (truncated)
+++
+++
++
++
+
+diff --git a/observer/logs/developer_iter-2_20260620T072740Z.log b/observer/logs/developer_iter-2_20260620T072740Z.log
+++new file mode 100644
+++index 0000000..269f107
+++--- /dev/null
++++++ b/observer/logs/developer_iter-2_20260620T072740Z.log
+++@@ -0,0 +1,169 @@
++++=== COMMAND ===
++++claude -p --dangerously-skip-permissions Implement snapshot exclude_patterns per prd/PRD.md. Add exclude_patterns field to SnapshotConfig in interfaces.py (optional, default=['~/.hermes/.env', '~/.openclaw/**/auth-profiles.json']). Filter paths in snapshot.py before copying. Add test_sensitive_excluded to tests/test_snapshot.py. pytest tests/test_snapshot.py -q must pass (12+). git add -A && git commit.
++++
++++# Developer — Unison code review fix
++++
++++Implement the fix per the approved PRD and tech-design.
++++
++++1. Read prd/PRD.md and prd/tech-design.md
++++2. Modify only the files specified in the design
++++3. Keep tests green — run the test command first
++++4. git add -A && git commit with a descriptive message
++++
++++
++++## Last Review Findings
++++[INFO] src/unison/snapshot.py:68 leaves FileSnapshotManager.exclude_patterns empty by default, so FileSnapshotManager(base_dir=...) still allows snapshots of ~/.hermes/.env and ~/.openclaw/**/auth-profiles.json unless callers manually pass patterns; the PRD requires these sensitive paths to be excluded by default.
++++[INFO] src/unison/pipeline.py:337-343 omits exclude_patterns when building SnapshotConfig from YAML, so user-provided snapshot exclusions are silently ignored.
++++
++++## Git Diff
++++
+++
+++
++
++
+
+diff --git a/interfaces.py b/interfaces.py
++++index 8922797..58592bf 100644
++++--- a/interfaces.py
+++++++ b/interfaces.py
++++@@ -206,6 +206,10 @@ class SnapshotConfig:
++++         "~/.hermes/skills/",
++++         "~/.openclaw/agents/",
++++     ])
+++++    exclude_patterns: list[str] = field(default_factory=lambda: [
+++++        "~/.hermes/.env",
+++++        "~/.openclaw/**/auth-profiles.json",
+++++    ])
++++... (truncated)
++++
++++
+++
+++
++
++
+
+diff --git a/src/unison/snapshot.py b/src/unison/snapshot.py
++++index ca7be1d..7b3f32a 100644
++++--- a/src/unison/snapshot.py
+++++++ b/src/unison/snapshot.py
++++@@ -6,6 +6,7 @@ at ``base_dir/manifest.json`` mapping audit_ids to their SnapshotRecord.
++++ 
++++ from __future__ import annotations
++++ 
+++++import fnmatch
++++ import json
++++ import shutil
++++ import uuid
++++@@ -64,6 +65,34 @@ class FileSnapshotManager:
++++     base_dir: Path
++++     retention_hours: int = 168
++++     max_slots: int = 100
+++++    exclude_patterns: list[str] = field(default_factory=list)
+++++
+++++    # ------------------------------------------------------------------
+++++    # public helpers
+++++    # ------------------------------------------------------------------
+++++
+++++    def _should_snapshot(self, path: Path) -> bool:
+++++        """Return False if *path* matches any exclude pattern."""
+++++        if not self.exclude_patterns:
+++++            return True
+++++
+++++        resolved = str(path.resolve())
+++++        for pattern in self.exclude_patterns:
+++++            # Expand ~ to user's home directory
+++++            if pattern.startswith("~"):
+++++                expanded = str(Path(pattern).expanduser().resolve())
+++++                if fnmatch.fnmatch(resolved, expanded):
+++++                    return False
+++++            # Match just the filename for simple patterns (e.g. "*.env")
+++++            if fnmatch.fnmatch(path.name, pattern):
+++++                return False
+++++            # Path.match for globstar (**) support
+++++            try:
+++++                if path.match(pattern):
+++++                    return False
+++++            except (ValueError, OSError):
+++++                pass
+++++        return True
++++ 
++++     # ------------------------------------------------------------------
++++     # internal helpers
++++@@ -122,7 +151,15 @@ class FileSnapshotManager:
++++         """Take a snapshot of *path* (file or directory).
++++ 
++++         Returns a ``SnapshotRecord`` describing the snapshot.
+++++
+++++        Raises:
+++++            ValueError: If *path* matches an ``exclude_pattern``.
++++         """
+++++        if not self._should_snapshot(path):
+++++            raise ValueError(
+++++                f"Path {path} matches an exclude pattern, snapshot skipped"
+++++            )
+++++
++++         audit_id = uuid.uuid4().hex
++++         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
++++ 
++++
++++
++++
+++
+++
++
++
+
+diff --git a/tests/test_snapshot.py b/tests/test_snapshot.py
++++index 80e973a..f602327 100644
++++--- a/tests/test_snapshot.py
+++++++ b/tests/test_snapshot.py
++++@@ -181,6 +181,25 @@ class TestFileSnapshotManager:
++++         assert record.snapshot_path.stat().st_mode == original.stat().st_mode
++++ 
++++ 
+++++    def test_sensitive_excluded(self, tmp_path):
+++++        """Sensitive files matching exclude_patterns are rejected."""
+++++        sm = FileSnapshotManager(
+++++            base_dir=tmp_path / "snapshots",
+++++            exclude_patterns=["*.env", "*.secret"],
+++++        )
+++++
+++++        env_file = tmp_path / ".env"
+++++        env_file.write_text("API_KEY=secret123")
+++++
+++++        with pytest.raises(ValueError, match="exclude"):
+++++            sm.snapshot(
+++++                path=env_file,
+++++                operation=Operation.MODIFY,
+
+exec
+/bin/bash -lc 'git show -- src/unison/pipeline.py src/unison/orchestrator.py tests/test_pipeline.py ARCHITECTURE.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+commit 0cc208cac6025a565cd0c2b425faef04f1e9fecd
+Author: Sean <sean@openclaw.ai>
+Date:   Sat Jun 20 15:50:27 2026 +0800
+
+    fix: extend mask_secrets() to redact quoted API key values
+    
+    The _API_KEY= and _SECRET= regex patterns previously excluded
+    double-quote and single-quote characters from the value match,
+    so OPENAI_API_KEY="plain-token" and FOO_API_KEY='plain-token'
+    were not redacted. Extend all three value-assignment patterns
+    (api_key=, *_API_KEY=, *_SECRET=) to also match double-quoted
+    and single-quoted values.
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index 16fb3d1..2610ca3 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -151,6 +151,26 @@ halt_signal 触发条件（任意循环中）:
+ Planner 和 Developer 循环的唯一区别是 **产出物不同**（PRD vs 代码），
+ 以及 **Reviewer 的审查维度不同**（需求完整性 vs 代码质量）。
+ 
++### DAG Mode (Experimental)
++
++When ``pipeline.yaml`` includes a ``dag:`` section, the orchestrator uses
++``DAGScheduler`` to execute stages in parallel according to their
++dependency graph.  Each stage maps to a set of agents and a deadline.
++
++**Status: Experimental.**  DAG mode has cooperative cancellation
++(``threading.Event``) and deadline-aware scheduling, but the following
++limitations apply:
++
++- Python threads cannot be forcibly killed — a timed-out stage's
++  thread continues to run until the agent subprocess exits on its own.
++  The ``cancel_event`` flag is a cooperative signal that executor
++  callables should check before file-system mutations.
++- Failure propagation across parallel groups is best-effort.
++- Only one agent per stage is supported in the current implementation.
++
++Use ``pipeline.yaml`` without ``dag:`` for the stable sequential
++Developer ↔ Reviewer loop.
++
+ **每次 agent 调用前的 pre-invoke 清理**:
+ ```
+ git reset --hard HEAD && git clean -fd
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 527c161..2f3e729 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -287,8 +287,13 @@ class Orchestrator:
+         self._save_checkpoint()
+ 
+         scheduler = DAGScheduler(self.spec.dag)
++        cancel_event = scheduler.cancel_event
+ 
+         def exec_stage(stage):
++            # Cooperative cancellation: if another stage timed out,
++            # don't start file-system mutations.
++            if cancel_event.is_set():
++                return False
+             # Use stage.agents when available, fall back to default developer
+             if stage.agents:
+                 for _role_name, agent_spec in stage.agents.items():
+diff --git a/src/unison/pipeline.py b/src/unison/pipeline.py
+index 1932f42..2b62c66 100644
+--- a/src/unison/pipeline.py
++++ b/src/unison/pipeline.py
+@@ -10,6 +10,7 @@ check for prompt-file existence.
+ 
+ from __future__ import annotations
+ 
++import threading
+ import time
+ from concurrent.futures import ThreadPoolExecutor
+ from pathlib import Path
+@@ -464,6 +465,13 @@ class DAGScheduler:
+         """
+         self.stages: list[Stage] = stages
+         self._graph: dict[str, set[str]] = {}  # stage_name → dependencies
++        self.cancel_event = threading.Event()
++        """Set when any stage exceeds its deadline.
++
++        Executor callables should check ``cancel_event.is_set()``
++        before file-system mutations so orphan threads stop
++        modifying files after the scheduler has given up on the stage.
++        """
+ 
+         # 校验：Stage name 唯一
+         seen: set[str] = set()
+@@ -619,6 +627,13 @@ class DAGScheduler:
+         overdue stages are marked failed without blocking on their
+         underlying thread.
+ 
++        Sets ``self.cancel_event`` when any stage exceeds its
++        deadline.  Executor callables should check
++        ``cancel_event.is_set()`` before file-system mutations so
++        orphan threads stop modifying files after the scheduler has
++        abandoned the stage (cooperative cancellation — Python
++        cannot kill threads).
++
+         Args:
+             executor: 执行单个 Stage 的可调用对象
+                 ``(stage: Stage) -> bool``。
+@@ -644,6 +659,8 @@ class DAGScheduler:
+         failed: set[str] = set()
+         results: dict[str, bool] = {}
+ 
++        self.cancel_event.clear()
++
+         pool = pool_factory(max_workers=max_workers)
+         try:
+             # Map: future -> (stage, deadline)
+@@ -680,6 +697,8 @@ class DAGScheduler:
+                     (f, s) for f, (s, d) in futures.items()
+                     if now >= d
+                 ]
++                if overdue:
++                    self.cancel_event.set()
+                 for f, stage in overdue:
+                     futures.pop(f)
+                     results[stage.name] = False
+
+exec
+/bin/bash -lc 'git show --stat --oneline --decorate --no-renames HEAD' in /home/sean/projects/unison
+ succeeded in 0ms:
+0cc208c (HEAD -> master) fix: extend mask_secrets() to redact quoted API key values
+ .unison/budget.json                                |   19 +
+ ARCHITECTURE.md                                    |   20 +
+ observer/logs/reviewer_iter-1_20260620T074332Z.log | 1372 ++++++++++++++++++++
+ reviews/iter-1.md                                  |    6 +
+ src/unison/orchestrator.py                         |    5 +
+ src/unison/pipeline.py                             |   19 +
+ src/unison/runners/base.py                         |   26 +-
+ 7 files changed, 1459 insertions(+), 8 deletions(-)
+
+codex
+The implementation adds the shared `cancel_event` and marks it when stages go overdue, but I’m checking the actual mutation path now. The important question is whether the orchestrator’s executor checks cancellation at the points the PRD calls out: before writes and commits, not only before launching the stage.
+exec
+/bin/bash -lc "sed -n '320,460p' src/unison/orchestrator.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+
+        if not self._state.halt_signal:
+            self._state.transition("done", "orchestrator",
+                                   note="pipeline complete")
+            self._save_checkpoint()
+
+    def _should_plan(self) -> bool:
+        """Return True if the planning phase should run.
+
+        Planning runs when a ``planner`` agent is configured in the spec.
+        If no planner is defined, we skip straight to development
+        (PRD was authored externally — ARCHITECTURE.md §21).
+        """
+        return any(a.effective_role == "planner" for a in self.spec.agents.values())
+
+    def _run_loop(
+        self,
+        active_phase: str,
+        review_phase: str,
+        review_of: str,
+    ) -> None:
+        """Run a single active→review loop.
+
+        Generic shared by planning and development.  The only differences
+        are the phase names and the reviewer's evaluation focus.
+
+        Args:
+            active_phase: Phase name for active work
+                          ("planning_active" or "dev_active").
+            review_phase: Phase name for review
+                          ("planning_review" or "dev_review").
+            review_of: Human-readable description of what is being reviewed
+                       (used in verdict routing messages).
+        """
+        max_iter = self.spec.max_iterations
+
+        # Map phase → agent role
+        role_for_phase = {
+            "planning_active": "planner",
+            "dev_active": "developer",
+        }
+        agent_role = role_for_phase[active_phase]
+
+        for iteration in range(1, max_iter + 1):
+            if self._state.halt_signal:
+                return
+
+            # ---- Active phase -----------------------------------------------
+            self._state.transition(
+                active_phase, "orchestrator",
+                iter_n=iteration,
+                note=f"{active_phase} iter {iteration}/{max_iter}",
+            )
+            self._save_checkpoint()
+
+            self._invoke_agent_for_role(agent_role, iteration)
+
+            if self._state.halt_signal:
+                return
+
+            # ---- Review phase -----------------------------------------------
+            self._state.transition(
+                review_phase, "orchestrator",
+                iter_n=iteration,
+                note=f"{review_phase} iter {iteration}/{max_iter}",
+            )
+            self._save_checkpoint()
+
+            reviewer_count = self._get_reviewer_count()
+            if reviewer_count > 1:
+                self._invoke_multi_reviewer(iteration, review_phase)
+            else:
+                self._invoke_agent_for_role("reviewer", iteration, review_phase=review_phase)
+
+            if self._state.halt_signal:
+                return
+
+            # ---- Verdict routing --------------------------------------------
+            verdict = self._parse_verdict(iteration, review_phase)
+
+            if verdict == "PASS":
+                # Exit loop — review approved
+                return
+
+            if verdict is None:
+                # Verdict parse error — halt
+                review_path = self._review_file_for_phase(review_phase, iteration)
+                self.halt(
+                    f"Could not parse verdict from "
+                    f"{review_path} "
+                    f"({review_of} loop, iter {iteration})"
+                )
+                return
+
+            # verdict == "REQUEST_CHANGES" → loop continues
+            # (iteration increment happens automatically)
+
+        # Loop exhausted without PASS
+        if self._state.last_review_verdict != "PASS":
+            self.halt(
+                f"Max iterations ({max_iter}) reached in {review_of} loop "
+                f"without PASS verdict"
+            )
+
+    # ==================================================================
+    # Internal: agent invocation
+    # ==================================================================
+
+    def _invoke_agent_for_role(self, role: str, iteration: int, review_phase: str = "dev_review") -> None:
+        """Invoke an agent subprocess for *role* at *iteration*.
+
+        Args:
+            role: Agent role ("planner", "developer", "reviewer").
+            iteration: Current iteration number.
+            review_phase: "planning_review" or "dev_review" (for correct review file path).
+        """
+        # 0. V2: parallel-dev routing
+        if role == "developer":
+            pd = self.spec.parallel_dev
+            if pd is not None:
+                if pd.enabled:
+                    feature_list = pd.features or []
+                    if not feature_list:
+                        raise PipelineValidationError(
+                            "parallel_dev.enabled=True but features list is empty. "
+                            "Either set features=[...] or set enabled=False."
+                        )
+                    self._invoke_parallel_developers(iteration, pd, feature_list)
+                    return
+                # enabled=False → fall through to single-developer path
+                # (documented kill switch, tested as regression guard)
+
+        world = self.spec.world
+
+        # 1. Select runner with budget-aware downgrade
+        runner, effective_spec = self._select_runner(role)
+        if runner is None or effective_spec is None:
+            return
+
+        # 2. Check budget overflow BEFORE invoking agent
+        tracker = self._get_budget_tracker(role)
+
+exec
+/bin/bash -lc 'rg -n "def _invoke_agent_for_role|last_dev_commit|git commit|commit" src/unison/orchestrator.py' in /home/sean/projects/unison
+ succeeded in 0ms:
+305:            return self._state.last_dev_commit is not None
+428:    def _invoke_agent_for_role(self, role: str, iteration: int, review_phase: str = "dev_review") -> None:
+512:        if detected.commit:
+513:            self._state.last_dev_commit = detected.commit
+582:                f"5. Commit with: git add -A && git commit -m '{feature_name}: ...'"
+608:            if detected.commit:
+609:                self._state.last_dev_commit = detected.commit
+869:                f"Commit with: git add -A && git commit -m '...'"
+962:            # Check if parent commit exists (fails on initial commit)
+971:                # First commit — show staged changes instead
+1002:        """Check for valid uncommitted work after an agent timeout.
+1005:        the 600s timeout fires. If there are uncommitted changes AND
+1006:        the test suite passes against them, auto-commit the work so
+1023:            # Run the project's test command against the uncommitted state
+1034:                return  # tests fail — can't auto-commit
+1036:            # Tests pass, work is valid — auto-commit
+1044:                ["git", "commit", "-m",
+1045:                 f"{role}: auto-commit after timeout recovery (iter {iteration})"],
+1051:                "timeout-recovery: auto-committed %s work for iter %d "
+1052:                "(tests passed against uncommitted state)",
+1180:            commit=self._state.last_dev_commit,
+
+exec
+/bin/bash -lc "sed -n '460,620p' src/unison/orchestrator.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+        tracker = self._get_budget_tracker(role)
+        if not tracker.check_budget():
+            if self.spec.budget.overflow_action == "halt":
+                self.halt(
+                    f"budget overflow: {role} "
+                    f"(daily={tracker.current_usage}/{tracker.daily_limit})"
+                )
+                return
+            # overflow_action == "downgrade" — already handled in _select_runner
+
+        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
+        if role == "developer":
+            self.pre_invoke_cleanup()
+
+        if self._state.halt_signal:
+            return
+
+        # 4. Build prompt (uses BudgetTracker for token budget)
+        prompt = self._build_prompt(role, iteration, review_phase=review_phase)
+
+        # 5. Build log path
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        log_path = world.agent_log(role, iteration, timestamp)  # type: ignore[arg-type]
+
+        # 6. Run agent subprocess
+        result = runner.run(
+            spec=effective_spec,
+            prompt=prompt,
+            workdir=world.root,
+            timeout=self.spec.per_agent_timeout,
+            log_path=log_path,
+        )
+
+        # 7. Timeout-recovery: Claude Code often times out at 600s with
+        # valid work already on disk (tested in 4 of 5 Claude invocations
+        # during V2 fix Iter 1-3). Check for partial-but-valid output
+        # before declaring failure.
+        if not result.success and result.error and "timeout" in result.error.lower():
+            self._recover_timeout_work(role, world, iteration)
+
+        # 8. Track token usage (estimate from prompt length)
+        estimated_tokens = max(1, len(prompt) // 4)
+        tracker.add_usage(estimated_tokens, phase=role, iter_n=iteration)
+
+        # 8. Post-invoke completion detection (§5)
+        detected = self._detector.detect(
+            workspace=world.root,
+            expected_iter=iteration,
+            role=role,
+            log_path=log_path,
+        )
+
+        if detected.commit:
+            self._state.last_dev_commit = detected.commit
+
+        # Halt on consecutive failure (ARCHITECTURE.md §3 halt conditions)
+        if not detected.success:
+            # In v1, single non-zero exit does not halt — the agent
+            # may have produced useful output before crashing.
+            # Consecutive failure tracking is a V2 feature.
+            pass
+
+    def _invoke_parallel_developers(
+        self, iteration: int, pd, feature_list: list[str]
+    ) -> None:
+        """Dispatch one Developer agent per feature via worktree isolation.
+
+        Creates a git worktree for each feature name, runs the developer
+        agent in that worktree, then merges all feature branches back
+        via ``WorktreeManager.merge_reconciliation``.
+
+        Args:
+            iteration: Current iteration number.
+            pd: ``WorktreeConfig`` from ``spec.parallel_dev``.
+            feature_list: Feature names to parallelize over.
+        """
+        from unison.worktree import WorktreeManager, WorktreeInfo
+
+        world = self.spec.world
+
+        # Pre-invoke cleanup once (not per-feature)
+        self.pre_invoke_cleanup()
+        if self._state.halt_signal:
+            return
+
+        mgr = WorktreeManager(config=pd, project_root=world.root)
+        worktree_infos: list[WorktreeInfo | None] = []
+
+        # Create worktrees for each feature
+        for feature_name in feature_list:
+            info = mgr.create_worktree(feature_name)
+            worktree_infos.append(info)
+            if info is None:
+                self._state.transition(
+                    "dev_active", "orchestrator",
+                    iter_n=iteration,
+                    note=f"Worktree creation failed for {feature_name}",
+                )
+
+        # Dispatch one Developer to each created worktree
+        for feature_name, info in zip(feature_list, worktree_infos):
+            if info is None:
+                continue
+
+            if self._state.halt_signal:
+                break
+
+            # Get runner for developer
+            runner, effective_spec = self._select_runner("developer")
+            if runner is None or effective_spec is None:
+                continue
+
+            # Build feature-specific prompt
+            prompt = (
+                f"=== Parallel Developer: {feature_name} ===\n"
+                f"Iteration {iteration}\n"
+                f"Feature: {feature_name}\n"
+                f"Worktree: {info.path}\n"
+                f"1. Read prd/PRD.md and prd/tech-design.md\n"
+                f"2. Implement {feature_name} in src/\n"
+                f"3. Write tests in tests/\n"
+                f"4. Run: {self.spec.project.test_command}\n"
+                f"5. Commit with: git add -A && git commit -m '{feature_name}: ...'"
+            )
+
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            log_path = world.agent_log("developer", iteration, f"{timestamp}_{feature_name}")  # type: ignore[arg-type]
+
+            runner.run(
+                spec=effective_spec,
+                prompt=prompt,
+                workdir=info.path,
+                timeout=self.spec.per_agent_timeout,
+                log_path=log_path,
+            )
+
+            # Track token usage
+            tracker = self._get_budget_tracker("developer")
+            estimated_tokens = max(1, len(prompt) // 4)
+            tracker.add_usage(estimated_tokens, phase=f"developer_{feature_name}", iter_n=iteration)
+
+            # Completion detection
+            detected = self._detector.detect(
+                workspace=info.path,
+                expected_iter=iteration,
+                role="developer",
+                log_path=log_path,
+            )
+            if detected.commit:
+                self._state.last_dev_commit = detected.commit
+
+        # Merge all feature branches
+        branch_names = [
+            info.branch for info in worktree_infos
+            if info is not None
+        ]
+        if branch_names:
+            merge_result = mgr.merge_reconciliation(branch_names, strategy="ff")
+            if not merge_result.success:
+                logger = __import__("logging").getLogger(__name__)
+                logger.warning(
+
+exec
+/bin/bash -lc "sed -n '1,120p' reviews/iter-1.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+---
+verdict: REQUEST_CHANGES
+summary: "Secret masking is applied to runner logs and the requested tests pass, but quoted API-key assignments can still leak."
+findings:
+  - "src/unison/runners/base.py:35 only masks unquoted NAME_API_KEY=value assignments. Common prompt/env-file forms such as OPENAI_API_KEY=\"plain-token\" or FOO_API_KEY='plain-token' are not redacted unless the value also matches another generic pattern or is already present in os.environ, so embedded API keys can still be written verbatim to runner logs."
+---
+
+codex
+I found a substantive mismatch with the DAG PRD: the scheduler sets the event, but the orchestrator’s stage executor only checks it once before invoking the agent. A timed-out worker that later returns can still run timeout recovery/detection logic, including auto-commit paths, without consulting the cancellation flag.
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '288,310p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   288	
+   289	        scheduler = DAGScheduler(self.spec.dag)
+   290	        cancel_event = scheduler.cancel_event
+   291	
+   292	        def exec_stage(stage):
+   293	            # Cooperative cancellation: if another stage timed out,
+   294	            # don't start file-system mutations.
+   295	            if cancel_event.is_set():
+   296	                return False
+   297	            # Use stage.agents when available, fall back to default developer
+   298	            if stage.agents:
+   299	                for _role_name, agent_spec in stage.agents.items():
+   300	                    pr = agent_spec.effective_role
+   301	                    self._invoke_agent_for_role(pr, 1)
+   302	                    break  # one agent per stage for now
+   303	            else:
+   304	                self._invoke_agent_for_role("developer", 1)
+   305	            return self._state.last_dev_commit is not None
+   306	
+   307	        scheduler.execute_parallel(executor=exec_stage, max_workers=4)
+   308	
+   309	    def _run_linear_development(self) -> None:
+   310	        """Run the standard linear dev_active ↔ dev_review loop (V1 mode)."""
+
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '488,516p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   488	            workdir=world.root,
+   489	            timeout=self.spec.per_agent_timeout,
+   490	            log_path=log_path,
+   491	        )
+   492	
+   493	        # 7. Timeout-recovery: Claude Code often times out at 600s with
+   494	        # valid work already on disk (tested in 4 of 5 Claude invocations
+   495	        # during V2 fix Iter 1-3). Check for partial-but-valid output
+   496	        # before declaring failure.
+   497	        if not result.success and result.error and "timeout" in result.error.lower():
+   498	            self._recover_timeout_work(role, world, iteration)
+   499	
+   500	        # 8. Track token usage (estimate from prompt length)
+   501	        estimated_tokens = max(1, len(prompt) // 4)
+   502	        tracker.add_usage(estimated_tokens, phase=role, iter_n=iteration)
+   503	
+   504	        # 8. Post-invoke completion detection (§5)
+   505	        detected = self._detector.detect(
+   506	            workspace=world.root,
+   507	            expected_iter=iteration,
+   508	            role=role,
+   509	            log_path=log_path,
+   510	        )
+   511	
+   512	        if detected.commit:
+   513	            self._state.last_dev_commit = detected.commit
+   514	
+   515	        # Halt on consecutive failure (ARCHITECTURE.md §3 halt conditions)
+   516	        if not detected.success:
+
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '1000,1054p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+  1000	        self, role: str, world, iteration: int
+  1001	    ) -> None:
+  1002	        """Check for valid uncommitted work after an agent timeout.
+  1003	
+  1004	        Claude Code consistently produces valid output on disk before
+  1005	        the 600s timeout fires. If there are uncommitted changes AND
+  1006	        the test suite passes against them, auto-commit the work so
+  1007	        the pipeline can proceed to review.
+  1008	
+  1009	        This is called from ``_invoke_agent_for_role`` when
+  1010	        ``runner.run()`` reports a timeout error.
+  1011	        """
+  1012	        try:
+  1013	            status = subprocess.run(
+  1014	                ["git", "status", "--porcelain"],
+  1015	                cwd=str(world.root),
+  1016	                capture_output=True,
+  1017	                text=True,
+  1018	                timeout=10,
+  1019	            )
+  1020	            if status.returncode != 0 or not status.stdout.strip():
+  1021	                return  # nothing to recover
+  1022	
+  1023	            # Run the project's test command against the uncommitted state
+  1024	            if not self.spec.project.test_command:
+  1025	                return  # no test command configured
+  1026	            test_result = subprocess.run(
+  1027	                shlex.split(self.spec.project.test_command),
+  1028	                cwd=str(world.root),
+  1029	                capture_output=True,
+  1030	                text=True,
+  1031	                timeout=120,
+  1032	            )
+  1033	            if test_result.returncode != 0:
+  1034	                return  # tests fail — can't auto-commit
+  1035	
+  1036	            # Tests pass, work is valid — auto-commit
+  1037	            subprocess.run(
+  1038	                ["git", "add", "-A"],
+  1039	                cwd=str(world.root),
+  1040	                capture_output=True,
+  1041	                timeout=10,
+  1042	            )
+  1043	            subprocess.run(
+  1044	                ["git", "commit", "-m",
+  1045	                 f"{role}: auto-commit after timeout recovery (iter {iteration})"],
+  1046	                cwd=str(world.root),
+  1047	                capture_output=True,
+  1048	                timeout=10,
+  1049	            )
+  1050	            logger.info(
+  1051	                "timeout-recovery: auto-committed %s work for iter %d "
+  1052	                "(tests passed against uncommitted state)",
+  1053	                role, iteration,
+  1054	            )
+
+exec
+/bin/bash -lc "nl -ba src/unison/pipeline.py | sed -n '692,708p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   692	                        failed.add(stage.name)
+   693	                    in_flight.discard(stage.name)
+   694	
+   695	                # Detect overdue running stages
+   696	                overdue = [
+   697	                    (f, s) for f, (s, d) in futures.items()
+   698	                    if now >= d
+   699	                ]
+   700	                if overdue:
+   701	                    self.cancel_event.set()
+   702	                for f, stage in overdue:
+   703	                    futures.pop(f)
+   704	                    results[stage.name] = False
+   705	                    failed.add(stage.name)
+   706	                    in_flight.discard(stage.name)
+   707	
+   708	                # Submit newly-ready stages (excluding in_flight to
+
+codex
+I’m going to write the review as `REQUEST_CHANGES` with that single blocking finding. The requested test result will be reflected in the summary, and I won’t touch `src/`.
+exec
+/bin/bash -lc 'ls -la reviews' in /home/sean/projects/unison
+ succeeded in 0ms:
+total 12
+drwxrwxr-x  2 sean sean 4096 Jun 20 15:48 .
+drwxrwxr-x 16 sean sean 4096 Jun 20 15:49 ..
+-rw-rw-r--  1 sean sean  532 Jun 20 15:49 iter-1.md
+
+apply patch
+patch: completed
+/home/sean/projects/unison/reviews/iter-2.md
+diff --git a/reviews/iter-2.md b/reviews/iter-2.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..73b07197aec13a27af53e00e56c2c257f69b5638
+--- /dev/null
++++ b/reviews/iter-2.md
+@@ -0,0 +1,6 @@
++---
++verdict: REQUEST_CHANGES
++summary: "tests/test_orchestrator.py passes, but DAG cancellation is only checked before agent launch and still allows post-timeout recovery/commit work."
++findings:
++  - "src/unison/orchestrator.py:292-305 checks cancel_event only once before _invoke_agent_for_role(); if a stage exceeds its DAGScheduler deadline while the agent subprocess is running, the orphan worker can later continue through _invoke_agent_for_role(), including timeout recovery and completion detection. In particular, src/unison/orchestrator.py:497-498 can call _recover_timeout_work(), which runs git add/commit at src/unison/orchestrator.py:1036-1048 without any cancel_event check. That does not meet the PRD requirement that executor callables check the event before file writes and git commits, so timed-out DAG stages can still mutate or commit after the scheduler has marked them failed."
++---
+
+diff --git a/reviews/iter-2.md b/reviews/iter-2.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..73b07197aec13a27af53e00e56c2c257f69b5638
+--- /dev/null
++++ b/reviews/iter-2.md
+@@ -0,0 +1,6 @@
++---
++verdict: REQUEST_CHANGES
++summary: "tests/test_orchestrator.py passes, but DAG cancellation is only checked before agent launch and still allows post-timeout recovery/commit work."
++findings:
++  - "src/unison/orchestrator.py:292-305 checks cancel_event only once before _invoke_agent_for_role(); if a stage exceeds its DAGScheduler deadline while the agent subprocess is running, the orphan worker can later continue through _invoke_agent_for_role(), including timeout recovery and completion detection. In particular, src/unison/orchestrator.py:497-498 can call _recover_timeout_work(), which runs git add/commit at src/unison/orchestrator.py:1036-1048 without any cancel_event check. That does not meet the PRD requirement that executor callables check the event before file writes and git commits, so timed-out DAG stages can still mutate or commit after the scheduler has marked them failed."
++---
+
+codex
+The review file is written. I’m doing a final status check to verify only the review artifact was added by me and that `src/` remains unchanged.
+exec
+/bin/bash -lc 'cat reviews/iter-2.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+---
+verdict: REQUEST_CHANGES
+summary: "tests/test_orchestrator.py passes, but DAG cancellation is only checked before agent launch and still allows post-timeout recovery/commit work."
+findings:
+  - "src/unison/orchestrator.py:292-305 checks cancel_event only once before _invoke_agent_for_role(); if a stage exceeds its DAGScheduler deadline while the agent subprocess is running, the orphan worker can later continue through _invoke_agent_for_role(), including timeout recovery and completion detection. In particular, src/unison/orchestrator.py:497-498 can call _recover_timeout_work(), which runs git add/commit at src/unison/orchestrator.py:1036-1048 without any cancel_event check. That does not meet the PRD requirement that executor callables check the event before file writes and git commits, so timed-out DAG stages can still mutate or commit after the scheduler has marked them failed."
+---
+
+exec
+/bin/bash -lc 'git status --short' in /home/sean/projects/unison
+ succeeded in 0ms:
+ M .unison/budget.json
+?? observer/logs/developer_iter-1_20260620T074645Z.log
+?? reviews/iter-2.md
+
+exec
+/bin/bash -lc 'git diff -- src/' in /home/sean/projects/unison
+ succeeded in 0ms:
+diff --git a/reviews/iter-2.md b/reviews/iter-2.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..73b07197aec13a27af53e00e56c2c257f69b5638
+--- /dev/null
++++ b/reviews/iter-2.md
+@@ -0,0 +1,6 @@
++---
++verdict: REQUEST_CHANGES
++summary: "tests/test_orchestrator.py passes, but DAG cancellation is only checked before agent launch and still allows post-timeout recovery/commit work."
++findings:
++  - "src/unison/orchestrator.py:292-305 checks cancel_event only once before _invoke_agent_for_role(); if a stage exceeds its DAGScheduler deadline while the agent subprocess is running, the orphan worker can later continue through _invoke_agent_for_role(), including timeout recovery and completion detection. In particular, src/unison/orchestrator.py:497-498 can call _recover_timeout_work(), which runs git add/commit at src/unison/orchestrator.py:1036-1048 without any cancel_event check. That does not meet the PRD requirement that executor callables check the event before file writes and git commits, so timed-out DAG stages can still mutate or commit after the scheduler has marked them failed."
++---
+
+codex
+Wrote the review to [iter-2.md](/home/sean/projects/unison/reviews/iter-2.md).
+
+Verdict: `REQUEST_CHANGES`
+
+Test run completed: `python3 -m pytest tests/test_orchestrator.py -q` passed with `16 passed in 0.13s`.
+
+No `src/` files were modified.
+diff --git a/reviews/iter-2.md b/reviews/iter-2.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..73b07197aec13a27af53e00e56c2c257f69b5638
+--- /dev/null
++++ b/reviews/iter-2.md
+@@ -0,0 +1,6 @@
++---
++verdict: REQUEST_CHANGES
++summary: "tests/test_orchestrator.py passes, but DAG cancellation is only checked before agent launch and still allows post-timeout recovery/commit work."
++findings:
++  - "src/unison/orchestrator.py:292-305 checks cancel_event only once before _invoke_agent_for_role(); if a stage exceeds its DAGScheduler deadline while the agent subprocess is running, the orphan worker can later continue through _invoke_agent_for_role(), including timeout recovery and completion detection. In particular, src/unison/orchestrator.py:497-498 can call _recover_timeout_work(), which runs git add/commit at src/unison/orchestrator.py:1036-1048 without any cancel_event check. That does not meet the PRD requirement that executor callables check the event before file writes and git commits, so timed-out DAG stages can still mutate or commit after the scheduler has marked them failed."
++---
+
+tokens used
+50,893
+
