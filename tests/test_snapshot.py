@@ -181,6 +181,25 @@ class TestFileSnapshotManager:
         assert record.snapshot_path.stat().st_mode == original.stat().st_mode
 
 
+    def test_sensitive_excluded(self, tmp_path):
+        """Sensitive files matching exclude_patterns are rejected."""
+        sm = FileSnapshotManager(
+            base_dir=tmp_path / "snapshots",
+            exclude_patterns=["*.env", "*.secret"],
+        )
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=secret123")
+
+        with pytest.raises(ValueError, match="exclude"):
+            sm.snapshot(
+                path=env_file,
+                operation=Operation.MODIFY,
+                agent="developer",
+                iteration=1,
+            )
+
+
 class TestSnapshotRecord:
     """SnapshotRecord dataclass tests."""
 

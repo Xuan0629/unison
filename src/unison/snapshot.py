@@ -6,6 +6,7 @@ at ``base_dir/manifest.json`` mapping audit_ids to their SnapshotRecord.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import shutil
 import uuid
@@ -64,6 +65,34 @@ class FileSnapshotManager:
     base_dir: Path
     retention_hours: int = 168
     max_slots: int = 100
+    exclude_patterns: list[str] = field(default_factory=list)
+
+    # ------------------------------------------------------------------
+    # public helpers
+    # ------------------------------------------------------------------
+
+    def _should_snapshot(self, path: Path) -> bool:
+        """Return False if *path* matches any exclude pattern."""
+        if not self.exclude_patterns:
+            return True
+
+        resolved = str(path.resolve())
+        for pattern in self.exclude_patterns:
+            # Expand ~ to user's home directory
+            if pattern.startswith("~"):
+                expanded = str(Path(pattern).expanduser().resolve())
+                if fnmatch.fnmatch(resolved, expanded):
+                    return False
+            # Match just the filename for simple patterns (e.g. "*.env")
+            if fnmatch.fnmatch(path.name, pattern):
+                return False
+            # Path.match for globstar (**) support
+            try:
+                if path.match(pattern):
+                    return False
+            except (ValueError, OSError):
+                pass
+        return True
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -122,7 +151,15 @@ class FileSnapshotManager:
         """Take a snapshot of *path* (file or directory).
 
         Returns a ``SnapshotRecord`` describing the snapshot.
+
+        Raises:
+            ValueError: If *path* matches an ``exclude_pattern``.
         """
+        if not self._should_snapshot(path):
+            raise ValueError(
+                f"Path {path} matches an exclude pattern, snapshot skipped"
+            )
+
         audit_id = uuid.uuid4().hex
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
