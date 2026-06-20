@@ -151,6 +151,26 @@ halt_signal 触发条件（任意循环中）:
 Planner 和 Developer 循环的唯一区别是 **产出物不同**（PRD vs 代码），
 以及 **Reviewer 的审查维度不同**（需求完整性 vs 代码质量）。
 
+### DAG Mode (Experimental)
+
+When ``pipeline.yaml`` includes a ``dag:`` section, the orchestrator uses
+``DAGScheduler`` to execute stages in parallel according to their
+dependency graph.  Each stage maps to a set of agents and a deadline.
+
+**Status: Experimental.**  DAG mode has cooperative cancellation
+(``threading.Event``) and deadline-aware scheduling, but the following
+limitations apply:
+
+- Python threads cannot be forcibly killed — a timed-out stage's
+  thread continues to run until the agent subprocess exits on its own.
+  The ``cancel_event`` flag is a cooperative signal that executor
+  callables should check before file-system mutations.
+- Failure propagation across parallel groups is best-effort.
+- Only one agent per stage is supported in the current implementation.
+
+Use ``pipeline.yaml`` without ``dag:`` for the stable sequential
+Developer ↔ Reviewer loop.
+
 **每次 agent 调用前的 pre-invoke 清理**:
 ```
 git reset --hard HEAD && git clean -fd

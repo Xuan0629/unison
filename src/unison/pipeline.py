@@ -10,6 +10,7 @@ check for prompt-file existence.
 
 from __future__ import annotations
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -464,6 +465,13 @@ class DAGScheduler:
         """
         self.stages: list[Stage] = stages
         self._graph: dict[str, set[str]] = {}  # stage_name → dependencies
+        self.cancel_event = threading.Event()
+        """Set when any stage exceeds its deadline.
+
+        Executor callables should check ``cancel_event.is_set()``
+        before file-system mutations so orphan threads stop
+        modifying files after the scheduler has given up on the stage.
+        """
 
         # 校验：Stage name 唯一
         seen: set[str] = set()
@@ -619,6 +627,13 @@ class DAGScheduler:
         overdue stages are marked failed without blocking on their
         underlying thread.
 
+        Sets ``self.cancel_event`` when any stage exceeds its
+        deadline.  Executor callables should check
+        ``cancel_event.is_set()`` before file-system mutations so
+        orphan threads stop modifying files after the scheduler has
+        abandoned the stage (cooperative cancellation — Python
+        cannot kill threads).
+
         Args:
             executor: 执行单个 Stage 的可调用对象
                 ``(stage: Stage) -> bool``。
@@ -643,6 +658,8 @@ class DAGScheduler:
         completed: set[str] = set()
         failed: set[str] = set()
         results: dict[str, bool] = {}
+
+        self.cancel_event.clear()
 
         pool = pool_factory(max_workers=max_workers)
         try:
@@ -680,6 +697,8 @@ class DAGScheduler:
                     (f, s) for f, (s, d) in futures.items()
                     if now >= d
                 ]
+                if overdue:
+                    self.cancel_event.set()
                 for f, stage in overdue:
                     futures.pop(f)
                     results[stage.name] = False

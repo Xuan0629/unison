@@ -29,12 +29,22 @@ _SECRET_PATTERNS: list[tuple[str, str]] = [
     (r"sk-[a-zA-Z0-9\-_]+", _REDACTED),
     # Bearer tokens: Bearer <token>
     (r"Bearer\s+[a-zA-Z0-9\-_.+/=]+", f"Bearer {_REDACTED}"),
-    # api_key= value (unquoted)
-    (r"api_key=[a-zA-Z0-9\-_.+/=]+", f"api_key={_REDACTED}"),
-    # Env-var assignments for keys ending in _API_KEY (KEY=value form)
-    (r"([a-zA-Z_][a-zA-Z0-9_]*_API_KEY)=[^\s\"'$`]+", rf"\1={_REDACTED}"),
+    # api_key= value (unquoted, double-quoted, or single-quoted)
+    (
+        r"""api_key=([a-zA-Z0-9\-_.+/=]+|"[^"]*"|'[^']*')""",
+        f"api_key={_REDACTED}",
+    ),
+    # Env-var assignments for keys ending in _API_KEY
+    # Matches KEY=value, KEY="value", KEY='value'
+    (
+        r"""([a-zA-Z_][a-zA-Z0-9_]*_API_KEY)=([^\s"'$`]+|"[^"]*"|'[^']*')""",
+        rf"\1={_REDACTED}",
+    ),
     # Env-var assignments for keys ending in _SECRET
-    (r"([a-zA-Z_][a-zA-Z0-9_]*_SECRET)=[^\s\"'$`]+", rf"\1={_REDACTED}"),
+    (
+        r"""([a-zA-Z_][a-zA-Z0-9_]*_SECRET)=([^\s"'$`]+|"[^"]*"|'[^']*')""",
+        rf"\1={_REDACTED}",
+    ),
 ]
 
 
@@ -61,9 +71,9 @@ def mask_secrets(text: str) -> str:
     * ``sk-ant-...`` (Anthropic keys)
     * ``sk-...`` (OpenAI / generic keys)
     * ``Bearer <token>``
-    * ``api_key=<value>``
-    * ``<NAME>_API_KEY=<value>``
-    * ``<NAME>_SECRET=<value>``
+    * ``api_key=<value>`` (also ``api_key="<value>"``, ``api_key='<value>'``)
+    * ``<NAME>_API_KEY=<value>`` (also quoted)
+    * ``<NAME>_SECRET=<value>`` (also quoted)
     * Any value found in an os.environ entry whose name ends in
       ``_API_KEY`` or ``_SECRET``
     """
