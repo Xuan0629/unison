@@ -1,20 +1,22 @@
-# Fix: Add SIGINT/SIGTERM handlers to Orchestrator
+# Fix: Streaming subprocess logs
 
 ## Problem
-Documentation claims "Ctrl-C → graceful shutdown" but no signal handlers registered.
-KeyboardInterrupt propagates up, finally block releases lock, but halt_signal not set.
-Observer sees no halt reason.
+All three runners use subprocess.run(capture_output=True) which buffers
+entire stdout/stderr in memory. Large agent output can OOM.
 
 ## Solution
-Register signal handlers in Orchestrator.__init__:
-```python
-import signal
-signal.signal(signal.SIGINT, lambda s, f: self.halt("SIGINT"))
-signal.signal(signal.SIGTERM, lambda s, f: self.halt("SIGTERM"))
-```
-Handler calls self.halt() which sets halt_signal + halt_reason.
-Lock release happens in run()'s finally block (already exists).
+Replace capture_output with file-based streaming:
+1. Open log_path for writing
+2. subprocess.Popen with stdout=log_file, stderr=subprocess.STDOUT
+3. proc.wait(timeout=timeout)
+4. After completion, read last 500 chars from log for AgentResult.stdout_tail
+This prevents unbounded memory and keeps full logs on disk.
+
+## Implementation
+Modify claude.py, codex.py, hermes.py runners. Extract shared logic into
+a helper function or BaseRunner._run_subprocess().
 
 ## Acceptance
-- orchestrator tests pass (14+)
-- Ctrl-C sets halt_signal with "SIGINT" reason
+- All existing tests pass
+- Log files contain complete output
+- No memory growth with large outputs
