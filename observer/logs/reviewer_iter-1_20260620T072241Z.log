@@ -1,0 +1,1694 @@
+=== COMMAND ===
+codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 1: 1. Run tests: python3 -m pytest tests/test_snapshot.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Git Diff
+diff --git a/interfaces.py b/interfaces.py
+index 8922797..58592bf 100644
+--- a/interfaces.py
++++ b/interfaces.py
+@@ -206,6 +206,10 @@ class SnapshotConfig:
+         "~/.hermes/skills/",
+         "~/.openclaw/agents/",
+     ])
++    exclude_patterns: list[str] = field(default_factory=lambda: [
++        "~/.hermes/.env",
++        "~/.openclaw/**/auth-profiles.json",
++    ])
+... (truncated)
+
+diff --git a/src/unison/snapshot.py b/src/unison/snapshot.py
+index ca7be1d..7b3f32a 100644
+--- a/src/unison/snapshot.py
++++ b/src/unison/snapshot.py
+@@ -6,6 +6,7 @@ at ``base_dir/manifest.json`` mapping audit_ids to their SnapshotRecord.
+ 
+ from __future__ import annotations
+ 
++import fnmatch
+ import json
+ import shutil
+ import uuid
+@@ -64,6 +65,34 @@ class FileSnapshotManager:
+     base_dir: Path
+     retention_hours: int = 168
+     max_slots: int = 100
++    exclude_patterns: list[str] = field(default_factory=list)
++
++    # ------------------------------------------------------------------
++    # public helpers
++    # ------------------------------------------------------------------
++
++    def _should_snapshot(self, path: Path) -> bool:
++        """Return False if *path* matches any exclude pattern."""
++        if not self.exclude_patterns:
++            return True
++
++        resolved = str(path.resolve())
++        for pattern in self.exclude_patterns:
++            # Expand ~ to user's home directory
++            if pattern.startswith("~"):
++                expanded = str(Path(pattern).expanduser().resolve())
++                if fnmatch.fnmatch(resolved, expanded):
++                    return False
++            # Match just the filename for simple patterns (e.g. "*.env")
++            if fnmatch.fnmatch(path.name, pattern):
++                return False
++            # Path.match for globstar (**) support
++            try:
++                if path.match(pattern):
++                    return False
++            except (ValueError, OSError):
++                pass
++        return True
+ 
+     # ------------------------------------------------------------------
+     # internal helpers
+@@ -122,7 +151,15 @@ class FileSnapshotManager:
+         """Take a snapshot of *path* (file or directory).
+ 
+         Returns a ``SnapshotRecord`` describing the snapshot.
++
++        Raises:
++            ValueError: If *path* matches an ``exclude_pattern``.
+         """
++        if not self._should_snapshot(path):
++            raise ValueError(
++                f"Path {path} matches an exclude pattern, snapshot skipped"
++            )
++
+         audit_id = uuid.uuid4().hex
+         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+ 
+
+
+diff --git a/tests/test_snapshot.py b/tests/test_snapshot.py
+index 80e973a..f602327 100644
+--- a/tests/test_snapshot.py
++++ b/tests/test_snapshot.py
+@@ -181,6 +181,25 @@ class TestFileSnapshotManager:
+         assert record.snapshot_path.stat().st_mode == original.stat().st_mode
+ 
+ 
++    def test_sensitive_excluded(self, tmp_path):
++        """Sensitive files matching exclude_patterns are rejected."""
++        sm = FileSnapshotManager(
++            base_dir=tmp_path / "snapshots",
++            exclude_patterns=["*.env", "*.secret"],
++        )
++
++        env_file = tmp_path / ".env"
++        env_file.write_text("API_KEY=secret123")
++
++        with pytest.raises(ValueError, match="exclude"):
++            sm.snapshot(
++                path=env_file,
++                operation=Operation.MODIFY,
++                agent="developer",
++                iteration=1,
++            )
++
++
+ class TestSnapshotRecord:
+     """SnapshotRecord dataclass tests."""
+ 
+
+
+## Design
+# fix
+
+
+## PRD
+# Fix: Exclude sensitive paths from snapshots
+
+## Problem
+Snapshots store files unencrypted. Manifest contains full resolved paths.
+If snapshot captures .env or auth config, API keys leak.
+
+## Solution
+Add 'exclude_patterns' to SnapshotConfig (optional, default includes:
+~/.hermes/.env, ~/.openclaw/**/auth-profiles.json).
+SnapshotManager._should_snapshot() checks each path against patterns
+using fnmatch before copying.
+
+## Implementation
+- interfaces.py: SnapshotConfig +exclude_patterns: list[str] field
+- snapshot.py: filter paths before snapshot
+
+## Acceptance
+- snapshot tests pass (12+)
+- New test: sensitive file excluded from snapshot
+
+
+=== STDOUT ===
+Done.
+
+Tests: `python3 -m pytest tests/test_snapshot.py -q` passed with `13 passed`.
+
+Wrote review to [reviews/iter-1.md](/home/sean/projects/unison/reviews/iter-1.md:1) with verdict `REQUEST_CHANGES` due to missing default enforcement and YAML loader omission for `exclude_patterns`.
+
+
+=== STDERR ===
+Reading additional input from stdin...
+OpenAI Codex v0.141.0
+--------
+workdir: /home/sean/projects/unison
+model: gpt-5.5
+provider: openai-custom
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 019ee3e9-0bd6-77b1-975f-a24b63038c93
+--------
+user
+Review Iteration 1: 1. Run tests: python3 -m pytest tests/test_snapshot.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Git Diff
+diff --git a/interfaces.py b/interfaces.py
+index 8922797..58592bf 100644
+--- a/interfaces.py
++++ b/interfaces.py
+@@ -206,6 +206,10 @@ class SnapshotConfig:
+         "~/.hermes/skills/",
+         "~/.openclaw/agents/",
+     ])
++    exclude_patterns: list[str] = field(default_factory=lambda: [
++        "~/.hermes/.env",
++        "~/.openclaw/**/auth-profiles.json",
++    ])
+... (truncated)
+
+diff --git a/src/unison/snapshot.py b/src/unison/snapshot.py
+index ca7be1d..7b3f32a 100644
+--- a/src/unison/snapshot.py
++++ b/src/unison/snapshot.py
+@@ -6,6 +6,7 @@ at ``base_dir/manifest.json`` mapping audit_ids to their SnapshotRecord.
+ 
+ from __future__ import annotations
+ 
++import fnmatch
+ import json
+ import shutil
+ import uuid
+@@ -64,6 +65,34 @@ class FileSnapshotManager:
+     base_dir: Path
+     retention_hours: int = 168
+     max_slots: int = 100
++    exclude_patterns: list[str] = field(default_factory=list)
++
++    # ------------------------------------------------------------------
++    # public helpers
++    # ------------------------------------------------------------------
++
++    def _should_snapshot(self, path: Path) -> bool:
++        """Return False if *path* matches any exclude pattern."""
++        if not self.exclude_patterns:
++            return True
++
++        resolved = str(path.resolve())
++        for pattern in self.exclude_patterns:
++            # Expand ~ to user's home directory
++            if pattern.startswith("~"):
++                expanded = str(Path(pattern).expanduser().resolve())
++                if fnmatch.fnmatch(resolved, expanded):
++                    return False
++            # Match just the filename for simple patterns (e.g. "*.env")
++            if fnmatch.fnmatch(path.name, pattern):
++                return False
++            # Path.match for globstar (**) support
++            try:
++                if path.match(pattern):
++                    return False
++            except (ValueError, OSError):
++                pass
++        return True
+ 
+     # ------------------------------------------------------------------
+     # internal helpers
+@@ -122,7 +151,15 @@ class FileSnapshotManager:
+         """Take a snapshot of *path* (file or directory).
+ 
+         Returns a ``SnapshotRecord`` describing the snapshot.
++
++        Raises:
++            ValueError: If *path* matches an ``exclude_pattern``.
+         """
++        if not self._should_snapshot(path):
++            raise ValueError(
++                f"Path {path} matches an exclude pattern, snapshot skipped"
++            )
++
+         audit_id = uuid.uuid4().hex
+         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+ 
+
+
+diff --git a/tests/test_snapshot.py b/tests/test_snapshot.py
+index 80e973a..f602327 100644
+--- a/tests/test_snapshot.py
++++ b/tests/test_snapshot.py
+@@ -181,6 +181,25 @@ class TestFileSnapshotManager:
+         assert record.snapshot_path.stat().st_mode == original.stat().st_mode
+ 
+ 
++    def test_sensitive_excluded(self, tmp_path):
++        """Sensitive files matching exclude_patterns are rejected."""
++        sm = FileSnapshotManager(
++            base_dir=tmp_path / "snapshots",
++            exclude_patterns=["*.env", "*.secret"],
++        )
++
++        env_file = tmp_path / ".env"
++        env_file.write_text("API_KEY=secret123")
++
++        with pytest.raises(ValueError, match="exclude"):
++            sm.snapshot(
++                path=env_file,
++                operation=Operation.MODIFY,
++                agent="developer",
++                iteration=1,
++            )
++
++
+ class TestSnapshotRecord:
+     """SnapshotRecord dataclass tests."""
+ 
+
+
+## Design
+# fix
+
+
+## PRD
+# Fix: Exclude sensitive paths from snapshots
+
+## Problem
+Snapshots store files unencrypted. Manifest contains full resolved paths.
+If snapshot captures .env or auth config, API keys leak.
+
+## Solution
+Add 'exclude_patterns' to SnapshotConfig (optional, default includes:
+~/.hermes/.env, ~/.openclaw/**/auth-profiles.json).
+SnapshotManager._should_snapshot() checks each path against patterns
+using fnmatch before copying.
+
+## Implementation
+- interfaces.py: SnapshotConfig +exclude_patterns: list[str] field
+- snapshot.py: filter paths before snapshot
+
+## Acceptance
+- snapshot tests pass (12+)
+- New test: sensitive file excluded from snapshot
+
+codex
+I’ll run the requested snapshot tests first, then inspect the relevant files and write the review artifact without touching `src/`.
+exec
+/bin/bash -lc 'python3 -m pytest tests/test_snapshot.py -q' in /home/sean/projects/unison
+ succeeded in 163ms:
+.............                                                            [100%]
+13 passed in 0.05s
+
+exec
+/bin/bash -lc "sed -n '1,260p' tests/test_snapshot.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+"""Tests for snapshot.py — FileSnapshotManager (pre-snapshot + restore)."""
+import tempfile
+from pathlib import Path
+import pytest
+
+from unison.snapshot import FileSnapshotManager, SnapshotRecord
+from interfaces import Operation
+
+
+class TestFileSnapshotManager:
+    """FileSnapshotManager tests."""
+
+    def test_create_snapshot_manager(self, tmp_path):
+        """Create a FileSnapshotManager."""
+        sm = FileSnapshotManager(base_dir=tmp_path)
+        assert sm.base_dir == tmp_path
+
+    def test_snapshot_file(self, tmp_path):
+        """Snapshot a single file."""
+        # Create a file to snapshot
+        original = tmp_path / "original.txt"
+        original.write_text("hello world")
+        
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            path=original,
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1
+        )
+        
+        assert record.original_path == original
+        assert record.operation == Operation.MODIFY
+        assert record.agent == "developer"
+        assert record.iteration == 1
+        assert record.snapshot_path.exists()
+        assert record.audit_id
+
+    def test_snapshot_directory(self, tmp_path):
+        """Snapshot a directory."""
+        # Create a directory with files
+        original_dir = tmp_path / "mydir"
+        original_dir.mkdir()
+        (original_dir / "file1.txt").write_text("content1")
+        (original_dir / "file2.txt").write_text("content2")
+        
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            path=original_dir,
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1
+        )
+        
+        assert record.snapshot_path.exists()
+        assert record.snapshot_path.is_dir()
+        assert (record.snapshot_path / "file1.txt").exists()
+        assert (record.snapshot_path / "file2.txt").exists()
+
+    def test_restore_file(self, tmp_path):
+        """Restore a file from snapshot."""
+        # Create original file
+        original = tmp_path / "original.txt"
+        original.write_text("original content")
+        
+        # Snapshot
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            path=original,
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1
+        )
+        
+        # Modify original
+        original.write_text("modified content")
+        assert original.read_text() == "modified content"
+        
+        # Restore
+        restored_path = sm.restore(record.audit_id)
+        assert restored_path == original
+        assert original.read_text() == "original content"
+
+    def test_restore_directory(self, tmp_path):
+        """Restore a directory from snapshot."""
+        # Create original directory
+        original_dir = tmp_path / "mydir"
+        original_dir.mkdir()
+        (original_dir / "file1.txt").write_text("content1")
+        
+        # Snapshot
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            path=original_dir,
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1
+        )
+        
+        # Modify original
+        (original_dir / "file1.txt").write_text("modified")
+        (original_dir / "file2.txt").write_text("new file")
+        
+        # Restore
+        restored_path = sm.restore(record.audit_id)
+        assert restored_path == original_dir
+        assert (original_dir / "file1.txt").read_text() == "content1"
+        assert not (original_dir / "file2.txt").exists()  # New file removed
+
+    def test_restore_nonexistent_audit_id(self, tmp_path):
+        """Restore with non-existent audit_id raises error."""
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        
+        with pytest.raises(KeyError):
+            sm.restore("nonexistent-audit-id")
+
+    def test_list_snapshots_empty(self, tmp_path):
+        """list_snapshots returns empty list when no snapshots."""
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        result = sm.list_snapshots("test-project")
+        assert result == []
+
+    def test_list_snapshots_single(self, tmp_path):
+        """list_snapshots returns single snapshot."""
+        original = tmp_path / "original.txt"
+        original.write_text("content")
+        
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        sm.snapshot(
+            path=original,
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1
+        )
+        
+        result = sm.list_snapshots("test-project")
+        # Note: list_snapshots filters by project, but snapshot() doesn't take project param
+        # So this test may need adjustment based on implementation
+        assert len(result) >= 0  # At least doesn't crash
+
+    def test_list_snapshots_multiple(self, tmp_path):
+        """list_snapshots returns multiple snapshots."""
+        original = tmp_path / "original.txt"
+        original.write_text("content")
+        
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        sm.snapshot(path=original, operation=Operation.MODIFY, agent="developer", iteration=1)
+        sm.snapshot(path=original, operation=Operation.MODIFY, agent="developer", iteration=2)
+        sm.snapshot(path=original, operation=Operation.MODIFY, agent="reviewer", iteration=3)
+        
+        result = sm.list_snapshots("test-project")
+        assert len(result) >= 0  # At least doesn't crash
+
+    def test_cleanup_expired(self, tmp_path):
+        """cleanup_expired removes old snapshots."""
+        original = tmp_path / "original.txt"
+        original.write_text("content")
+        
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots", retention_hours=0)
+        sm.snapshot(path=original, operation=Operation.MODIFY, agent="developer", iteration=1)
+        
+        # With 0 retention, all snapshots should be expired
+        cleaned = sm.cleanup_expired()
+        assert cleaned >= 0  # At least doesn't crash
+
+    def test_snapshot_preserves_permissions(self, tmp_path):
+        """Snapshot preserves file permissions."""
+        original = tmp_path / "script.sh"
+        original.write_text("#!/bin/bash\necho hello")
+        original.chmod(0o755)
+        
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            path=original,
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1
+        )
+        
+        # Check snapshot has same permissions
+        assert record.snapshot_path.stat().st_mode == original.stat().st_mode
+
+
+    def test_sensitive_excluded(self, tmp_path):
+        """Sensitive files matching exclude_patterns are rejected."""
+        sm = FileSnapshotManager(
+            base_dir=tmp_path / "snapshots",
+            exclude_patterns=["*.env", "*.secret"],
+        )
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=secret123")
+
+        with pytest.raises(ValueError, match="exclude"):
+            sm.snapshot(
+                path=env_file,
+                operation=Operation.MODIFY,
+                agent="developer",
+                iteration=1,
+            )
+
+
+class TestSnapshotRecord:
+    """SnapshotRecord dataclass tests."""
+
+    def test_create_record(self):
+        """Create a SnapshotRecord."""
+        record = SnapshotRecord(
+            audit_id="abc123",
+            timestamp="2026-06-18T10:00:00Z",
+            original_path=Path("/tmp/original.txt"),
+            snapshot_path=Path("/tmp/snapshots/abc123"),
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1
+        )
+        
+        assert record.audit_id == "abc123"
+        assert record.timestamp == "2026-06-18T10:00:00Z"
+        assert record.original_path == Path("/tmp/original.txt")
+        assert record.operation == Operation.MODIFY
+        assert record.agent == "developer"
+        assert record.iteration == 1
+
+exec
+/bin/bash -lc 'git diff -- interfaces.py src/unison/snapshot.py tests/test_snapshot.py' in /home/sean/projects/unison
+ succeeded in 0ms:
+exec
+/bin/bash -lc "sed -n '1,260p' src/unison/snapshot.py" in /home/sean/projects/unison
+ succeeded in 1ms:
+"""FileSnapshotManager — pre-operation snapshot + restore safety net.
+
+Snapshots are stored under ``base_dir/<audit_id>/`` with a JSON manifest
+at ``base_dir/manifest.json`` mapping audit_ids to their SnapshotRecord.
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import json
+import shutil
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+from interfaces import AgentRole, Operation
+
+
+# ---------------------------------------------------------------------------
+# SnapshotRecord
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SnapshotRecord:
+    """One snapshot record.
+
+    Attributes:
+        audit_id: Unique identifier for this snapshot (UUID).
+        timestamp: ISO-8601 UTC timestamp of when the snapshot was taken.
+        original_path: The file or directory that was snapshotted.
+        snapshot_path: Where the snapshot copy lives on disk.
+        operation: The operation that triggered the snapshot.
+        agent: The agent role that requested the snapshot.
+        iteration: The iteration number.
+    """
+
+    audit_id: str
+    timestamp: str
+    original_path: Path
+    snapshot_path: Path
+    operation: Operation
+    agent: AgentRole
+    iteration: int
+
+
+# ---------------------------------------------------------------------------
+# FileSnapshotManager
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FileSnapshotManager:
+    """Filesystem-based snapshot manager.
+
+    Copies files/directories to ``base_dir/<audit_id>/`` before a
+    potentially destructive operation so they can be restored later.
+
+    Attributes:
+        base_dir: Root directory for all snapshots (e.g. ``~/.unison/snapshots/``).
+        retention_hours: Snapshots older than this are eligible for cleanup.
+        max_slots: Maximum number of snapshot slots before cleanup is forced.
+    """
+
+    base_dir: Path
+    retention_hours: int = 168
+    max_slots: int = 100
+    exclude_patterns: list[str] = field(default_factory=list)
+
+    # ------------------------------------------------------------------
+    # public helpers
+    # ------------------------------------------------------------------
+
+    def _should_snapshot(self, path: Path) -> bool:
+        """Return False if *path* matches any exclude pattern."""
+        if not self.exclude_patterns:
+            return True
+
+        resolved = str(path.resolve())
+        for pattern in self.exclude_patterns:
+            # Expand ~ to user's home directory
+            if pattern.startswith("~"):
+                expanded = str(Path(pattern).expanduser().resolve())
+                if fnmatch.fnmatch(resolved, expanded):
+                    return False
+            # Match just the filename for simple patterns (e.g. "*.env")
+            if fnmatch.fnmatch(path.name, pattern):
+                return False
+            # Path.match for globstar (**) support
+            try:
+                if path.match(pattern):
+                    return False
+            except (ValueError, OSError):
+                pass
+        return True
+
+    # ------------------------------------------------------------------
+    # internal helpers
+    # ------------------------------------------------------------------
+
+    _MANIFEST_NAME: str = field(default="manifest.json", init=False, repr=False)
+
+    @property
+    def _manifest_path(self) -> Path:
+        return self.base_dir / self._MANIFEST_NAME
+
+    def _read_manifest(self) -> dict[str, dict[str, Any]]:
+        """Read the manifest file, returning {} when it doesn't exist."""
+        if not self._manifest_path.exists():
+            return {}
+        return json.loads(self._manifest_path.read_text())
+
+    def _write_manifest(self, data: dict[str, dict[str, Any]]) -> None:
+        """Atomically write the manifest file."""
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self._manifest_path.write_text(json.dumps(data, indent=2, default=str))
+
+    def _record_to_dict(self, record: SnapshotRecord) -> dict[str, Any]:
+        return {
+            "audit_id": record.audit_id,
+            "timestamp": record.timestamp,
+            "original_path": str(record.original_path),
+            "snapshot_path": str(record.snapshot_path),
+            "operation": record.operation.value,
+            "agent": record.agent,
+            "iteration": record.iteration,
+        }
+
+    def _dict_to_record(self, d: dict[str, Any]) -> SnapshotRecord:
+        return SnapshotRecord(
+            audit_id=d["audit_id"],
+            timestamp=d["timestamp"],
+            original_path=Path(d["original_path"]),
+            snapshot_path=Path(d["snapshot_path"]),
+            operation=Operation(d["operation"]),
+            agent=d["agent"],
+            iteration=d["iteration"],
+        )
+
+    # ------------------------------------------------------------------
+    # public API
+    # ------------------------------------------------------------------
+
+    def snapshot(
+        self,
+        path: Path,
+        operation: Operation,
+        agent: AgentRole,
+        iteration: int,
+    ) -> SnapshotRecord:
+        """Take a snapshot of *path* (file or directory).
+
+        Returns a ``SnapshotRecord`` describing the snapshot.
+
+        Raises:
+            ValueError: If *path* matches an ``exclude_pattern``.
+        """
+        if not self._should_snapshot(path):
+            raise ValueError(
+                f"Path {path} matches an exclude pattern, snapshot skipped"
+            )
+
+        audit_id = uuid.uuid4().hex
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Where the snapshot copy lives
+        snapshot_dir = self.base_dir / audit_id
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        snapshot_path = snapshot_dir / path.name
+
+        if path.is_dir():
+            shutil.copytree(path, snapshot_path, symlinks=True)
+        else:
+            shutil.copy2(path, snapshot_path, follow_symlinks=False)
+
+        record = SnapshotRecord(
+            audit_id=audit_id,
+            timestamp=timestamp,
+            original_path=path.resolve(),
+            snapshot_path=snapshot_path.resolve(),
+            operation=operation,
+            agent=agent,
+            iteration=iteration,
+        )
+
+        # Persist to manifest
+        manifest = self._read_manifest()
+        manifest[audit_id] = self._record_to_dict(record)
+        self._write_manifest(manifest)
+
+        return record
+
+    def restore(self, audit_id: str) -> Path:
+        """Restore a file or directory from its snapshot.
+
+        Returns the path that was restored.
+
+        Raises:
+            KeyError: If *audit_id* is not found in the manifest.
+        """
+        manifest = self._read_manifest()
+        if audit_id not in manifest:
+            raise KeyError(audit_id)
+
+        record = self._dict_to_record(manifest[audit_id])
+        original = record.original_path
+        snapshot = record.snapshot_path
+
+        if not snapshot.exists():
+            raise FileNotFoundError(f"Snapshot data missing: {snapshot}")
+
+        # Remove current original (if it still exists)
+        if original.exists():
+            if original.is_dir():
+                shutil.rmtree(original)
+            else:
+                original.unlink()
+
+        # Restore from snapshot
+        if snapshot.is_dir():
+            shutil.copytree(snapshot, original, symlinks=True)
+        else:
+            shutil.copy2(snapshot, original, follow_symlinks=False)
+
+        return original
+
+    def list_snapshots(self, project: str) -> list[SnapshotRecord]:
+        """List all snapshot records.
+
+        The *project* parameter is accepted for interface compatibility.
+        Currently returns all known snapshots regardless of project.
+        """
+        manifest = self._read_manifest()
+        return [self._dict_to_record(d) for d in manifest.values()]
+
+    def cleanup_expired(self) -> int:
+        """Remove snapshots whose age exceeds ``retention_hours``.
+
+        Returns the number of snapshots cleaned up.
+        """
+        manifest = self._read_manifest()
+        if not manifest:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=self.retention_hours)
+
+        expired_ids: list[str] = []
+        for audit_id, data in manifest.items():
+            try:
+                ts = datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
+                if ts < cutoff:
+                    expired_ids.append(audit_id)
+            except (ValueError, KeyError):
+                continue
+
+        cleaned = 0
+        for audit_id in expired_ids:
+            record = self._dict_to_record(manifest[audit_id])
+
+codex
+The focused test suite passes: `13 passed`. I’m checking how `SnapshotConfig` is actually wired into snapshot creation now, because the main risk is whether the new defaults are enforced outside the unit test’s direct constructor path.
+exec
+/bin/bash -lc "sed -n '240,420p' src/unison/snapshot.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+        Returns the number of snapshots cleaned up.
+        """
+        manifest = self._read_manifest()
+        if not manifest:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=self.retention_hours)
+
+        expired_ids: list[str] = []
+        for audit_id, data in manifest.items():
+            try:
+                ts = datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
+                if ts < cutoff:
+                    expired_ids.append(audit_id)
+            except (ValueError, KeyError):
+                continue
+
+        cleaned = 0
+        for audit_id in expired_ids:
+            record = self._dict_to_record(manifest[audit_id])
+            snapshot = record.snapshot_path
+
+            # Remove snapshot data from disk
+            snapshot_dir = self.base_dir / audit_id
+            if snapshot_dir.exists():
+                shutil.rmtree(snapshot_dir)
+
+            del manifest[audit_id]
+            cleaned += 1
+
+        if cleaned:
+            self._write_manifest(manifest)
+
+        return cleaned
+
+exec
+/bin/bash -lc "sed -n '160,240p' interfaces.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+        _map: dict[Runtime, list[str]] = {
+            "claude":   ["-p", "--dangerously-skip-permissions"],
+            "codex":    ["exec", "--dangerously-bypass-approvals-and-sandbox"],
+            "hermes":   ["chat", "-q", "--yolo"],
+            "openclaw": [],  # v1.1: HTTP API, not subprocess
+        }
+        return _map[self.runtime]
+
+# ============================================================================
+# PipelineSpec — 一次 pipeline 运行的全部配置
+# ============================================================================
+
+@dataclass(frozen=True)
+class ProjectConfig:
+    """项目级配置。"""
+    language: ProjectLanguage = "python"
+    test_command: str = "pytest tests/ -v"
+    build_command: str | None = None
+    lint_command: str | None = None
+
+@dataclass(frozen=True)
+class BootstrapConfig:
+    """环境准备（pre-phase）。"""
+    commands: list[str] = field(default_factory=list)
+    # e.g. ["python3 -m venv .venv", ".venv/bin/pip install pytest"]
+
+@dataclass(frozen=True)
+class BudgetConfig:
+    """Token 预算。"""
+    daily_token_limit: int = 1_000_000
+    per_task_limit: int = 200_000
+    cost_tracking: Literal["approximate", "api_callback"] = "approximate"
+    overflow_action: Literal["downgrade", "halt"] = "downgrade"
+    halt_action: Literal["discord_notify", "halt_only"] = "discord_notify"
+    downgrade_map: dict[str, dict[str, str]] = field(default_factory=lambda: {
+        "reviewer": {"from": "codex", "to": "claude"}
+    })
+
+@dataclass(frozen=True)
+class SnapshotConfig:
+    """快照安全网配置。"""
+    enabled: bool = True
+    retention_hours: int = 168    # 7d
+    max_slots: int = 100
+    max_pre_snapshot_size_mb: int = 50
+    external_paths: list[str] = field(default_factory=lambda: [
+        "~/.hermes/skills/",
+        "~/.openclaw/agents/",
+    ])
+    exclude_patterns: list[str] = field(default_factory=lambda: [
+        "~/.hermes/.env",
+        "~/.openclaw/**/auth-profiles.json",
+    ])
+
+@dataclass(frozen=True)
+class RiskMatrixConfig:
+    """三元组风险矩阵（YAML 加载后结构化）。"""
+    system_critical_paths: list[str] = field(default_factory=list)
+    known_safe_external_commands: list[str] = field(default_factory=list)
+    workspace_rules: dict[Operation, RiskLevel] = field(default_factory=dict)
+    external_rules: dict[Operation, RiskLevel] = field(default_factory=dict)
+
+@dataclass(frozen=True)
+class Stage:
+    """DAG 中的一个阶段（V2 多 phase 并行）。
+
+    Attributes:
+        name: Stage 唯一标识（如 "feature-a", "feature-b"）。
+        agents: 该 Stage 使用的 agent 角色映射（覆盖 PipelineSpec.agents）。
+        dependencies: 前置依赖的 Stage name 列表。
+        timeout: Stage 超时（秒）。
+        parallel_group: 并行组标识（同组 Stage 可同时执行）。
+    """
+    name: str
+    agents: dict[str, "AgentSpec"] = field(default_factory=dict)
+    dependencies: list[str] = field(default_factory=list)
+    timeout: int = 600
+    parallel_group: str | None = None
+
+
+@dataclass(frozen=True)
+
+exec
+/bin/bash -lc 'rg -n "FileSnapshotManager|SnapshotConfig|exclude_patterns" -S .' in /home/sean/projects/unison
+ succeeded in 0ms:
+./tech-design.md:31:    snapshot.py         # FileSnapshotManager（pre-snapshot + restore）
+./fix-l4-snapshot.yaml:9:    task_instruction: Implement snapshot exclude_patterns per prd/PRD.md. Add exclude_patterns
+./fix-l4-snapshot.yaml:10:      field to SnapshotConfig in interfaces.py (optional, default=['~/.hermes/.env',
+./src/unison/snapshot.py:1:"""FileSnapshotManager — pre-operation snapshot + restore safety net.
+./src/unison/snapshot.py:49:# FileSnapshotManager
+./src/unison/snapshot.py:53:class FileSnapshotManager:
+./src/unison/snapshot.py:68:    exclude_patterns: list[str] = field(default_factory=list)
+./src/unison/snapshot.py:76:        if not self.exclude_patterns:
+./src/unison/snapshot.py:80:        for pattern in self.exclude_patterns:
+./src/unison/pipeline.py:48:    SnapshotConfig,
+./src/unison/pipeline.py:332:    ) -> SnapshotConfig:
+./src/unison/pipeline.py:333:        """Build SnapshotConfig, falling back to defaults."""
+./src/unison/pipeline.py:335:            return SnapshotConfig()
+./src/unison/pipeline.py:346:        return SnapshotConfig(**kwargs)
+./interfaces.py:199:class SnapshotConfig:
+./interfaces.py:209:    exclude_patterns: list[str] = field(default_factory=lambda: [
+./interfaces.py:264:    snapshots: SnapshotConfig = field(default_factory=SnapshotConfig)
+./interfaces.py:586:class FileSnapshotManager:
+./tests/test_snapshot.py:1:"""Tests for snapshot.py — FileSnapshotManager (pre-snapshot + restore)."""
+./tests/test_snapshot.py:6:from unison.snapshot import FileSnapshotManager, SnapshotRecord
+./tests/test_snapshot.py:10:class TestFileSnapshotManager:
+./tests/test_snapshot.py:11:    """FileSnapshotManager tests."""
+./tests/test_snapshot.py:14:        """Create a FileSnapshotManager."""
+./tests/test_snapshot.py:15:        sm = FileSnapshotManager(base_dir=tmp_path)
+./tests/test_snapshot.py:24:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+./tests/test_snapshot.py:47:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+./tests/test_snapshot.py:67:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+./tests/test_snapshot.py:92:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+./tests/test_snapshot.py:112:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+./tests/test_snapshot.py:119:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+./tests/test_snapshot.py:128:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+./tests/test_snapshot.py:146:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+./tests/test_snapshot.py:159:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots", retention_hours=0)
+./tests/test_snapshot.py:172:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+./tests/test_snapshot.py:185:        """Sensitive files matching exclude_patterns are rejected."""
+./tests/test_snapshot.py:186:        sm = FileSnapshotManager(
+./tests/test_snapshot.py:188:            exclude_patterns=["*.env", "*.secret"],
+./observer/logs/planner_iter-2_20260619T162212Z.log:253:+**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/planner_iter-2_20260619T162212Z.log:400:-**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/developer_iter-1_20260619T160738Z.log:1303:+**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/developer_iter-1_20260619T160738Z.log:1719:-- 所有 Config 类（ProjectConfig, BootstrapConfig, BudgetConfig, SnapshotConfig, RiskMatrixConfig）正确构建
+./observer/logs/developer_iter-1_20260619T160738Z.log:1812:-- `FileSnapshotManager` dataclass 与 interfaces.py 完全匹配
+./observer/logs/developer_iter-1_20260619T160738Z.log:1835:-- `TestFileSnapshotManager`: 11 个测试（create, snapshot file/directory, restore file/directory, nonexistent audit_id, list empty/single/multiple, cleanup_expired, preserves permissions）
+./observer/logs/developer_iter-1_20260619T160738Z.log:2088:**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-1_20260620T070243Z.log:88:+Add 'exclude_patterns' to SnapshotConfig (optional, default includes:
+./observer/logs/reviewer_iter-1_20260620T070243Z.log:94:+- interfaces.py: SnapshotConfig +exclude_patterns: list[str] field
+./observer/logs/reviewer_iter-1_20260620T070243Z.log:567:+Add 'exclude_patterns' to SnapshotConfig (optional, default includes:
+./observer/logs/reviewer_iter-1_20260620T070243Z.log:573:+- interfaces.py: SnapshotConfig +exclude_patterns: list[str] field
+./observer/logs/planner_iter-3_20260620T065934Z.log:114:+    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
+./observer/logs/planner_iter-3_20260620T065934Z.log:116:+      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
+./observer/logs/reviewer_iter-1_20260619T144630Z.log:241:+**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-1_20260619T144630Z.log:1575:+**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-2_20260619T162522Z.log:242:+**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-2_20260619T162522Z.log:389:-**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-2_20260619T162522Z.log:798:+**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-2_20260619T162522Z.log:945:-**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/planner_iter-2_20260620T064548Z.log:103:+    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
+./observer/logs/planner_iter-2_20260620T064548Z.log:105:+      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
+./observer/logs/reviewer_iter-1_20260620T065046Z.log:116:+    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
+./observer/logs/reviewer_iter-1_20260620T065046Z.log:118:+      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
+./observer/logs/reviewer_iter-1_20260620T065046Z.log:531:+    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
+./observer/logs/reviewer_iter-1_20260620T065046Z.log:533:+      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
+./observer/logs/planner_iter-2_20260620T065333Z.log:115:+    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
+./observer/logs/planner_iter-2_20260620T065333Z.log:117:+      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
+./observer/logs/reviewer_iter-2_20260620T065454Z.log:120:+    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
+./observer/logs/reviewer_iter-2_20260620T065454Z.log:122:+      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
+./observer/logs/reviewer_iter-2_20260620T065454Z.log:617:+    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
+./observer/logs/reviewer_iter-2_20260620T065454Z.log:619:+      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
+./observer/logs/reviewer_iter-2_20260619T173514Z.log:3046:    48	    SnapshotConfig,
+./observer/logs/reviewer_iter-2_20260619T173514Z.log:3330:   332	    ) -> SnapshotConfig:
+./observer/logs/reviewer_iter-2_20260619T173514Z.log:3331:   333	        """Build SnapshotConfig, falling back to defaults."""
+./observer/logs/reviewer_iter-2_20260619T173514Z.log:3333:   335	            return SnapshotConfig()
+./observer/logs/reviewer_iter-2_20260619T173514Z.log:3362:   199	class SnapshotConfig:
+./observer/logs/reviewer_iter-2_20260619T173514Z.log:3423:   260	    snapshots: SnapshotConfig = field(default_factory=SnapshotConfig)
+./observer/logs/developer_iter-1_20260619T145730Z.log:241:+**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./prd/tech-design-phase9-final.md:25:**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./prd/PRD.md:8:Add 'exclude_patterns' to SnapshotConfig (optional, default includes:
+./prd/PRD.md:14:- interfaces.py: SnapshotConfig +exclude_patterns: list[str] field
+./prd/prd-fix4-snapshot.md:8:Add 'exclude_patterns' to SnapshotConfig (optional, default includes:
+./prd/prd-fix4-snapshot.md:14:- interfaces.py: SnapshotConfig +exclude_patterns: list[str] field
+./prd/tech-design-phase9.md:25:**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/developer_iter-1_20260620T072110Z.log:2:claude -p --dangerously-skip-permissions Implement snapshot exclude_patterns per prd/PRD.md. Add exclude_patterns field to SnapshotConfig in interfaces.py (optional, default=['~/.hermes/.env', '~/.openclaw/**/auth-profiles.json']). Filter paths in snapshot.py before copying. Add test_sensitive_excluded to tests/test_snapshot.py. pytest tests/test_snapshot.py -q must pass (12+). git add -A && git commit.
+./observer/logs/developer_iter-1_20260620T072110Z.log:28:-    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
+./observer/logs/developer_iter-1_20260620T072110Z.log:30:-      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
+./observer/logs/developer_iter-1_20260620T072110Z.log:49:+    task_instruction: Implement snapshot exclude_patterns per prd/PRD.md. Add exclude_patterns
+./observer/logs/developer_iter-1_20260620T072110Z.log:50:+      field to SnapshotConfig in interfaces.py (optional, default=['~/.hermes/.env',
+./observer/logs/developer_iter-1_20260620T072110Z.log:239:Add 'exclude_patterns' to SnapshotConfig (optional, default includes:
+./observer/logs/developer_iter-1_20260620T072110Z.log:245:- interfaces.py: SnapshotConfig +exclude_patterns: list[str] field
+./observer/logs/developer_iter-1_20260620T072110Z.log:258:1. **`interfaces.py:199`** — Added `exclude_patterns` field to `SnapshotConfig` with default `['~/.hermes/.env', '~/.openclaw/**/auth-profiles.json']`
+./observer/logs/developer_iter-1_20260620T072110Z.log:261:   - `exclude_patterns: list[str]` field on `FileSnapshotManager` (defaults to empty list)
+./observer/logs/developer_iter-1_20260620T072110Z.log:265:3. **`tests/test_snapshot.py`** — Added `test_sensitive_excluded` test that creates a `.env` file and verifies it's rejected when `exclude_patterns=["*.env", "*.secret"]`
+./observer/logs/planner_iter-1_20260619T161735Z.log:251:+**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/planner_iter-1_20260619T161735Z.log:398:-**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/planner_iter-1_20260620T065021Z.log:111:+    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
+./observer/logs/planner_iter-1_20260620T065021Z.log:113:+      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
+./observer/logs/reviewer_iter-1_20260619T162055Z.log:241:+**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-1_20260619T162055Z.log:388:-**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-1_20260619T162055Z.log:800:+**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-1_20260619T162055Z.log:947:-**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-1_20260619T160819Z.log:1132:+**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-1_20260619T160819Z.log:1548:-- 所有 Config 类（ProjectConfig, BootstrapConfig, BudgetConfig, SnapshotConfig, RiskMatrixConfig）正确构建
+./observer/logs/reviewer_iter-1_20260619T160819Z.log:1641:-- `FileSnapshotManager` dataclass 与 interfaces.py 完全匹配
+./observer/logs/reviewer_iter-1_20260619T160819Z.log:1664:-- `TestFileSnapshotManager`: 11 个测试（create, snapshot file/directory, restore file/directory, nonexistent audit_id, list empty/single/multiple, cleanup_expired, preserves permissions）
+./observer/logs/reviewer_iter-1_20260619T160819Z.log:1917:**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-1_20260619T160819Z.log:3247:+**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-1_20260619T160819Z.log:3663:-- 所有 Config 类（ProjectConfig, BootstrapConfig, BudgetConfig, SnapshotConfig, RiskMatrixConfig）正确构建
+./observer/logs/reviewer_iter-1_20260619T160819Z.log:3756:-- `FileSnapshotManager` dataclass 与 interfaces.py 完全匹配
+./observer/logs/reviewer_iter-1_20260619T160819Z.log:3779:-- `TestFileSnapshotManager`: 11 个测试（create, snapshot file/directory, restore file/directory, nonexistent audit_id, list empty/single/multiple, cleanup_expired, preserves permissions）
+./observer/logs/reviewer_iter-1_20260619T160819Z.log:4032:**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-1_20260619T160819Z.log:4292:**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-1_20260619T160819Z.log:5706:**快照保护**：`SnapshotConfig.external_paths` 已包含 `~/.openclaw/agents/`，Observer 会在 Developer 执行前后做快照。
+./observer/logs/reviewer_iter-2_20260620T064626Z.log:102:+    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
+./observer/logs/reviewer_iter-2_20260620T064626Z.log:104:+      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
+./observer/logs/reviewer_iter-2_20260620T064626Z.log:501:+    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
+./observer/logs/reviewer_iter-2_20260620T064626Z.log:503:+      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
+
+exec
+/bin/bash -lc 'ls -la reviews' in /home/sean/projects/unison
+ succeeded in 0ms:
+total 8
+drwxrwxr-x  2 sean sean 4096 Jun 20 15:21 .
+drwxrwxr-x 16 sean sean 4096 Jun 20 15:22 ..
+
+codex
+I found `SnapshotConfig.exclude_patterns` exists, but I’m checking the call sites next. The implementation only protects real runs if the config value is passed into `FileSnapshotManager` wherever snapshots are constructed.
+exec
+/bin/bash -lc "sed -n '300,370p' src/unison/pipeline.py" in /home/sean/projects/unison
+exec
+/bin/bash -lc "sed -n '1,120p' src/unison/pipeline.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+"""
+pipeline.py — PipelineSpec loading + validation + dry-run
+=========================================================
+万物一心（Unison）Multi-Agent Collaboration Bridge
+
+Loads ``pipeline.yaml``, validates required fields and runtimes,
+constructs an immutable ``PipelineSpec``, and provides a ``dry_run``
+check for prompt-file existence.
+"""
+
+from __future__ import annotations
+
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any
+
+
+class _NonWaitingThreadPoolExecutor(ThreadPoolExecutor):
+    """ThreadPoolExecutor marker subclass for the production default.
+
+    The non-blocking behavior comes from the explicit
+    ``pool.shutdown(wait=False, cancel_futures=True)`` call in
+    ``DAGScheduler.execute_parallel``'s finally block — not from
+    overriding ``__exit__``. This subclass exists so the production
+    default can be distinguished from a user-supplied default
+    ``ThreadPoolExecutor`` and so future maintainers see the
+    rationale at the import site.
+
+    If you want to make the daemon-exit behavior more robust (e.g.
+    set ``thread.daemon = True`` on the worker threads), subclass
+    and override ``_adjust_thread_count`` here. The current
+    ``shutdown(wait=False, cancel_futures=True)`` is sufficient for
+    the deadline-aware scheduler because orphan worker threads do
+    not block process exit if the harness returns promptly.
+    """
+
+import yaml
+
+from interfaces import (
+    AgentSpec,
+    BootstrapConfig,
+    BudgetConfig,
+    PipelineSpec,
+    ProjectConfig,
+    ReviewerConfig,
+    RiskMatrixConfig,
+    SnapshotConfig,
+    Stage,
+    WorktreeConfig,
+    World,
+)
+
+# ============================================================================
+# Exceptions
+# ============================================================================
+
+
+class PipelineValidationError(Exception):
+    """Raised when pipeline.yaml fails validation.
+
+    Carries a human-readable message suitable for CLI output.
+    """
+
+    pass
+
+
+# ============================================================================
+# PipelineLoader
+# ============================================================================
+
+
+class PipelineLoader:
+    """Load and validate ``pipeline.yaml`` configuration files.
+
+    Usage::
+
+        loader = PipelineLoader()
+        spec = loader.load(Path("path/to/pipeline.yaml"))
+        if loader.dry_run(spec):
+            print("Ready to run")
+    """
+
+    # Valid runtime values (matches interfaces.Runtime)
+    VALID_RUNTIMES: frozenset[str] = frozenset(
+        {"claude", "codex", "hermes", "openclaw"}
+    )
+
+    # Valid agent roles (matches interfaces.AgentRole — now str, no longer restricted)
+    VALID_ROLES: frozenset[str] = frozenset()
+
+    # Required pipeline roles（planner 是可选角色，无 planner 时退化为 2-agent 模式）
+    REQUIRED_PIPELINE_ROLES: frozenset[str] = frozenset({"developer", "reviewer"})
+
+    # ------------------------------------------------------------------
+    # load
+    # ------------------------------------------------------------------
+
+    def load(self, pipeline_file: Path) -> PipelineSpec:
+        """Load and validate a pipeline YAML file.
+
+        Args:
+            pipeline_file: Path to a ``pipeline.yaml`` file.
+
+        Returns:
+            A fully-constructed, immutable ``PipelineSpec``.
+
+        Raises:
+            FileNotFoundError: If *pipeline_file* does not exist.
+            yaml.YAMLError: If the file is not valid YAML.
+            PipelineValidationError: If the content fails validation
+                (missing version, missing agents, invalid runtime, etc.).
+        """
+        # ---- existence check ----
+        if not pipeline_file.exists():
+            raise FileNotFoundError(f"Pipeline file not found: {pipeline_file}")
+
+        # ---- YAML parse ----
+        try:
+            with open(pipeline_file, "r", encoding="utf-8") as fh:
+
+ succeeded in 0ms:
+        for key in ("language", "test_command", "build_command", "lint_command"):
+            if key in raw:
+                kwargs[key] = raw[key]
+        return ProjectConfig(**kwargs)
+
+    def _build_bootstrap(
+        self, raw: dict[str, Any] | None
+    ) -> BootstrapConfig:
+        """Build BootstrapConfig, falling back to defaults."""
+        if not raw:
+            return BootstrapConfig()
+        return BootstrapConfig(commands=raw.get("commands", []))
+
+    def _build_budget(self, raw: dict[str, Any] | None) -> BudgetConfig:
+        """Build BudgetConfig, falling back to defaults."""
+        if not raw:
+            return BudgetConfig()
+        kwargs: dict[str, Any] = {}
+        for key in (
+            "daily_token_limit",
+            "per_task_limit",
+            "cost_tracking",
+            "overflow_action",
+            "halt_action",
+            "downgrade_map",
+        ):
+            if key in raw:
+                kwargs[key] = raw[key]
+        return BudgetConfig(**kwargs)
+
+    def _build_snapshots(
+        self, raw: dict[str, Any] | None
+    ) -> SnapshotConfig:
+        """Build SnapshotConfig, falling back to defaults."""
+        if not raw:
+            return SnapshotConfig()
+        kwargs: dict[str, Any] = {}
+        for key in (
+            "enabled",
+            "retention_hours",
+            "max_slots",
+            "max_pre_snapshot_size_mb",
+            "external_paths",
+        ):
+            if key in raw:
+                kwargs[key] = raw[key]
+        return SnapshotConfig(**kwargs)
+
+    def _build_risk_matrix(
+        self, raw: dict[str, Any] | None
+    ) -> RiskMatrixConfig:
+        """Build RiskMatrixConfig, falling back to defaults."""
+        if not raw:
+            return RiskMatrixConfig()
+        kwargs: dict[str, Any] = {}
+        for key in (
+            "system_critical_paths",
+            "known_safe_external_commands",
+            "workspace_rules",
+            "external_rules",
+        ):
+            if key in raw:
+                kwargs[key] = raw[key]
+        return RiskMatrixConfig(**kwargs)
+
+    # -- V2 builders ----------------------------------------------------
+
+    def _build_dag(self, raw: list[dict] | None) -> list[Stage] | None:
+        """Build a list of Stage objects from raw YAML dag entries.
+
+        Args:
+
+exec
+/bin/bash -lc "sed -n '560,620p' interfaces.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+        """
+        ...
+
+# ============================================================================
+# SnapshotManager — 快照安全网
+# ============================================================================
+
+@dataclass
+class SnapshotRecord:
+    """一次快照记录。"""
+    audit_id: str
+    timestamp: str
+    original_path: Path
+    snapshot_path: Path
+    operation: Operation
+    agent: AgentRole
+    iteration: int
+
+class SnapshotManager(Protocol):
+    def snapshot(self, path: Path, operation: Operation,
+                 agent: AgentRole, iteration: int) -> SnapshotRecord: ...
+    def restore(self, audit_id: str) -> Path: ...
+    def list_snapshots(self, project: str) -> list[SnapshotRecord]: ...
+    def cleanup_expired(self) -> int: ...  # 返回清理数
+
+@dataclass
+class FileSnapshotManager:
+    """文件系统快照。cp 到 ~/.unison/snapshots/<project>/<audit_id>/。"""
+    base_dir: Path  # ~/.unison/snapshots/
+    retention_hours: int = 168
+    max_slots: int = 100
+
+    def snapshot(self, path: Path, operation: Operation,
+                 agent: AgentRole, iteration: int) -> SnapshotRecord: ...
+
+    def restore(self, audit_id: str) -> Path: ...
+
+    def list_snapshots(self, project: str) -> list[SnapshotRecord]: ...
+
+    def cleanup_expired(self) -> int: ...
+
+# ============================================================================
+# LockManager — 并发防护
+# ============================================================================
+
+class LockManager(Protocol):
+    def acquire(self, project: str) -> bool: ...  # False = 已锁
+    def release(self, project: str) -> None: ...
+    def is_locked(self, project: str) -> bool: ...
+
+@dataclass
+class FileLockManager:
+    """~/.unison/locks/<project>.lock（PID + timestamp）。"""
+    lock_dir: Path
+
+    def acquire(self, project: str) -> bool: ...
+
+    def release(self, project: str) -> None: ...
+
+    def is_locked(self, project: str) -> bool: ...
+
+
+exec
+/bin/bash -lc "rg -n \"snapshot\\(|_should_snapshot|snapshots\\.|external_paths|max_pre_snapshot|base_dir=.*snapshot|snapshots\" src interfaces.py tests -S" in /home/sean/projects/unison
+ succeeded in 0ms:
+tests/test_pipeline.py:146:    def test_load_pipeline_with_snapshots(self, tmp_path):
+tests/test_pipeline.py:163:snapshots:
+tests/test_pipeline.py:167:  external_paths:
+tests/test_pipeline.py:174:        assert spec.snapshots.enabled is True
+tests/test_pipeline.py:175:        assert spec.snapshots.retention_hours == 72
+tests/test_pipeline.py:176:        assert spec.snapshots.max_slots == 50
+tests/test_pipeline.py:177:        assert "~/.hermes/skills/" in spec.snapshots.external_paths
+tests/test_snapshot.py:24:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+tests/test_snapshot.py:25:        record = sm.snapshot(
+tests/test_snapshot.py:47:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+tests/test_snapshot.py:48:        record = sm.snapshot(
+tests/test_snapshot.py:67:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+tests/test_snapshot.py:68:        record = sm.snapshot(
+tests/test_snapshot.py:92:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+tests/test_snapshot.py:93:        record = sm.snapshot(
+tests/test_snapshot.py:112:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+tests/test_snapshot.py:117:    def test_list_snapshots_empty(self, tmp_path):
+tests/test_snapshot.py:118:        """list_snapshots returns empty list when no snapshots."""
+tests/test_snapshot.py:119:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+tests/test_snapshot.py:120:        result = sm.list_snapshots("test-project")
+tests/test_snapshot.py:123:    def test_list_snapshots_single(self, tmp_path):
+tests/test_snapshot.py:124:        """list_snapshots returns single snapshot."""
+tests/test_snapshot.py:128:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+tests/test_snapshot.py:129:        sm.snapshot(
+tests/test_snapshot.py:136:        result = sm.list_snapshots("test-project")
+tests/test_snapshot.py:137:        # Note: list_snapshots filters by project, but snapshot() doesn't take project param
+tests/test_snapshot.py:141:    def test_list_snapshots_multiple(self, tmp_path):
+tests/test_snapshot.py:142:        """list_snapshots returns multiple snapshots."""
+tests/test_snapshot.py:146:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+tests/test_snapshot.py:147:        sm.snapshot(path=original, operation=Operation.MODIFY, agent="developer", iteration=1)
+tests/test_snapshot.py:148:        sm.snapshot(path=original, operation=Operation.MODIFY, agent="developer", iteration=2)
+tests/test_snapshot.py:149:        sm.snapshot(path=original, operation=Operation.MODIFY, agent="reviewer", iteration=3)
+tests/test_snapshot.py:151:        result = sm.list_snapshots("test-project")
+tests/test_snapshot.py:155:        """cleanup_expired removes old snapshots."""
+tests/test_snapshot.py:159:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots", retention_hours=0)
+tests/test_snapshot.py:160:        sm.snapshot(path=original, operation=Operation.MODIFY, agent="developer", iteration=1)
+tests/test_snapshot.py:162:        # With 0 retention, all snapshots should be expired
+tests/test_snapshot.py:172:        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+tests/test_snapshot.py:173:        record = sm.snapshot(
+tests/test_snapshot.py:187:            base_dir=tmp_path / "snapshots",
+tests/test_snapshot.py:195:            sm.snapshot(
+tests/test_snapshot.py:212:            snapshot_path=Path("/tmp/snapshots/abc123"),
+tests/test_budget.py:214:    def test_summary_is_snapshot(self):
+interfaces.py:204:    max_pre_snapshot_size_mb: int = 50
+interfaces.py:205:    external_paths: list[str] = field(default_factory=lambda: [
+interfaces.py:264:    snapshots: SnapshotConfig = field(default_factory=SnapshotConfig)
+interfaces.py:579:    def snapshot(self, path: Path, operation: Operation,
+interfaces.py:582:    def list_snapshots(self, project: str) -> list[SnapshotRecord]: ...
+interfaces.py:587:    """文件系统快照。cp 到 ~/.unison/snapshots/<project>/<audit_id>/。"""
+interfaces.py:588:    base_dir: Path  # ~/.unison/snapshots/
+interfaces.py:592:    def snapshot(self, path: Path, operation: Operation,
+interfaces.py:597:    def list_snapshots(self, project: str) -> list[SnapshotRecord]: ...
+src/unison/pipeline.py:164:        snapshots_cfg = self._build_snapshots(raw.get("snapshots"))
+src/unison/pipeline.py:179:            snapshots=snapshots_cfg,
+src/unison/pipeline.py:330:    def _build_snapshots(
+src/unison/pipeline.py:341:            "max_pre_snapshot_size_mb",
+src/unison/pipeline.py:342:            "external_paths",
+src/unison/snapshot.py:3:Snapshots are stored under ``base_dir/<audit_id>/`` with a JSON manifest
+src/unison/snapshot.py:60:        base_dir: Root directory for all snapshots (e.g. ``~/.unison/snapshots/``).
+src/unison/snapshot.py:61:        retention_hours: Snapshots older than this are eligible for cleanup.
+src/unison/snapshot.py:74:    def _should_snapshot(self, path: Path) -> bool:
+src/unison/snapshot.py:144:    def snapshot(
+src/unison/snapshot.py:158:        if not self._should_snapshot(path):
+src/unison/snapshot.py:228:    def list_snapshots(self, project: str) -> list[SnapshotRecord]:
+src/unison/snapshot.py:232:        Currently returns all known snapshots regardless of project.
+src/unison/snapshot.py:238:        """Remove snapshots whose age exceeds ``retention_hours``.
+src/unison/snapshot.py:240:        Returns the number of snapshots cleaned up.
+
+codex
+The review issue is concrete: the new unit test covers manually supplied patterns, but the default sensitive exclusions are not active for a plain `FileSnapshotManager`, and YAML-loaded `snapshots.exclude_patterns` is ignored by the loader. I’m grabbing line numbers and then I’ll write the requested review file.
+exec
+/bin/bash -lc "nl -ba src/unison/snapshot.py | sed -n '60,170p'" in /home/sean/projects/unison
+exec
+/bin/bash -lc "nl -ba src/unison/pipeline.py | sed -n '330,350p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   330	    def _build_snapshots(
+   331	        self, raw: dict[str, Any] | None
+   332	    ) -> SnapshotConfig:
+   333	        """Build SnapshotConfig, falling back to defaults."""
+   334	        if not raw:
+   335	            return SnapshotConfig()
+   336	        kwargs: dict[str, Any] = {}
+   337	        for key in (
+   338	            "enabled",
+   339	            "retention_hours",
+   340	            "max_slots",
+   341	            "max_pre_snapshot_size_mb",
+   342	            "external_paths",
+   343	        ):
+   344	            if key in raw:
+   345	                kwargs[key] = raw[key]
+   346	        return SnapshotConfig(**kwargs)
+   347	
+   348	    def _build_risk_matrix(
+   349	        self, raw: dict[str, Any] | None
+   350	    ) -> RiskMatrixConfig:
+
+ succeeded in 0ms:
+    60	        base_dir: Root directory for all snapshots (e.g. ``~/.unison/snapshots/``).
+    61	        retention_hours: Snapshots older than this are eligible for cleanup.
+    62	        max_slots: Maximum number of snapshot slots before cleanup is forced.
+    63	    """
+    64	
+    65	    base_dir: Path
+    66	    retention_hours: int = 168
+    67	    max_slots: int = 100
+    68	    exclude_patterns: list[str] = field(default_factory=list)
+    69	
+    70	    # ------------------------------------------------------------------
+    71	    # public helpers
+    72	    # ------------------------------------------------------------------
+    73	
+    74	    def _should_snapshot(self, path: Path) -> bool:
+    75	        """Return False if *path* matches any exclude pattern."""
+    76	        if not self.exclude_patterns:
+    77	            return True
+    78	
+    79	        resolved = str(path.resolve())
+    80	        for pattern in self.exclude_patterns:
+    81	            # Expand ~ to user's home directory
+    82	            if pattern.startswith("~"):
+    83	                expanded = str(Path(pattern).expanduser().resolve())
+    84	                if fnmatch.fnmatch(resolved, expanded):
+    85	                    return False
+    86	            # Match just the filename for simple patterns (e.g. "*.env")
+    87	            if fnmatch.fnmatch(path.name, pattern):
+    88	                return False
+    89	            # Path.match for globstar (**) support
+    90	            try:
+    91	                if path.match(pattern):
+    92	                    return False
+    93	            except (ValueError, OSError):
+    94	                pass
+    95	        return True
+    96	
+    97	    # ------------------------------------------------------------------
+    98	    # internal helpers
+    99	    # ------------------------------------------------------------------
+   100	
+   101	    _MANIFEST_NAME: str = field(default="manifest.json", init=False, repr=False)
+   102	
+   103	    @property
+   104	    def _manifest_path(self) -> Path:
+   105	        return self.base_dir / self._MANIFEST_NAME
+   106	
+   107	    def _read_manifest(self) -> dict[str, dict[str, Any]]:
+   108	        """Read the manifest file, returning {} when it doesn't exist."""
+   109	        if not self._manifest_path.exists():
+   110	            return {}
+   111	        return json.loads(self._manifest_path.read_text())
+   112	
+   113	    def _write_manifest(self, data: dict[str, dict[str, Any]]) -> None:
+   114	        """Atomically write the manifest file."""
+   115	        self.base_dir.mkdir(parents=True, exist_ok=True)
+   116	        self._manifest_path.write_text(json.dumps(data, indent=2, default=str))
+   117	
+   118	    def _record_to_dict(self, record: SnapshotRecord) -> dict[str, Any]:
+   119	        return {
+   120	            "audit_id": record.audit_id,
+   121	            "timestamp": record.timestamp,
+   122	            "original_path": str(record.original_path),
+   123	            "snapshot_path": str(record.snapshot_path),
+   124	            "operation": record.operation.value,
+   125	            "agent": record.agent,
+   126	            "iteration": record.iteration,
+   127	        }
+   128	
+   129	    def _dict_to_record(self, d: dict[str, Any]) -> SnapshotRecord:
+   130	        return SnapshotRecord(
+   131	            audit_id=d["audit_id"],
+   132	            timestamp=d["timestamp"],
+   133	            original_path=Path(d["original_path"]),
+   134	            snapshot_path=Path(d["snapshot_path"]),
+   135	            operation=Operation(d["operation"]),
+   136	            agent=d["agent"],
+   137	            iteration=d["iteration"],
+   138	        )
+   139	
+   140	    # ------------------------------------------------------------------
+   141	    # public API
+   142	    # ------------------------------------------------------------------
+   143	
+   144	    def snapshot(
+   145	        self,
+   146	        path: Path,
+   147	        operation: Operation,
+   148	        agent: AgentRole,
+   149	        iteration: int,
+   150	    ) -> SnapshotRecord:
+   151	        """Take a snapshot of *path* (file or directory).
+   152	
+   153	        Returns a ``SnapshotRecord`` describing the snapshot.
+   154	
+   155	        Raises:
+   156	            ValueError: If *path* matches an ``exclude_pattern``.
+   157	        """
+   158	        if not self._should_snapshot(path):
+   159	            raise ValueError(
+   160	                f"Path {path} matches an exclude pattern, snapshot skipped"
+   161	            )
+   162	
+   163	        audit_id = uuid.uuid4().hex
+   164	        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+   165	
+   166	        # Where the snapshot copy lives
+   167	        snapshot_dir = self.base_dir / audit_id
+   168	        snapshot_dir.mkdir(parents=True, exist_ok=True)
+   169	
+   170	        snapshot_path = snapshot_dir / path.name
+
+exec
+/bin/bash -lc "nl -ba interfaces.py | sed -n '196,216p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   196	    })
+   197	
+   198	@dataclass(frozen=True)
+   199	class SnapshotConfig:
+   200	    """快照安全网配置。"""
+   201	    enabled: bool = True
+   202	    retention_hours: int = 168    # 7d
+   203	    max_slots: int = 100
+   204	    max_pre_snapshot_size_mb: int = 50
+   205	    external_paths: list[str] = field(default_factory=lambda: [
+   206	        "~/.hermes/skills/",
+   207	        "~/.openclaw/agents/",
+   208	    ])
+   209	    exclude_patterns: list[str] = field(default_factory=lambda: [
+   210	        "~/.hermes/.env",
+   211	        "~/.openclaw/**/auth-profiles.json",
+   212	    ])
+   213	
+   214	@dataclass(frozen=True)
+   215	class RiskMatrixConfig:
+   216	    """三元组风险矩阵（YAML 加载后结构化）。"""
+
+exec
+/bin/bash -lc "python3 - <<'PY'
+from pathlib import Path
+from unison.snapshot import FileSnapshotManager
+sm = FileSnapshotManager(base_dir=Path('/tmp/snapshots'))
+print(sm.exclude_patterns)
+print(sm._should_snapshot(Path.home() / '.hermes/.env'))
+PY" in /home/sean/projects/unison
+ succeeded in 0ms:
+[]
+True
+
+codex
+I’m writing the review as `REQUEST_CHANGES` because the safety feature is currently opt-in at the concrete manager level and YAML overrides are dropped. This will only touch `reviews/iter-1.md`.
+apply patch
+patch: completed
+/home/sean/projects/unison/reviews/iter-1.md
+diff --git a/reviews/iter-1.md b/reviews/iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..18fcd68af57d1c7c13072c64eb3a28de9391ae0e
+--- /dev/null
++++ b/reviews/iter-1.md
+@@ -0,0 +1,7 @@
++---
++verdict: REQUEST_CHANGES
++summary: "Tests pass, but default/configured snapshot exclusions are not enforced by normal construction paths."
++findings:
++  - "src/unison/snapshot.py:68 leaves FileSnapshotManager.exclude_patterns empty by default, so FileSnapshotManager(base_dir=...) still allows snapshots of ~/.hermes/.env and ~/.openclaw/**/auth-profiles.json unless callers manually pass patterns; the PRD requires these sensitive paths to be excluded by default."
++  - "src/unison/pipeline.py:337-343 omits exclude_patterns when building SnapshotConfig from YAML, so user-provided snapshot exclusions are silently ignored."
++---
+
+diff --git a/reviews/iter-1.md b/reviews/iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..18fcd68af57d1c7c13072c64eb3a28de9391ae0e
+--- /dev/null
++++ b/reviews/iter-1.md
+@@ -0,0 +1,7 @@
++---
++verdict: REQUEST_CHANGES
++summary: "Tests pass, but default/configured snapshot exclusions are not enforced by normal construction paths."
++findings:
++  - "src/unison/snapshot.py:68 leaves FileSnapshotManager.exclude_patterns empty by default, so FileSnapshotManager(base_dir=...) still allows snapshots of ~/.hermes/.env and ~/.openclaw/**/auth-profiles.json unless callers manually pass patterns; the PRD requires these sensitive paths to be excluded by default."
++  - "src/unison/pipeline.py:337-343 omits exclude_patterns when building SnapshotConfig from YAML, so user-provided snapshot exclusions are silently ignored."
++---
+
+codex
+The review file is written. I’m doing a quick readback so the final response can state exactly what was recorded.
+exec
+/bin/bash -lc 'git status --short' in /home/sean/projects/unison
+ succeeded in 0ms:
+?? .unison/budget.json
+?? observer/logs/developer_iter-1_20260620T072110Z.log
+?? reviews/
+
+exec
+/bin/bash -lc "sed -n '1,80p' reviews/iter-1.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+---
+verdict: REQUEST_CHANGES
+summary: "Tests pass, but default/configured snapshot exclusions are not enforced by normal construction paths."
+findings:
+  - "src/unison/snapshot.py:68 leaves FileSnapshotManager.exclude_patterns empty by default, so FileSnapshotManager(base_dir=...) still allows snapshots of ~/.hermes/.env and ~/.openclaw/**/auth-profiles.json unless callers manually pass patterns; the PRD requires these sensitive paths to be excluded by default."
+  - "src/unison/pipeline.py:337-343 omits exclude_patterns when building SnapshotConfig from YAML, so user-provided snapshot exclusions are silently ignored."
+---
+
+diff --git a/reviews/iter-1.md b/reviews/iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..18fcd68af57d1c7c13072c64eb3a28de9391ae0e
+--- /dev/null
++++ b/reviews/iter-1.md
+@@ -0,0 +1,7 @@
++---
++verdict: REQUEST_CHANGES
++summary: "Tests pass, but default/configured snapshot exclusions are not enforced by normal construction paths."
++findings:
++  - "src/unison/snapshot.py:68 leaves FileSnapshotManager.exclude_patterns empty by default, so FileSnapshotManager(base_dir=...) still allows snapshots of ~/.hermes/.env and ~/.openclaw/**/auth-profiles.json unless callers manually pass patterns; the PRD requires these sensitive paths to be excluded by default."
++  - "src/unison/pipeline.py:337-343 omits exclude_patterns when building SnapshotConfig from YAML, so user-provided snapshot exclusions are silently ignored."
++---
+
+codex
+Done.
+
+Tests: `python3 -m pytest tests/test_snapshot.py -q` passed with `13 passed`.
+
+Wrote review to [reviews/iter-1.md](/home/sean/projects/unison/reviews/iter-1.md:1) with verdict `REQUEST_CHANGES` due to missing default enforcement and YAML loader omission for `exclude_patterns`.
+diff --git a/reviews/iter-1.md b/reviews/iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..18fcd68af57d1c7c13072c64eb3a28de9391ae0e
+--- /dev/null
++++ b/reviews/iter-1.md
+@@ -0,0 +1,7 @@
++---
++verdict: REQUEST_CHANGES
++summary: "Tests pass, but default/configured snapshot exclusions are not enforced by normal construction paths."
++findings:
++  - "src/unison/snapshot.py:68 leaves FileSnapshotManager.exclude_patterns empty by default, so FileSnapshotManager(base_dir=...) still allows snapshots of ~/.hermes/.env and ~/.openclaw/**/auth-profiles.json unless callers manually pass patterns; the PRD requires these sensitive paths to be excluded by default."
++  - "src/unison/pipeline.py:337-343 omits exclude_patterns when building SnapshotConfig from YAML, so user-provided snapshot exclusions are silently ignored."
++---
+
+tokens used
+24,102
+

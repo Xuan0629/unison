@@ -340,6 +340,7 @@ class PipelineLoader:
             "max_slots",
             "max_pre_snapshot_size_mb",
             "external_paths",
+            "exclude_patterns",
         ):
             if key in raw:
                 kwargs[key] = raw[key]
