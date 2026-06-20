@@ -1,4 +1,5 @@
 """Tests for lock.py — FileLockManager with PID detection + stale lock override."""
+import multiprocessing
 import os
 import tempfile
 from pathlib import Path
@@ -141,6 +142,36 @@ class TestFileLockManager:
         lm.release("project-a")
         assert lm.is_locked("project-a") is False
         assert lm.is_locked("project-b") is True
+
+
+    def test_concurrent_acquire(self, tmp_path):
+        """Two processes race to acquire the same lock — only one wins."""
+        lock_dir = tmp_path / "locks"
+
+        def try_acquire(path_str, project, queue):
+            lm = FileLockManager(lock_dir=Path(path_str))
+            ok = lm.acquire(project)
+            queue.put(ok)
+
+        results = multiprocessing.Queue()
+        p1 = multiprocessing.Process(
+            target=try_acquire, args=(str(lock_dir), "concurrent", results)
+        )
+        p2 = multiprocessing.Process(
+            target=try_acquire, args=(str(lock_dir), "concurrent", results)
+        )
+
+        p1.start()
+        p2.start()
+        p1.join(timeout=10)
+        p2.join(timeout=10)
+
+        r1 = results.get(timeout=5)
+        r2 = results.get(timeout=5)
+
+        # Mutual exclusion: one must succeed, one must fail
+        assert r1 != r2, f"Expected one True and one False, got {r1}/{r2}"
+        assert r1 is True or r2 is True
 
 
 class TestFileLockManagerPIDDetection:
