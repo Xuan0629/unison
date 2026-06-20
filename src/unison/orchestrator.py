@@ -11,6 +11,7 @@ from __future__ import annotations
 import itertools
 import os
 import shlex
+import signal
 import subprocess
 import time
 from dataclasses import replace
@@ -93,6 +94,10 @@ class Orchestrator:
 
         # -- budget tracking (V2, lazy-init) -----------------------------------
         self._budget_tracker: BudgetTracker | None = None
+
+        # -- signal handlers (§3 halt conditions) ----------------------------
+        signal.signal(signal.SIGINT, lambda s, f: self.halt("SIGINT"))
+        signal.signal(signal.SIGTERM, lambda s, f: self.halt("SIGTERM"))
 
     # ==================================================================
     # Public API
