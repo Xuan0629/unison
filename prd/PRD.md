@@ -1,26 +1,24 @@
-# Fix: Runner deduplication refactor
+# Fix: API key masking in runner logs
 
 ## Problem
-Three runners (claude/codex/hermes) share ~95% identical code for subprocess.run,
-timeout handling, log writing, and AgentResult construction. Bug fix in one
-must be replicated to all three manually. New runner (OpenClawRunner) had to
-copy the entire pattern.
+Runner log files contain full prompts including API keys passed via environment
+or embedded in the prompt text. This is a security risk.
 
 ## Solution
-Extract BaseRunner in src/unison/runners/base.py:
-- run(spec, prompt, workdir, timeout, log_path) -> AgentResult
-- _build_command(spec, prompt) -> list[str] (override per subclass)
-- _effective_timeout(base_timeout) -> int (default: base_timeout)
-- _write_log(log_path, cmd, stdout, stderr)
-- Shared _handle_timeout and _handle_not_found logic
+Add mask_secrets(text: str) -> str utility that replaces:
+- sk-... (OpenAI keys)
+- sk-ant-... (Anthropic keys)
+- Bearer <token>
+- api_key=<value>
+- Values of os.environ keys ending in _API_KEY
 
-Subclasses:
-- ClaudeRunner(BaseRunner): binary="claude"
-- CodexRunner(BaseRunner): binary="codex", _effective_timeout adds 30s startup_grace
-- HermesRunner(BaseRunner): binary="hermes"
-- OpenClawRunner: UNCHANGED (HTTP, not subprocess)
+With "[REDACTED]". Apply to log writing in all runners.
+
+## Implementation
+- New function in src/unison/runners/base.py or new src/unison/utils.py
+- Call mask_secrets() before writing log files
+- Preserve format and context, only mask the values
 
 ## Acceptance
-- All existing tests pass (500+)
-- No functional change
-- Fewer lines of duplicated code
+- Existing tests pass
+- Manual verification: logs contain [REDACTED] not actual keys

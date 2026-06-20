@@ -1,0 +1,303 @@
+=== COMMAND ===
+claude -p --dangerously-skip-permissions Refactor runners per prd/PRD.md. Create BaseRunner in src/unison/runners/base.py with shared subprocess.run, timeout handling, log writing, AgentResult construction. Make ClaudeRunner, CodexRunner, HermesRunner subclass BaseRunner with only binary name overrides. Keep OpenClawRunner unchanged. pytest tests/ -q must pass (all 500+ tests). git add -A && git commit.
+
+# Developer — Unison code review fix
+
+Implement the fix per the approved PRD and tech-design.
+
+1. Read prd/PRD.md and prd/tech-design.md
+2. Modify only the files specified in the design
+3. Keep tests green — run the test command first
+4. git add -A && git commit with a descriptive message
+
+
+## Git Diff
+diff --git a/.unison/budget.json b/.unison/budget.json
+deleted file mode 100644
+index 17eb78a..0000000
+--- a/.unison/budget.json
++++ /dev/null
+@@ -1,19 +0,0 @@
+-{
+-  "date": "2026-06-20",
+-  "daily_used": 3574,
+-  "task_used": 3574,
+-  "phases": [
+-    {
+-      "phase": "developer",
+-      "iter_n": 1,
+-      "tokens_used": 2359,
+-      "timestamp": "2026-06-20T07:22:41.165622+00:00"
+-    },
+-    {
+-      "phase": "reviewer",
+-      "iter_n": 1,
+-      "tokens_used": 1215,
+... (truncated)
+
+diff --git a/observer/logs/developer_iter-2_20260620T072740Z.log b/observer/logs/developer_iter-2_20260620T072740Z.log
+new file mode 100644
+index 0000000..269f107
+--- /dev/null
++++ b/observer/logs/developer_iter-2_20260620T072740Z.log
+@@ -0,0 +1,169 @@
++=== COMMAND ===
++claude -p --dangerously-skip-permissions Implement snapshot exclude_patterns per prd/PRD.md. Add exclude_patterns field to SnapshotConfig in interfaces.py (optional, default=['~/.hermes/.env', '~/.openclaw/**/auth-profiles.json']). Filter paths in snapshot.py before copying. Add test_sensitive_excluded to tests/test_snapshot.py. pytest tests/test_snapshot.py -q must pass (12+). git add -A && git commit.
++
++# Developer — Unison code review fix
++
++Implement the fix per the approved PRD and tech-design.
++
++1. Read prd/PRD.md and prd/tech-design.md
++2. Modify only the files specified in the design
++3. Keep tests green — run the test command first
++4. git add -A && git commit with a descriptive message
++
++
++## Last Review Findings
++[INFO] src/unison/snapshot.py:68 leaves FileSnapshotManager.exclude_patterns empty by default, so FileSnapshotManager(base_dir=...) still allows snapshots of ~/.hermes/.env and ~/.openclaw/**/auth-profiles.json unless callers manually pass patterns; the PRD requires these sensitive paths to be excluded by default.
++[INFO] src/unison/pipeline.py:337-343 omits exclude_patterns when building SnapshotConfig from YAML, so user-provided snapshot exclusions are silently ignored.
++
++## Git Diff
++
+
+diff --git a/interfaces.py b/interfaces.py
++index 8922797..58592bf 100644
++--- a/interfaces.py
+++++ b/interfaces.py
++@@ -206,6 +206,10 @@ class SnapshotConfig:
++         "~/.hermes/skills/",
++         "~/.openclaw/agents/",
++     ])
+++    exclude_patterns: list[str] = field(default_factory=lambda: [
+++        "~/.hermes/.env",
+++        "~/.openclaw/**/auth-profiles.json",
+++    ])
++... (truncated)
++
++
+
+diff --git a/src/unison/snapshot.py b/src/unison/snapshot.py
++index ca7be1d..7b3f32a 100644
++--- a/src/unison/snapshot.py
+++++ b/src/unison/snapshot.py
++@@ -6,6 +6,7 @@ at ``base_dir/manifest.json`` mapping audit_ids to their SnapshotRecord.
++ 
++ from __future__ import annotations
++ 
+++import fnmatch
++ import json
++ import shutil
++ import uuid
++@@ -64,6 +65,34 @@ class FileSnapshotManager:
++     base_dir: Path
++     retention_hours: int = 168
++     max_slots: int = 100
+++    exclude_patterns: list[str] = field(default_factory=list)
+++
+++    # ------------------------------------------------------------------
+++    # public helpers
+++    # ------------------------------------------------------------------
+++
+++    def _should_snapshot(self, path: Path) -> bool:
+++        """Return False if *path* matches any exclude pattern."""
+++        if not self.exclude_patterns:
+++            return True
+++
+++        resolved = str(path.resolve())
+++        for pattern in self.exclude_patterns:
+++            # Expand ~ to user's home directory
+++            if pattern.startswith("~"):
+++                expanded = str(Path(pattern).expanduser().resolve())
+++                if fnmatch.fnmatch(resolved, expanded):
+++                    return False
+++            # Match just the filename for simple patterns (e.g. "*.env")
+++            if fnmatch.fnmatch(path.name, pattern):
+++                return False
+++            # Path.match for globstar (**) support
+++            try:
+++                if path.match(pattern):
+++                    return False
+++            except (ValueError, OSError):
+++                pass
+++        return True
++ 
++     # ------------------------------------------------------------------
++     # internal helpers
++@@ -122,7 +151,15 @@ class FileSnapshotManager:
++         """Take a snapshot of *path* (file or directory).
++ 
++         Returns a ``SnapshotRecord`` describing the snapshot.
+++
+++        Raises:
+++            ValueError: If *path* matches an ``exclude_pattern``.
++         """
+++        if not self._should_snapshot(path):
+++            raise ValueError(
+++                f"Path {path} matches an exclude pattern, snapshot skipped"
+++            )
+++
++         audit_id = uuid.uuid4().hex
++         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
++ 
++
++
++
+
+diff --git a/tests/test_snapshot.py b/tests/test_snapshot.py
++index 80e973a..f602327 100644
++--- a/tests/test_snapshot.py
+++++ b/tests/test_snapshot.py
++@@ -181,6 +181,25 @@ class TestFileSnapshotManager:
++         assert record.snapshot_path.stat().st_mode == original.stat().st_mode
++ 
++ 
+++    def test_sensitive_excluded(self, tmp_path):
+++        """Sensitive files matching exclude_patterns are rejected."""
+++        sm = FileSnapshotManager(
+++            base_dir=tmp_path / "snapshots",
+++            exclude_patterns=["*.env", "*.secret"],
+++        )
+++
+++        env_file = tmp_path / ".env"
+++        env_file.write_text("API_KEY=secret123")
+++
+++        with pytest.raises(ValueError, match="exclude"):
+++            sm.snapshot(
+++                path=env_file,
+++                operation=Operation.MODIFY,
+++                agent="developer",
+++                iteration=1,
+++            )
+++
+++
++ class TestSnapshotRecord:
++     """SnapshotRecord dataclass tests."""
++ 
++
++
++## Design
++# fix
++
++
++## PRD
++# Fix: Exclude sensitive paths from snapshots
++
++## Problem
++Snapshots store files unencrypted. Manifest contains full resolved paths.
++If snapshot captures .env or auth config, API keys leak.
++
++## Solution
++Add 'exclude_patterns' to SnapshotConfig (optional, default includes:
++~/.hermes/.env, ~/.openclaw/**/auth-profiles.json).
++SnapshotManager._should_snapshot() checks each path against patterns
++using fnmatch before copying.
++
++## Implementation
++- interfaces.py: SnapshotConfig +exclude_patterns: list[str] field
++- snapshot.py: filter paths before snapshot
++
++## Acceptance
++- snapshot tests pass (12+)
++- New test: sensitive file excluded from snapshot
++
++
++=== STDOUT ===
++Done. Here's what was fixed:
++
++**Problem**: `pipeline.py:337-343` — `_build_snapshots()` iterates over a hardcoded list of keys when loading YAML config. `exclude_patterns` was missing from that list, so any `exclude_patterns` specified in a project's YAML config was silently ignored.
++
++**Fix**: Added `"exclude_patterns"` to the key iteration in `_build_snapshots()`, so when users configure exclusions in YAML (e.g., `snapshots.exclude_patterns: ["*.secret"]`), they're properly passed through to `SnapshotConfig`.
++
++**Result**: 
++- 506/506 tests pass (13 snapshot tests including `test_sensitive_excluded`)
++- Committed as `d8ddebc`
++
++
++=== STDERR ===
++
+
+diff --git a/prd/PRD.md b/prd/PRD.md
+index 3444671..b47f5fe 100644
+--- a/prd/PRD.md
++++ b/prd/PRD.md
+@@ -1,19 +1,26 @@
+-# Fix: Exclude sensitive paths from snapshots
++# Fix: Runner deduplication refactor
+ 
+ ## Problem
+-Snapshots store files unencrypted. Manifest contains full resolved paths.
+-If snapshot captures .env or auth config, API keys leak.
++Three runners (claude/codex/hermes) share ~95% identical code for subprocess.run,
++timeout handling, log writing, and AgentResult construction. Bug fix in one
++must be replicated to all three manually. New runner (OpenClawRunner) had to
++copy the entire pattern.
+ 
+ ## Solution
+-Add 'exclude_patterns' to SnapshotConfig (optional, default includes:
+-~/.hermes/.env, ~/.openclaw/**/auth-profiles.json).
+-SnapshotManager._should_snapshot() checks each path against patterns
+-using fnmatch before copying.
++Extract BaseRunner in src/unison/runners/base.py:
++- run(spec, prompt, workdir, timeout, log_path) -> AgentResult
++- _build_command(spec, prompt) -> 
+...[diff truncated]
+
+## Design
+# refactor
+
+
+## PRD
+# Fix: Runner deduplication refactor
+
+## Problem
+Three runners (claude/codex/hermes) share ~95% identical code for subprocess.run,
+timeout handling, log writing, and AgentResult construction. Bug fix in one
+must be replicated to all three manually. New runner (OpenClawRunner) had to
+copy the entire pattern.
+
+## Solution
+Extract BaseRunner in src/unison/runners/base.py:
+- run(spec, prompt, workdir, timeout, log_path) -> AgentResult
+- _build_command(spec, prompt) -> list[str] (override per subclass)
+- _effective_timeout(base_timeout) -> int (default: base_timeout)
+- _write_log(log_path, cmd, stdout, stderr)
+- Shared _handle_timeout and _handle_not_found logic
+
+Subclasses:
+- ClaudeRunner(BaseRunner): binary="claude"
+- CodexRunner(BaseRunner): binary="codex", _effective_timeout adds 30s startup_grace
+- HermesRunner(BaseRunner): binary="hermes"
+- OpenClawRunner: UNCHANGED (HTTP, not subprocess)
+
+## Acceptance
+- All existing tests pass (500+)
+- No functional change
+- Fewer lines of duplicated code
+
+
+=== STDOUT ===
+Done. Here's the summary:
+
+**Refactored runners per PRD** — extracted `BaseRunner` dataclass in `src/unison/runners/base.py` with all shared subprocess logic:
+
+| File | Before | After |
+|------|--------|-------|
+| `base.py` | `AgentRunner` Protocol only | `BaseRunner` dataclass + `AgentRunner` compat class |
+| `claude.py` | 83 lines (full subprocess) | 14 lines (`binary="claude"`) |
+| `codex.py` | 91 lines (full subprocess + grace) | 27 lines (`binary="codex"` + `startup_grace`) |
+| `hermes.py` | 83 lines (full subprocess) | 14 lines (`binary="hermes"`) |
+| `openclaw.py` | Unchanged | Unchanged (HTTP-based) |
+
+**BaseRunner** provides:
+- `run()` — subprocess.run with capture, timeout detection, FileNotFoundError handling
+- `_build_command()` — `[self.binary, *spec.cli_flags, prompt]`
+- `_effective_timeout()` — overridden by CodexRunner for +30s startup grace
+- `_write_log()` — standardized `=== COMMAND === / === STDOUT === / === STDERR ===` format
+- `_timeout_error_message()` / `_not_found_error_message()` — customizable error messages
+
+**Result**: 66 net lines removed, 506/506 tests pass, `git add -A && git commit` done (`820db1d`).
+
+
+=== STDERR ===
+
