@@ -95,9 +95,26 @@ class Orchestrator:
         # -- budget tracking (V2, lazy-init) -----------------------------------
         self._budget_tracker: BudgetTracker | None = None
 
-        # -- signal handlers (§3 halt conditions) ----------------------------
-        signal.signal(signal.SIGINT, lambda s, f: self.halt("SIGINT"))
-        signal.signal(signal.SIGTERM, lambda s, f: self.halt("SIGTERM"))
+        # -- signal handlers (§11 graceful shutdown) ---------------------------
+        # Registered as nested functions so they close over *self* and
+        # can call self.halt().  After setting halt state, each handler
+        # restores SIG_DFL for SIGINT and re-sends SIGINT so that CPython
+        # raises KeyboardInterrupt in the main thread.  subprocess.run()
+        # catches KeyboardInterrupt, kills the child process, and re-raises
+        # — unwinding through run()'s finally block for prompt lock release.
+        def _sigint_handler(signum: int, frame: object) -> None:
+            self.halt("SIGINT")
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            os.kill(os.getpid(), signal.SIGINT)
+
+        def _sigterm_handler(signum: int, frame: object) -> None:
+            self.halt("SIGTERM")
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            os.kill(os.getpid(), signal.SIGINT)
+
+        signal.signal(signal.SIGINT, _sigint_handler)
+        signal.signal(signal.SIGTERM, _sigterm_handler)
 
     # ==================================================================
     # Public API
@@ -209,6 +226,10 @@ class Orchestrator:
             # ------------------------------------------------------------------
             self._run_state_machine()
 
+        except KeyboardInterrupt:
+            # Signal handler already called self.halt(); fall through to
+            # the finally block for lock release.
+            pass
         finally:
             # ------------------------------------------------------------------
             # 5. Release lock
