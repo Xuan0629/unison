@@ -13,6 +13,7 @@ import os
 import shlex
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -71,6 +72,9 @@ class Orchestrator:
         self.spec = spec
         self.dry_run = dry_run
         self._state = State()
+
+        # -- cooperative cancellation (DAG mode only) ---------------------------
+        self._dag_cancel_event: threading.Event | None = None
 
         # -- internal managers -------------------------------------------------
         self._lock_mgr = FileLockManager(
@@ -288,6 +292,7 @@ class Orchestrator:
 
         scheduler = DAGScheduler(self.spec.dag)
         cancel_event = scheduler.cancel_event
+        self._dag_cancel_event = cancel_event
 
         def exec_stage(stage):
             # Cooperative cancellation: if another stage timed out,
@@ -1009,6 +1014,12 @@ class Orchestrator:
         This is called from ``_invoke_agent_for_role`` when
         ``runner.run()`` reports a timeout error.
         """
+        # Cooperative cancellation (DAG mode): if the stage deadline
+        # passed while the agent subprocess was running, do not perform
+        # any file-system mutations — the scheduler has already marked
+        # this stage failed.
+        if self._dag_cancel_event is not None and self._dag_cancel_event.is_set():
+            return
         try:
             status = subprocess.run(
                 ["git", "status", "--porcelain"],
@@ -1047,7 +1058,8 @@ class Orchestrator:
                 capture_output=True,
                 timeout=10,
             )
-            logger.info(
+            _log = __import__("logging").getLogger(__name__)
+            _log.info(
                 "timeout-recovery: auto-committed %s work for iter %d "
                 "(tests passed against uncommitted state)",
                 role, iteration,
