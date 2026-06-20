@@ -5,12 +5,77 @@ timeout handling, log writing, and AgentResult construction.
 Subclasses (ClaudeRunner, CodexRunner, HermesRunner) override
 only _build_command and optionally _effective_timeout.
 """
+import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from interfaces import AgentSpec, AgentResult
+
+
+# ------------------------------------------------------------------
+# secret masking
+# ------------------------------------------------------------------
+
+_REDACTED = "[REDACTED]"
+
+# Patterns that match API keys / secrets in text
+_SECRET_PATTERNS: list[tuple[str, str]] = [
+    # Anthropic keys: sk-ant-<chars>
+    (r"sk-ant-[a-zA-Z0-9\-_]+", _REDACTED),
+    # OpenAI / generic keys: sk-<chars>
+    (r"sk-[a-zA-Z0-9\-_]+", _REDACTED),
+    # Bearer tokens: Bearer <token>
+    (r"Bearer\s+[a-zA-Z0-9\-_.+/=]+", f"Bearer {_REDACTED}"),
+    # api_key= value (unquoted)
+    (r"api_key=[a-zA-Z0-9\-_.+/=]+", f"api_key={_REDACTED}"),
+    # Env-var assignments for keys ending in _API_KEY (KEY=value form)
+    (r"([a-zA-Z_][a-zA-Z0-9_]*_API_KEY)=[^\s\"'$`]+", rf"\1={_REDACTED}"),
+    # Env-var assignments for keys ending in _SECRET
+    (r"([a-zA-Z_][a-zA-Z0-9_]*_SECRET)=[^\s\"'$`]+", rf"\1={_REDACTED}"),
+]
+
+
+def _env_value_patterns() -> list[tuple[str, str]]:
+    """Build patterns for current-os.environ API-key values.
+
+    Any value present in an os.environ key ending in ``_API_KEY`` is
+    treated as a secret and redacted wherever it appears.
+    """
+    patterns: list[tuple[str, str]] = []
+    for name, val in os.environ.items():
+        if val and (name.endswith("_API_KEY") or name.endswith("_SECRET")):
+            # Escape the literal value for use in a regex
+            escaped = re.escape(val)
+            patterns.append((escaped, _REDACTED))
+    return patterns
+
+
+def mask_secrets(text: str) -> str:
+    """Replace API keys and secrets in *text* with ``[REDACTED]``.
+
+    Covers these forms:
+
+    * ``sk-ant-...`` (Anthropic keys)
+    * ``sk-...`` (OpenAI / generic keys)
+    * ``Bearer <token>``
+    * ``api_key=<value>``
+    * ``<NAME>_API_KEY=<value>``
+    * ``<NAME>_SECRET=<value>``
+    * Any value found in an os.environ entry whose name ends in
+      ``_API_KEY`` or ``_SECRET``
+    """
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = re.sub(pattern, replacement, text)
+
+    # Environment-value patterns are built at call time so they
+    # always reflect the current process environment.
+    for pattern, replacement in _env_value_patterns():
+        text = re.sub(pattern, replacement, text)
+
+    return text
 
 
 @dataclass
@@ -62,12 +127,17 @@ class BaseRunner:
     def _write_log(
         self, log_path: Path, cmd: list[str], stdout: str, stderr: str
     ) -> None:
-        """Write the invocation log to *log_path*."""
+        """Write the invocation log to *log_path*.
+
+        All text sections are passed through :func:`mask_secrets` so
+        API keys are replaced with ``[REDACTED]`` before being written
+        to disk.
+        """
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(
-            f"=== COMMAND ===\n{' '.join(cmd)}\n\n"
-            f"=== STDOUT ===\n{stdout}\n\n"
-            f"=== STDERR ===\n{stderr}\n",
+            f"=== COMMAND ===\n{mask_secrets(' '.join(cmd))}\n\n"
+            f"=== STDOUT ===\n{mask_secrets(stdout)}\n\n"
+            f"=== STDERR ===\n{mask_secrets(stderr)}\n",
             encoding="utf-8",
         )
 
