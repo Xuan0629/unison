@@ -1,24 +1,22 @@
-# Fix: API key masking in runner logs
+# Fix: DAG orphan thread cooperative cancellation
 
 ## Problem
-Runner log files contain full prompts including API keys passed via environment
-or embedded in the prompt text. This is a security risk.
+DAGScheduler.execute_parallel() shuts down the thread pool with
+wait=False, cancel_futures=True. This only cancels pending futures,
+not running threads. Running threads continue modifying files after
+the scheduler considers the stage failed.
 
 ## Solution
-Add mask_secrets(text: str) -> str utility that replaces:
-- sk-... (OpenAI keys)
-- sk-ant-... (Anthropic keys)
-- Bearer <token>
-- api_key=<value>
-- Values of os.environ keys ending in _API_KEY
+Add cooperative cancellation:
+1. threading.Event flag in DAGScheduler
+2. Passed to executor callable via closure
+3. Stage deadline exceeded → set event
+4. Executor callable checks event.is_set() before file writes and git commits
+5. Document DAG mode as experimental in ARCHITECTURE.md
 
-With "[REDACTED]". Apply to log writing in all runners.
-
-## Implementation
-- New function in src/unison/runners/base.py or new src/unison/utils.py
-- Call mask_secrets() before writing log files
-- Preserve format and context, only mask the values
+This is a safety net, not a complete solution (Python can't kill threads).
 
 ## Acceptance
-- Existing tests pass
-- Manual verification: logs contain [REDACTED] not actual keys
+- test_pipeline.py tests pass (119+)
+- ARCHITECTURE.md updated
+- Event flag doesn't affect normal (non-timeout) execution
