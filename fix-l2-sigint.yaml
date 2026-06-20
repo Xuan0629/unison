@@ -1,35 +1,21 @@
-version: '2.0'
-project_root: .
+# Fix L2 #2: SIGINT handler (2-agent)
+version: "2.0"
+project_root: "."
+
 agents:
-  planner:
-    role: planner
-    runtime: claude
-    model: deepseek-v4-pro
-    system_prompt_path: prompts/fix-planner.md
-    task_instruction: Add SIGINT/SIGTERM signal handlers to orchestrator.py. Register
-      signal.signal(signal.SIGINT, ...) and signal.signal(signal.SIGTERM, ...) that
-      call self.halt('SIGINT') or self.halt('SIGTERM'). Register in __init__ or at
-      start of run(). Write PRD+tech-design. Keep tests green.
-  plan_reviewer:
-    role: plan-reviewer
-    runtime: codex
-    model: gpt-5.5
-    system_prompt_path: prompts/fix-reviewer.md
-    pipeline_role: reviewer
   developer:
     role: developer
     runtime: claude
     model: deepseek-v4-pro
-    system_prompt_path: prompts/fix-developer.md
-    pipeline_role: developer
-    task_instruction: Implement signal handlers per PRD. Modify src/unison/orchestrator.py
-      only. pytest tests/test_orchestrator.py -q must pass. git add -A && git commit.
-  dev_reviewer:
-    role: dev-reviewer
+    system_prompt_path: "prompts/fix-developer.md"
+    task_instruction: "Add SIGINT/SIGTERM handlers per prd/PRD.md. Modify src/unison/orchestrator.py only: add import signal, register signal.signal(signal.SIGINT, ...) and signal.signal(signal.SIGTERM, ...) in __init__ that call self.halt('SIGINT') or self.halt('SIGTERM'). pytest tests/test_orchestrator.py -q must pass. git add -A && git commit."
+
+  reviewer:
+    role: reviewer
     runtime: codex
     model: gpt-5.5
-    system_prompt_path: prompts/fix-reviewer.md
-    pipeline_role: reviewer
+    system_prompt_path: "prompts/fix-reviewer.md"
+
 project:
-  test_command: python3 -m pytest tests/test_orchestrator.py -q
-  max_iterations: 3
+  test_command: "python3 -m pytest tests/test_orchestrator.py -q"
+  max_iterations: 2
