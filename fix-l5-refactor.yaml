@@ -1,38 +1,22 @@
 version: '2.0'
 project_root: .
 agents:
-  planner:
-    role: planner
-    runtime: claude
-    model: deepseek-v4-pro
-    system_prompt_path: prompts/fix-planner.md
-    task_instruction: 'Refactor three runners (claude/codex/hermes) to share a BaseRunner
-      base class. The only differences between them are: binary name, startup_grace
-      (Codex only). Extract common subprocess.run, timeout, log writing, AgentResult
-      construction into BaseRunner. OpenClawRunner stays independent (HTTP, not subprocess).
-      Write PRD+tech-design.'
-  plan_reviewer:
-    role: plan-reviewer
-    runtime: codex
-    model: gpt-5.5
-    system_prompt_path: prompts/fix-reviewer.md
-    pipeline_role: reviewer
   developer:
     role: developer
     runtime: claude
     model: deepseek-v4-pro
     system_prompt_path: prompts/fix-developer.md
-    pipeline_role: developer
-    task_instruction: Implement BaseRunner refactor per PRD. Modify src/unison/runners/*.py.
-      Keep OpenClawRunner unchanged. pytest tests/ -q must pass (all 500+ tests).
-      git add -A && git commit.
-  dev_reviewer:
-    role: dev-reviewer
+    task_instruction: Refactor runners per prd/PRD.md. Create BaseRunner in src/unison/runners/base.py
+      with shared subprocess.run, timeout handling, log writing, AgentResult construction.
+      Make ClaudeRunner, CodexRunner, HermesRunner subclass BaseRunner with only binary
+      name overrides. Keep OpenClawRunner unchanged. pytest tests/ -q must pass (all
+      500+ tests). git add -A && git commit.
+  reviewer:
+    role: reviewer
     runtime: codex
     model: gpt-5.5
     system_prompt_path: prompts/fix-reviewer.md
-    pipeline_role: reviewer
 project:
   test_command: python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py
     -q
-  max_iterations: 3
+  max_iterations: 2

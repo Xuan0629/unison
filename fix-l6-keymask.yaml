@@ -1,36 +1,21 @@
 version: '2.0'
 project_root: .
 agents:
-  planner:
-    role: planner
-    runtime: claude
-    model: deepseek-v4-pro
-    system_prompt_path: prompts/fix-planner.md
-    task_instruction: Add API key masking to runner log output. Before writing prompt
-      to log_path, scan for patterns like sk-..., Bearer ..., api_key=... and replace
-      with [REDACTED]. Also mask OPENAI_API_KEY, DEEPSEEK_API_KEY, ANTHROPIC_API_KEY
-      values if they appear in stdout/stderr. Write PRD+tech-design.
-  plan_reviewer:
-    role: plan-reviewer
-    runtime: codex
-    model: gpt-5.5
-    system_prompt_path: prompts/fix-reviewer.md
-    pipeline_role: reviewer
   developer:
     role: developer
     runtime: claude
     model: deepseek-v4-pro
     system_prompt_path: prompts/fix-developer.md
-    pipeline_role: developer
-    task_instruction: Implement log masking per PRD. Modify a shared utility (e.g.
-      src/unison/runners/base.py or new utils.py) and use in all runners' log writing.
-      pytest tests/ -q must pass. git add -A && git commit.
-  dev_reviewer:
-    role: dev-reviewer
+    task_instruction: Implement log key masking per prd/PRD.md. Add mask_secrets()
+      function that scans text for API key patterns (sk-..., Bearer ..., api_key=...)
+      and replaces with [REDACTED]. Use in all runner log writing. Add to src/unison/runners/base.py
+      or new utils.py. pytest tests/test_orchestrator.py -q must pass. git add -A
+      && git commit.
+  reviewer:
+    role: reviewer
     runtime: codex
     model: gpt-5.5
     system_prompt_path: prompts/fix-reviewer.md
-    pipeline_role: reviewer
 project:
   test_command: python3 -m pytest tests/test_orchestrator.py -q
-  max_iterations: 3
+  max_iterations: 2

@@ -1,36 +1,21 @@
 version: '2.0'
 project_root: .
 agents:
-  planner:
-    role: planner
-    runtime: claude
-    model: deepseek-v4-pro
-    system_prompt_path: prompts/fix-planner.md
-    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
-      exclude ~/.hermes/.env and ~/.openclaw/.../auth-profiles.json from snapshots.
-      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
-      mechanism. Write PRD+tech-design.
-  plan_reviewer:
-    role: plan-reviewer
-    runtime: codex
-    model: gpt-5.5
-    system_prompt_path: prompts/fix-reviewer.md
-    pipeline_role: reviewer
   developer:
     role: developer
     runtime: claude
     model: deepseek-v4-pro
     system_prompt_path: prompts/fix-developer.md
-    pipeline_role: developer
-    task_instruction: Implement path exclusion per PRD. Modify src/unison/snapshot.py
-      + interfaces.py (add optional field with default). pytest tests/test_snapshot.py
-      -q must pass. git add -A && git commit.
-  dev_reviewer:
-    role: dev-reviewer
+    task_instruction: Implement snapshot exclude_patterns per prd/PRD.md. Add exclude_patterns
+      field to SnapshotConfig in interfaces.py (optional, default=['~/.hermes/.env',
+      '~/.openclaw/**/auth-profiles.json']). Filter paths in snapshot.py before copying.
+      Add test_sensitive_excluded to tests/test_snapshot.py. pytest tests/test_snapshot.py
+      -q must pass (12+). git add -A && git commit.
+  reviewer:
+    role: reviewer
     runtime: codex
     model: gpt-5.5
     system_prompt_path: prompts/fix-reviewer.md
-    pipeline_role: reviewer
 project:
   test_command: python3 -m pytest tests/test_snapshot.py -q
-  max_iterations: 3
+  max_iterations: 2

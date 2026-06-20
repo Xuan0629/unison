@@ -1,22 +1,19 @@
-# Fix: Streaming subprocess logs
+# Fix: Exclude sensitive paths from snapshots
 
 ## Problem
-All three runners use subprocess.run(capture_output=True) which buffers
-entire stdout/stderr in memory. Large agent output can OOM.
+Snapshots store files unencrypted. Manifest contains full resolved paths.
+If snapshot captures .env or auth config, API keys leak.
 
 ## Solution
-Replace capture_output with file-based streaming:
-1. Open log_path for writing
-2. subprocess.Popen with stdout=log_file, stderr=subprocess.STDOUT
-3. proc.wait(timeout=timeout)
-4. After completion, read last 500 chars from log for AgentResult.stdout_tail
-This prevents unbounded memory and keeps full logs on disk.
+Add 'exclude_patterns' to SnapshotConfig (optional, default includes:
+~/.hermes/.env, ~/.openclaw/**/auth-profiles.json).
+SnapshotManager._should_snapshot() checks each path against patterns
+using fnmatch before copying.
 
 ## Implementation
-Modify claude.py, codex.py, hermes.py runners. Extract shared logic into
-a helper function or BaseRunner._run_subprocess().
+- interfaces.py: SnapshotConfig +exclude_patterns: list[str] field
+- snapshot.py: filter paths before snapshot
 
 ## Acceptance
-- All existing tests pass
-- Log files contain complete output
-- No memory growth with large outputs
+- snapshot tests pass (12+)
+- New test: sensitive file excluded from snapshot
