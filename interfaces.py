@@ -206,6 +206,10 @@ class SnapshotConfig:
         "~/.hermes/skills/",
         "~/.openclaw/agents/",
     ])
+    exclude_patterns: list[str] = field(default_factory=lambda: [
+        "~/.hermes/.env",
+        "~/.openclaw/**/auth-profiles.json",
+    ])
 
 @dataclass(frozen=True)
 class RiskMatrixConfig:
