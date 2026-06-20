@@ -1,19 +1,26 @@
-# Fix: Exclude sensitive paths from snapshots
+# Fix: Runner deduplication refactor
 
 ## Problem
-Snapshots store files unencrypted. Manifest contains full resolved paths.
-If snapshot captures .env or auth config, API keys leak.
+Three runners (claude/codex/hermes) share ~95% identical code for subprocess.run,
+timeout handling, log writing, and AgentResult construction. Bug fix in one
+must be replicated to all three manually. New runner (OpenClawRunner) had to
+copy the entire pattern.
 
 ## Solution
-Add 'exclude_patterns' to SnapshotConfig (optional, default includes:
-~/.hermes/.env, ~/.openclaw/**/auth-profiles.json).
-SnapshotManager._should_snapshot() checks each path against patterns
-using fnmatch before copying.
+Extract BaseRunner in src/unison/runners/base.py:
+- run(spec, prompt, workdir, timeout, log_path) -> AgentResult
+- _build_command(spec, prompt) -> list[str] (override per subclass)
+- _effective_timeout(base_timeout) -> int (default: base_timeout)
+- _write_log(log_path, cmd, stdout, stderr)
+- Shared _handle_timeout and _handle_not_found logic
 
-## Implementation
-- interfaces.py: SnapshotConfig +exclude_patterns: list[str] field
-- snapshot.py: filter paths before snapshot
+Subclasses:
+- ClaudeRunner(BaseRunner): binary="claude"
+- CodexRunner(BaseRunner): binary="codex", _effective_timeout adds 30s startup_grace
+- HermesRunner(BaseRunner): binary="hermes"
+- OpenClawRunner: UNCHANGED (HTTP, not subprocess)
 
 ## Acceptance
-- snapshot tests pass (12+)
-- New test: sensitive file excluded from snapshot
+- All existing tests pass (500+)
+- No functional change
+- Fewer lines of duplicated code
