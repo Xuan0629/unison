@@ -1,0 +1,37 @@
+version: '2.0'
+project_root: .
+agents:
+  planner:
+    role: planner
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: prompts/fix-planner.md
+    task_instruction: Add cooperative cancellation to DAGScheduler. When a stage exceeds
+      its deadline, set a threading.Event flag. Each stage's executor callable should
+      check this flag before performing write operations (file writes, git commits).
+      Document DAG mode as experimental in ARCHITECTURE.md. This is a safety net,
+      not a full solution (Python threads can't be forcefully killed). Write PRD+tech-design.
+  plan_reviewer:
+    role: plan-reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: prompts/fix-reviewer.md
+    pipeline_role: reviewer
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: prompts/fix-developer.md
+    pipeline_role: developer
+    task_instruction: Implement Event flag per PRD. Modify src/unison/pipeline.py
+      (DAGScheduler) and src/unison/orchestrator.py (exec_stage callable). Add ARCHITECTURE.md
+      note. pytest tests/test_pipeline.py -q must pass. git add -A && git commit.
+  dev_reviewer:
+    role: dev-reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: prompts/fix-reviewer.md
+    pipeline_role: reviewer
+project:
+  test_command: python3 -m pytest tests/test_pipeline.py -q
+  max_iterations: 3
