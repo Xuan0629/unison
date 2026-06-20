@@ -73,6 +73,13 @@ def _build_parser() -> argparse.ArgumentParser:
     md = sub.add_parser("mode", help="Print pipeline mode (4-agent / 2-agent)")
     md.add_argument("--pipeline", required=True, type=Path)
 
+    # --- webui -------------------------------------------------------
+    wui = sub.add_parser("webui", help="Start web dashboard for pipeline status")
+    wui.add_argument("--project", type=Path, default=Path("."),
+                     help="Project root (default: current dir)")
+    wui.add_argument("--port", type=int, default=9099,
+                     help="Listen port (default: 9099)")
+
     return p
 
 
@@ -158,10 +165,18 @@ def _print_human_summary(state: State) -> None:
     print("=" * 60)
 
 
+def _cmd_webui(args: argparse.Namespace) -> int:
+    """Start the web dashboard."""
+    from unison.webui import serve
+    serve(str(args.project), port=args.port)
+    return 0
+
+
 _HANDLERS = {
     "run": _cmd_run,
     "dry-run": _cmd_dry_run,
     "mode": _cmd_mode,
+    "webui": _cmd_webui,
 }
 
 
