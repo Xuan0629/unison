@@ -73,9 +73,12 @@ class FileLockManager:
         return True
 
     def release(self, project: str) -> None:
-        """Release the lock for *project*.  No-op if absent."""
+        """Release the lock for *project*.  No-op if absent or held by another process."""
         lock_path = self._lock_path(project)
         try:
+            stored_pid = self._read_pid(lock_path)
+            if stored_pid is not None and stored_pid != os.getpid():
+                return  # lock held by another process — don't release
             lock_path.unlink(missing_ok=True)
         except OSError:
             pass  # defensive: e.g. permission error on a stale dir

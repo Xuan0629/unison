@@ -10,18 +10,20 @@ from __future__ import annotations
 
 import itertools
 import os
+import shlex
 import subprocess
-import yaml
+import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from interfaces import PipelineSpec, ReviewVerdict
+from interfaces import PipelineSpec, ReviewVerdict, VerdictParseError
 from unison.pipeline import PipelineValidationError
 from unison.state import State
 from unison.lock import FileLockManager
 from unison.checkpoint import FileCheckpointManager
 from unison.completion import GitCompletionDetector
+import yaml
 from unison.verdict import YamlFrontmatterParser
 from unison.context_deflate import assemble_context, extract_top_findings
 from unison.budget import BudgetTracker
@@ -924,6 +926,27 @@ class Orchestrator:
     def _recent_diff(self, max_chars: int = 8192) -> str:
         """Return ``git diff HEAD~1 HEAD`` output (truncated), or ``""`` on failure."""
         try:
+            # Check if parent commit exists (fails on initial commit)
+            parent_check = subprocess.run(
+                ["git", "rev-parse", "HEAD~1"],
+                cwd=str(self.spec.world.root),
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            if parent_check.returncode != 0:
+                # First commit — show staged changes instead
+                result = subprocess.run(
+                    ["git", "diff", "--cached"],
+                    cwd=str(self.spec.world.root),
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    raw = result.stdout.decode("utf-8", errors="replace")
+                    return raw[:max_chars] + ("\n...[diff truncated]" if len(raw) > max_chars else "")
+                return ""
             result = subprocess.run(
                 ["git", "diff", "HEAD~1", "HEAD"],
                 cwd=str(self.spec.world.root),
@@ -965,8 +988,10 @@ class Orchestrator:
                 return  # nothing to recover
 
             # Run the project's test command against the uncommitted state
+            if not self.spec.project.test_command:
+                return  # no test command configured
             test_result = subprocess.run(
-                self.spec.project.test_command.split(),
+                shlex.split(self.spec.project.test_command),
                 cwd=str(world.root),
                 capture_output=True,
                 text=True,
@@ -1106,7 +1131,7 @@ class Orchestrator:
             self._state.last_review_verdict = parsed.verdict
             self._state.last_review_path = review_path
             return parsed.verdict
-        except Exception:
+        except (VerdictParseError, yaml.YAMLError):
             return None
 
     def _save_checkpoint(self) -> None:
