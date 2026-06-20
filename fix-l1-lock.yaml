@@ -1,0 +1,37 @@
+# Fix L2 #1: Lock TOCTOU → fcntl.flock (4-agent)
+version: "2.0"
+project_root: "."
+
+agents:
+  planner:
+    role: planner
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/fix-planner.md"
+    task_instruction: "Fix lock TOCTOU race in src/unison/lock.py:57-72. Replace check-then-write with fcntl.flock (kernel-enforced exclusive lock, auto-released on process exit). Write a concise PRD to prd/PRD.md: problem, solution (flock LOCK_EX|LOCK_NB), fallback for missing fcntl, stale lock handling. Write technical design to prd/tech-design.md with code snippets. Tests must stay green (32 lock tests)."
+
+  plan_reviewer:
+    role: plan-reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/fix-reviewer.md"
+    pipeline_role: reviewer
+
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/fix-developer.md"
+    pipeline_role: developer
+    task_instruction: "Implement the lock fix per prd/PRD.md and prd/tech-design.md. Modify src/unison/lock.py only. Add fcntl.flock-based acquire/release. Keep backward compat: if fcntl unavailable, fall back to current behavior. Run pytest tests/test_lock.py -q (must stay >=16 passed). git add -A && git commit."
+
+  dev_reviewer:
+    role: dev-reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/fix-reviewer.md"
+    pipeline_role: reviewer
+
+project:
+  test_command: "python3 -m pytest tests/test_lock.py -q"
+  max_iterations: 3
