@@ -287,8 +287,13 @@ class Orchestrator:
         self._save_checkpoint()
 
         scheduler = DAGScheduler(self.spec.dag)
+        cancel_event = scheduler.cancel_event
 
         def exec_stage(stage):
+            # Cooperative cancellation: if another stage timed out,
+            # don't start file-system mutations.
+            if cancel_event.is_set():
+                return False
             # Use stage.agents when available, fall back to default developer
             if stage.agents:
                 for _role_name, agent_spec in stage.agents.items():
