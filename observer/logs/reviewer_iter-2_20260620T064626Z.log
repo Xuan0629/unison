@@ -1,0 +1,1501 @@
+=== COMMAND ===
+codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 2: 1. Run tests: python3 -m pytest tests/test_lock.py -q 2. Write review to /home/sean/projects/unison/reviews/plan-iter-2.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Last Review Findings
+[INFO] src/unison/lock.py:57-72 still checks lock_path.exists(), reads a PID, then writes the current PID with write_text(). That is the race this iteration was supposed to remove; tests pass only because they do not exercise concurrent acquisition.
+[INFO] prd/tech-design.md:22 and prd/tech-design.md:31-40 track a single self._fd for all locks. A FileLockManager can currently hold multiple project locks, so the design would overwrite the first fd when acquiring a second project and release the wrong descriptor.
+
+## Git Diff
+diff --git a/fix-l2-sigint.yaml b/fix-l2-sigint.yaml
+new file mode 100644
+index 0000000..ddf3c04
+--- /dev/null
++++ b/fix-l2-sigint.yaml
+@@ -0,0 +1,35 @@
++version: '2.0'
++project_root: .
++agents:
++  planner:
++    role: planner
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-planner.md
++    task_instruction: Add SIGINT/SIGTERM signal handlers to orchestrator.py. Register
++      signal.signal(signal.SIGINT, ...) and signal.signal(signal.SIGTERM, ...) that
++      call self.halt('SIGINT') or self.halt('SIGTERM'). Register in __init__ or at
+... (truncated)
+
+diff --git a/fix-l3-stream.yaml b/fix-l3-stream.yaml
+new file mode 100644
+index 0000000..4856585
+--- /dev/null
++++ b/fix-l3-stream.yaml
+@@ -0,0 +1,36 @@
++version: '2.0'
++project_root: .
++agents:
++  planner:
++    role: planner
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-planner.md
++    task_instruction: Replace subprocess.run(capture_output=True) with subprocess.Popen
++      + file-based logging in all three runners (claude/codex/hermes). Write stdout/stderr
++      directly to log_path file, then read tail for AgentResult. This prevents unbounded
++      memory from large agent output. Write PRD+tech-design.
++  plan_reviewer:
++    role: plan-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++  developer:
++    role: developer
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-developer.md
++    pipeline_role: developer
++    task_instruction: Implement streaming log per PRD. Modify src/unison/runners/claude.py,
++      src/unison/runners/codex.py, src/unison/runners/hermes.py. pytest tests/ -q
++      must pass. git add -A && git commit.
++  dev_reviewer:
++    role: dev-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++project:
++  test_command: python3 -m pytest tests/test_orchestrator.py -q
++  max_iterations: 3
+
+
+diff --git a/fix-l4-snapshot.yaml b/fix-l4-snapshot.yaml
+new file mode 100644
+index 0000000..2419864
+--- /dev/null
++++ b/fix-l4-snapshot.yaml
+@@ -0,0 +1,36 @@
++version: '2.0'
++project_root: .
++agents:
++  planner:
++    role: planner
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-planner.md
++    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
++      exclude ~/.hermes/.env and ~/.openclaw/.../auth-profiles.json from snapshots.
++      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
++      mechanism. Write PRD+tech-design.
++  plan_reviewer:
++    role: plan-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++  developer:
++    role: developer
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-developer.md
++    pipeline_role: developer
++    task_instruction: Implement path exclusion per PRD. Modify src/unison/snapshot.py
++      + interfaces.py (add optional field with default). pytest tests/test_snapshot.py
++      -q must pass. git add -A && git commit.
++  dev_reviewer:
++    role: dev-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++project:
++  test_command: python3 -m pytest tests/test_snapshot.py -q
++  max_iterations: 3
+
+
+diff --git a/fix-l5-refactor.yaml b/fix-l5-refactor.yaml
+new file mode 100644
+index 0000000..2a197d3
+--- /dev/null
++++ b/fix-l5-refactor.yaml
+@@ -0,0 +1,38 @@
++version: '2.0'
++project_root: .
++agents:
++  planner:
++    role: planner
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-planner.md
++    task_instruction: 'Refactor three runners (claude/codex/hermes) to share a BaseRunner
++      base class. The only differences between them are: binary name, startup_grace
++      (Codex only). Extract common subprocess.run, timeout, log writing, AgentResult
++      construction into BaseRunner. OpenClawRunner stays independent (HTTP, not subprocess).
++      Write PRD+tech-design.'
++  plan_reviewer:
++    role: plan-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++  developer:
++    role: developer
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-developer.md
++    pipeline_role: developer
++    task_instruction: Implement BaseRunner refactor per PRD. Modify src/unison/runners/*.py.
++      Keep OpenClawRunner unchanged. pytest tests/ -q must pass (all 500+ tests).
++      git add -A && git commit.
++  dev_reviewer:
++    role: dev-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++project:
++  test_command: python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py
++    -q
++  max_iterations: 3
+
+
+diff --git a/fix-l6-keymask.yaml b/fix-l6-keymask.yaml
+new file mode 100644
+index 0000000..006b8cd
+--- /dev/null
++++ b/fix-l6-keymask.yaml
+@@ -0,0 +1,36 @@
++version: '2.0'
++project_root: .
++agents:
++  planner:
++    role: planner
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-planner.md
++    task_instruction: Add API key masking to runner log output. Before writing prompt
++      to log_path, scan for patterns like sk-..., Bearer ..., api_key=... and replace
++      with [REDACTED]. Also mask OPENAI_API_KEY, DEEPSEEK_API_KEY, ANTHROPIC_API_KEY
++      values if they appear in stdout/stderr. Write PRD+tech-design.
++  plan_reviewer:
++    role: plan-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++  developer:
++    role: developer
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-developer.md
++    pipeline_role: developer
++    task_instruction: Implement log masking per PRD. Modify a shared utility (e.g.
++      src/unison/runners/base.py or new utils.py) and use in all runners' log writing.
++      pytest tests/ -q must pass. git add -A && git commit.
++  dev_reviewer:
++    role: dev-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++project:
++  test_command: python3 -m pytest tests/test_orchestrator.py -q
++  max_iterations: 3
+
+
+diff --git a/fix-l7-dag-thread.yaml b/fix-l7-dag-thread.yaml
+new file mode 100644
+index 0000000..c063117
+--- /dev/null
++++ b/fix-l7-dag-thread.yaml
+@@ -0,0 +1,37 @@
++version: '2.0'
++project_root: .
++agents:
++  planner:
++    role: planner
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-planner.md
++    task_instruction: Add cooperative cancellation to DAGScheduler. When a stage exceeds
++      its deadline, set a threading.Event flag. Each stage's executor callable should
++      check this flag before performing write operations (file writes, git commits).
++      Document DAG mode as experimental in ARCHITECTURE.md. This is a safety net,
++      not a full solution (Python threads can't be forcefully killed). Write PRD+tech-design.
++  plan_reviewer:
++    role: plan-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-revi
+...[diff truncated]
+
+## Design
+# Technical Design: Lock TOCTOU → fcntl.flock
+
+## Module-level: detect fcntl availability
+
+```python
+try:
+    import fcntl
+    _HAS_FCNTL = True
+except ImportError:
+    _HAS_FCNTL = False
+```
+
+When `_HAS_FCNTL` is `False`, the existing PID-based logic runs unchanged.
+
+## Core change: `acquire()` uses `flock`
+
+Replace `src/unison/lock.py:57-72` with:
+
+```python
+def acquire(self, project: str) -> bool:
+    self.lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = self._lock_path(project)
+
+    # Re-entrant: we already hold this project's lock
+    if project in self._fds:
+        return False
+
+    if not _HAS_FCNTL:
+        # Fallback: existing PID-based logic (unchanged)
+        current_pid = os.getpid()
+        if lock_path.exists():
+            existing_pid = self._read_pid(lock_path)
+            if existing_pid == current_pid:
+                return False
+            if existing_pid is not None and _pid_alive(existing_pid):
+                return False
+        lock_path.write_text(f"{current_pid}\n")
+        self._fds[project] = -1  # sentinel for fallback mode
+        return True
+
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return False
+        # Lock acquired — write PID for diagnostics
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, f"{os.getpid()}\n".encode())
+        self._fds[project] = fd
+        return True
+    except OSError:
+        return False
+```
+
+## `release()` unlocks per-project
+
+```python
+def release(self, project: str) -> None:
+    fd = self._fds.pop(project, None)
+    if fd is not None and fd >= 0:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+        except OSError:
+            pass
+    try:
+        self._lock_path(project).unlink(missing_ok=True)
+    except OSError:
+        pass
+```
+
+## `__init__` addition
+
+Add `self._fds: dict[str, int] = {}` to `__post_init__` (convert the class from `@dataclass` to manual `__init__`, or add `_fds` as a field default).
+
+```python
+def __post_init__(self):
+    self._fds: dict[str, int] = {}
+```
+
+## Test plan
+
+- `pytest tests/test_lock.py -q` — all 16 tests must pass unchanged.
+- Tests exercise: acquire new, re-entrant, stale override (PID-based fallback), alive-PID rejection, release, is_locked, multiple projects, auto-create lock dir, PID format.
+- On Linux (CI), `fcntl` path is exercised. Tests using dead PID (999999) for stale detection still pass because the fallback handles those; the `flock` path is exercised by acquire/release/is_locked with live processes.
+- Test `test_multiple_projects` (line 131) validates the `self._fds` dict tracks two independent lock fds correctly.
+
+## Rollback
+
+Revert the commit. The PID-in-file format is unchanged; old code reads the same lock files. The `_fds` dict is internal state, invisible to callers.
+
+
+## PRD
+# Fix: Lock TOCTOU → fcntl.flock
+
+## Problem
+
+`FileLockManager.acquire()` at `src/unison/lock.py:57-72` has a TOCTOU race. Between reading the lock file (line 58) and writing our PID (line 72), a concurrent process can read the same stale state — both believe they acquired the lock and both overwrite it.
+
+Additionally, the current `FileLockManager` supports multiple simultaneous project locks (see `test_multiple_projects`). The initial `self._fd` design only tracks one fd, so acquiring a second lock would overwrite the first fd and leak the first lock's descriptor.
+
+## Solution
+
+Replace the check-then-write pattern with `fcntl.flock(fd, LOCK_EX | LOCK_NB)`:
+- **`LOCK_EX`** — kernel-enforced exclusive lock; only one process holds it at a time.
+- **`LOCK_NB`** — non-blocking; returns immediately with `BlockingIOError` if the lock is already held.
+- **Auto-released** on process exit or file-descriptor close — no stale-lock cleanup needed.
+
+Track fds per-project in a `self._fds: dict[str, int]` to support multiple concurrent locks.
+
+## Fallback
+
+On platforms without `fcntl` (Windows), keep the current PID-based check-then-write behavior as a best-effort fallback.
+
+## Stale lock handling
+
+With `flock`, stale locks are eliminated: the kernel releases the lock when the process exits. The PID-in-file becomes metadata only (for diagnostics via `is_locked`).
+
+## Acceptance Criteria
+
+- `acquire()` uses `flock` on Linux/macOS; falls back to PID check on Windows.
+- `release()` unlocks via `flock` + unlinks the lock file, keyed by project.
+- All 16 lock tests pass unchanged (`pytest tests/test_lock.py -q`).
+- `is_locked()` continues to work for diagnostics.
+- Multiple simultaneous project locks are supported (dict of fds, not a single fd).
+
+
+=== STDOUT ===
+Done.
+
+Test run: `python3 -m pytest tests/test_lock.py -q` => `16 passed`.
+
+Wrote the review to [reviews/plan-iter-2.md](/home/sean/projects/unison/reviews/plan-iter-2.md:1) with verdict `REQUEST_CHANGES`. I did not modify `src/`.
+
+
+=== STDERR ===
+Reading additional input from stdin...
+OpenAI Codex v0.141.0
+--------
+workdir: /home/sean/projects/unison
+model: gpt-5.5
+provider: openai-custom
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 019ee3c7-dc81-7911-b1b2-618d71157507
+--------
+user
+Review Iteration 2: 1. Run tests: python3 -m pytest tests/test_lock.py -q 2. Write review to /home/sean/projects/unison/reviews/plan-iter-2.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Last Review Findings
+[INFO] src/unison/lock.py:57-72 still checks lock_path.exists(), reads a PID, then writes the current PID with write_text(). That is the race this iteration was supposed to remove; tests pass only because they do not exercise concurrent acquisition.
+[INFO] prd/tech-design.md:22 and prd/tech-design.md:31-40 track a single self._fd for all locks. A FileLockManager can currently hold multiple project locks, so the design would overwrite the first fd when acquiring a second project and release the wrong descriptor.
+
+## Git Diff
+diff --git a/fix-l2-sigint.yaml b/fix-l2-sigint.yaml
+new file mode 100644
+index 0000000..ddf3c04
+--- /dev/null
++++ b/fix-l2-sigint.yaml
+@@ -0,0 +1,35 @@
++version: '2.0'
++project_root: .
++agents:
++  planner:
++    role: planner
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-planner.md
++    task_instruction: Add SIGINT/SIGTERM signal handlers to orchestrator.py. Register
++      signal.signal(signal.SIGINT, ...) and signal.signal(signal.SIGTERM, ...) that
++      call self.halt('SIGINT') or self.halt('SIGTERM'). Register in __init__ or at
+... (truncated)
+
+diff --git a/fix-l3-stream.yaml b/fix-l3-stream.yaml
+new file mode 100644
+index 0000000..4856585
+--- /dev/null
++++ b/fix-l3-stream.yaml
+@@ -0,0 +1,36 @@
++version: '2.0'
++project_root: .
++agents:
++  planner:
++    role: planner
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-planner.md
++    task_instruction: Replace subprocess.run(capture_output=True) with subprocess.Popen
++      + file-based logging in all three runners (claude/codex/hermes). Write stdout/stderr
++      directly to log_path file, then read tail for AgentResult. This prevents unbounded
++      memory from large agent output. Write PRD+tech-design.
++  plan_reviewer:
++    role: plan-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++  developer:
++    role: developer
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-developer.md
++    pipeline_role: developer
++    task_instruction: Implement streaming log per PRD. Modify src/unison/runners/claude.py,
++      src/unison/runners/codex.py, src/unison/runners/hermes.py. pytest tests/ -q
++      must pass. git add -A && git commit.
++  dev_reviewer:
++    role: dev-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++project:
++  test_command: python3 -m pytest tests/test_orchestrator.py -q
++  max_iterations: 3
+
+
+diff --git a/fix-l4-snapshot.yaml b/fix-l4-snapshot.yaml
+new file mode 100644
+index 0000000..2419864
+--- /dev/null
++++ b/fix-l4-snapshot.yaml
+@@ -0,0 +1,36 @@
++version: '2.0'
++project_root: .
++agents:
++  planner:
++    role: planner
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-planner.md
++    task_instruction: Add sensitive path exclusion to SnapshotConfig. By default,
++      exclude ~/.hermes/.env and ~/.openclaw/.../auth-profiles.json from snapshots.
++      Add an 'exclude_patterns' field or use the existing external_paths with a blacklist
++      mechanism. Write PRD+tech-design.
++  plan_reviewer:
++    role: plan-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++  developer:
++    role: developer
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-developer.md
++    pipeline_role: developer
++    task_instruction: Implement path exclusion per PRD. Modify src/unison/snapshot.py
++      + interfaces.py (add optional field with default). pytest tests/test_snapshot.py
++      -q must pass. git add -A && git commit.
++  dev_reviewer:
++    role: dev-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++project:
++  test_command: python3 -m pytest tests/test_snapshot.py -q
++  max_iterations: 3
+
+
+diff --git a/fix-l5-refactor.yaml b/fix-l5-refactor.yaml
+new file mode 100644
+index 0000000..2a197d3
+--- /dev/null
++++ b/fix-l5-refactor.yaml
+@@ -0,0 +1,38 @@
++version: '2.0'
++project_root: .
++agents:
++  planner:
++    role: planner
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-planner.md
++    task_instruction: 'Refactor three runners (claude/codex/hermes) to share a BaseRunner
++      base class. The only differences between them are: binary name, startup_grace
++      (Codex only). Extract common subprocess.run, timeout, log writing, AgentResult
++      construction into BaseRunner. OpenClawRunner stays independent (HTTP, not subprocess).
++      Write PRD+tech-design.'
++  plan_reviewer:
++    role: plan-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++  developer:
++    role: developer
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-developer.md
++    pipeline_role: developer
++    task_instruction: Implement BaseRunner refactor per PRD. Modify src/unison/runners/*.py.
++      Keep OpenClawRunner unchanged. pytest tests/ -q must pass (all 500+ tests).
++      git add -A && git commit.
++  dev_reviewer:
++    role: dev-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++project:
++  test_command: python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py
++    -q
++  max_iterations: 3
+
+
+diff --git a/fix-l6-keymask.yaml b/fix-l6-keymask.yaml
+new file mode 100644
+index 0000000..006b8cd
+--- /dev/null
++++ b/fix-l6-keymask.yaml
+@@ -0,0 +1,36 @@
++version: '2.0'
++project_root: .
++agents:
++  planner:
++    role: planner
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-planner.md
++    task_instruction: Add API key masking to runner log output. Before writing prompt
++      to log_path, scan for patterns like sk-..., Bearer ..., api_key=... and replace
++      with [REDACTED]. Also mask OPENAI_API_KEY, DEEPSEEK_API_KEY, ANTHROPIC_API_KEY
++      values if they appear in stdout/stderr. Write PRD+tech-design.
++  plan_reviewer:
++    role: plan-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++  developer:
++    role: developer
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-developer.md
++    pipeline_role: developer
++    task_instruction: Implement log masking per PRD. Modify a shared utility (e.g.
++      src/unison/runners/base.py or new utils.py) and use in all runners' log writing.
++      pytest tests/ -q must pass. git add -A && git commit.
++  dev_reviewer:
++    role: dev-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-reviewer.md
++    pipeline_role: reviewer
++project:
++  test_command: python3 -m pytest tests/test_orchestrator.py -q
++  max_iterations: 3
+
+
+diff --git a/fix-l7-dag-thread.yaml b/fix-l7-dag-thread.yaml
+new file mode 100644
+index 0000000..c063117
+--- /dev/null
++++ b/fix-l7-dag-thread.yaml
+@@ -0,0 +1,37 @@
++version: '2.0'
++project_root: .
++agents:
++  planner:
++    role: planner
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: prompts/fix-planner.md
++    task_instruction: Add cooperative cancellation to DAGScheduler. When a stage exceeds
++      its deadline, set a threading.Event flag. Each stage's executor callable should
++      check this flag before performing write operations (file writes, git commits).
++      Document DAG mode as experimental in ARCHITECTURE.md. This is a safety net,
++      not a full solution (Python threads can't be forcefully killed). Write PRD+tech-design.
++  plan_reviewer:
++    role: plan-reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: prompts/fix-revi
+...[diff truncated]
+
+## Design
+# Technical Design: Lock TOCTOU → fcntl.flock
+
+## Module-level: detect fcntl availability
+
+```python
+try:
+    import fcntl
+    _HAS_FCNTL = True
+except ImportError:
+    _HAS_FCNTL = False
+```
+
+When `_HAS_FCNTL` is `False`, the existing PID-based logic runs unchanged.
+
+## Core change: `acquire()` uses `flock`
+
+Replace `src/unison/lock.py:57-72` with:
+
+```python
+def acquire(self, project: str) -> bool:
+    self.lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = self._lock_path(project)
+
+    # Re-entrant: we already hold this project's lock
+    if project in self._fds:
+        return False
+
+    if not _HAS_FCNTL:
+        # Fallback: existing PID-based logic (unchanged)
+        current_pid = os.getpid()
+        if lock_path.exists():
+            existing_pid = self._read_pid(lock_path)
+            if existing_pid == current_pid:
+                return False
+            if existing_pid is not None and _pid_alive(existing_pid):
+                return False
+        lock_path.write_text(f"{current_pid}\n")
+        self._fds[project] = -1  # sentinel for fallback mode
+        return True
+
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return False
+        # Lock acquired — write PID for diagnostics
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, f"{os.getpid()}\n".encode())
+        self._fds[project] = fd
+        return True
+    except OSError:
+        return False
+```
+
+## `release()` unlocks per-project
+
+```python
+def release(self, project: str) -> None:
+    fd = self._fds.pop(project, None)
+    if fd is not None and fd >= 0:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+        except OSError:
+            pass
+    try:
+        self._lock_path(project).unlink(missing_ok=True)
+    except OSError:
+        pass
+```
+
+## `__init__` addition
+
+Add `self._fds: dict[str, int] = {}` to `__post_init__` (convert the class from `@dataclass` to manual `__init__`, or add `_fds` as a field default).
+
+```python
+def __post_init__(self):
+    self._fds: dict[str, int] = {}
+```
+
+## Test plan
+
+- `pytest tests/test_lock.py -q` — all 16 tests must pass unchanged.
+- Tests exercise: acquire new, re-entrant, stale override (PID-based fallback), alive-PID rejection, release, is_locked, multiple projects, auto-create lock dir, PID format.
+- On Linux (CI), `fcntl` path is exercised. Tests using dead PID (999999) for stale detection still pass because the fallback handles those; the `flock` path is exercised by acquire/release/is_locked with live processes.
+- Test `test_multiple_projects` (line 131) validates the `self._fds` dict tracks two independent lock fds correctly.
+
+## Rollback
+
+Revert the commit. The PID-in-file format is unchanged; old code reads the same lock files. The `_fds` dict is internal state, invisible to callers.
+
+
+## PRD
+# Fix: Lock TOCTOU → fcntl.flock
+
+## Problem
+
+`FileLockManager.acquire()` at `src/unison/lock.py:57-72` has a TOCTOU race. Between reading the lock file (line 58) and writing our PID (line 72), a concurrent process can read the same stale state — both believe they acquired the lock and both overwrite it.
+
+Additionally, the current `FileLockManager` supports multiple simultaneous project locks (see `test_multiple_projects`). The initial `self._fd` design only tracks one fd, so acquiring a second lock would overwrite the first fd and leak the first lock's descriptor.
+
+## Solution
+
+Replace the check-then-write pattern with `fcntl.flock(fd, LOCK_EX | LOCK_NB)`:
+- **`LOCK_EX`** — kernel-enforced exclusive lock; only one process holds it at a time.
+- **`LOCK_NB`** — non-blocking; returns immediately with `BlockingIOError` if the lock is already held.
+- **Auto-released** on process exit or file-descriptor close — no stale-lock cleanup needed.
+
+Track fds per-project in a `self._fds: dict[str, int]` to support multiple concurrent locks.
+
+## Fallback
+
+On platforms without `fcntl` (Windows), keep the current PID-based check-then-write behavior as a best-effort fallback.
+
+## Stale lock handling
+
+With `flock`, stale locks are eliminated: the kernel releases the lock when the process exits. The PID-in-file becomes metadata only (for diagnostics via `is_locked`).
+
+## Acceptance Criteria
+
+- `acquire()` uses `flock` on Linux/macOS; falls back to PID check on Windows.
+- `release()` unlocks via `flock` + unlinks the lock file, keyed by project.
+- All 16 lock tests pass unchanged (`pytest tests/test_lock.py -q`).
+- `is_locked()` continues to work for diagnostics.
+- Multiple simultaneous project locks are supported (dict of fds, not a single fd).
+
+codex
+I’ll run the requested lock test first, then inspect the actual lock implementation and design alignment before writing the YAML review file. I’ll leave `src/` untouched.
+exec
+/bin/bash -lc 'git status --short && git diff -- src/unison/lock.py tests/test_lock.py prd/tech-design.md prd/PRD.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+ M .unison/budget.json
+ M prd/PRD.md
+ M prd/tech-design.md
+?? observer/logs/planner_iter-1_20260620T064249Z.log
+?? observer/logs/planner_iter-2_20260620T064548Z.log
+?? observer/logs/reviewer_iter-1_20260620T064316Z.log
+?? reviews/plan-iter-1.md
+diff --git a/prd/PRD.md b/prd/PRD.md
+index b9f13b5..f712e05 100644
+--- a/prd/PRD.md
++++ b/prd/PRD.md
+@@ -1 +1,32 @@
+-# Fix: Lock TOCTOU → flock
++# Fix: Lock TOCTOU → fcntl.flock
++
++## Problem
++
++`FileLockManager.acquire()` at `src/unison/lock.py:57-72` has a TOCTOU race. Between reading the lock file (line 58) and writing our PID (line 72), a concurrent process can read the same stale state — both believe they acquired the lock and both overwrite it.
++
++Additionally, the current `FileLockManager` supports multiple simultaneous project locks (see `test_multiple_projects`). The initial `self._fd` design only tracks one fd, so acquiring a second lock would overwrite the first fd and leak the first lock's descriptor.
++
++## Solution
++
++Replace the check-then-write pattern with `fcntl.flock(fd, LOCK_EX | LOCK_NB)`:
++- **`LOCK_EX`** — kernel-enforced exclusive lock; only one process holds it at a time.
++- **`LOCK_NB`** — non-blocking; returns immediately with `BlockingIOError` if the lock is already held.
++- **Auto-released** on process exit or file-descriptor close — no stale-lock cleanup needed.
++
++Track fds per-project in a `self._fds: dict[str, int]` to support multiple concurrent locks.
++
++## Fallback
++
++On platforms without `fcntl` (Windows), keep the current PID-based check-then-write behavior as a best-effort fallback.
++
++## Stale lock handling
++
++With `flock`, stale locks are eliminated: the kernel releases the lock when the process exits. The PID-in-file becomes metadata only (for diagnostics via `is_locked`).
++
++## Acceptance Criteria
++
++- `acquire()` uses `flock` on Linux/macOS; falls back to PID check on Windows.
++- `release()` unlocks via `flock` + unlinks the lock file, keyed by project.
++- All 16 lock tests pass unchanged (`pytest tests/test_lock.py -q`).
++- `is_locked()` continues to work for diagnostics.
++- Multiple simultaneous project locks are supported (dict of fds, not a single fd).
+diff --git a/prd/tech-design.md b/prd/tech-design.md
+index b9f13b5..3024a51 100644
+--- a/prd/tech-design.md
++++ b/prd/tech-design.md
+@@ -1 +1,93 @@
+-# Fix: Lock TOCTOU → flock
++# Technical Design: Lock TOCTOU → fcntl.flock
++
++## Module-level: detect fcntl availability
++
++```python
++try:
++    import fcntl
++    _HAS_FCNTL = True
++except ImportError:
++    _HAS_FCNTL = False
++```
++
++When `_HAS_FCNTL` is `False`, the existing PID-based logic runs unchanged.
++
++## Core change: `acquire()` uses `flock`
++
++Replace `src/unison/lock.py:57-72` with:
++
++```python
++def acquire(self, project: str) -> bool:
++    self.lock_dir.mkdir(parents=True, exist_ok=True)
++    lock_path = self._lock_path(project)
++
++    # Re-entrant: we already hold this project's lock
++    if project in self._fds:
++        return False
++
++    if not _HAS_FCNTL:
++        # Fallback: existing PID-based logic (unchanged)
++        current_pid = os.getpid()
++        if lock_path.exists():
++            existing_pid = self._read_pid(lock_path)
++            if existing_pid == current_pid:
++                return False
++            if existing_pid is not None and _pid_alive(existing_pid):
++                return False
++        lock_path.write_text(f"{current_pid}\n")
++        self._fds[project] = -1  # sentinel for fallback mode
++        return True
++
++    try:
++        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
++        try:
++            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
++        except BlockingIOError:
++            os.close(fd)
++            return False
++        # Lock acquired — write PID for diagnostics
++        os.ftruncate(fd, 0)
++        os.lseek(fd, 0, os.SEEK_SET)
++        os.write(fd, f"{os.getpid()}\n".encode())
++        self._fds[project] = fd
++        return True
++    except OSError:
++        return False
++```
++
++## `release()` unlocks per-project
++
++```python
++def release(self, project: str) -> None:
++    fd = self._fds.pop(project, None)
++    if fd is not None and fd >= 0:
++        try:
++            fcntl.flock(fd, fcntl.LOCK_UN)
++            os.close(fd)
++        except OSError:
++            pass
++    try:
++        self._lock_path(project).unlink(missing_ok=True)
++    except OSError:
++        pass
++```
++
++## `__init__` addition
++
++Add `self._fds: dict[str, int] = {}` to `__post_init__` (convert the class from `@dataclass` to manual `__init__`, or add `_fds` as a field default).
++
++```python
++def __post_init__(self):
++    self._fds: dict[str, int] = {}
++```
++
++## Test plan
++
++- `pytest tests/test_lock.py -q` — all 16 tests must pass unchanged.
++- Tests exercise: acquire new, re-entrant, stale override (PID-based fallback), alive-PID rejection, release, is_locked, multiple projects, auto-create lock dir, PID format.
++- On Linux (CI), `fcntl` path is exercised. Tests using dead PID (999999) for stale detection still pass because the fallback handles those; the `flock` path is exercised by acquire/release/is_locked with live processes.
++- Test `test_multiple_projects` (line 131) validates the `self._fds` dict tracks two independent lock fds correctly.
++
++## Rollback
++
++Revert the commit. The PID-in-file format is unchanged; old code reads the same lock files. The `_fds` dict is internal state, invisible to callers.
+
+exec
+/bin/bash -lc 'python3 -m pytest tests/test_lock.py -q' in /home/sean/projects/unison
+ succeeded in 169ms:
+................                                                         [100%]
+16 passed in 0.04s
+
+codex
+The requested test passes: `16 passed in 0.04s`. I’m checking the current lock code now because passing the existing unit tests is not enough to verify the race fix.
+exec
+/bin/bash -lc 'nl -ba src/unison/lock.py' in /home/sean/projects/unison
+ succeeded in 0ms:
+     1	"""FileLockManager — PID-based lock files with stale-lock detection.
+     2	
+     3	Lock file format: ~/.unison/locks/<project>.lock
+     4	Content: PID (integer) on a single line.
+     5	
+     6	Stale-lock detection uses /proc/<pid> on Linux to check if the
+     7	locking process is still alive. Dead-PID locks are overridden.
+     8	"""
+     9	
+    10	import os
+    11	from dataclasses import dataclass
+    12	from pathlib import Path
+    13	
+    14	
+    15	def _pid_alive(pid: int) -> bool:
+    16	    """Return True if the given PID exists on this system (Linux /proc)."""
+    17	    return Path(f"/proc/{pid}").exists()
+    18	
+    19	
+    20	@dataclass
+    21	class FileLockManager:
+    22	    """~/.unison/locks/<project>.lock — PID lock with stale detection."""
+    23	
+    24	    lock_dir: Path
+    25	
+    26	    def _lock_path(self, project: str) -> Path:
+    27	        return self.lock_dir / f"{project}.lock"
+    28	
+    29	    def _read_pid(self, lock_path: Path) -> int | None:
+    30	        """Read the PID from a lock file. Returns None if unreadable / invalid."""
+    31	        try:
+    32	            content = lock_path.read_text().strip()
+    33	            if not content:
+    34	                return None
+    35	            return int(content)
+    36	        except (FileNotFoundError, ValueError):
+    37	            return None
+    38	
+    39	    # ------------------------------------------------------------------
+    40	    # Public API
+    41	    # ------------------------------------------------------------------
+    42	
+    43	    def acquire(self, project: str) -> bool:
+    44	        """Try to acquire the lock for *project*.
+    45	
+    46	        Returns True on success.  Returns False when the lock is already
+    47	        held by a *live* process (either ourselves or a different PID).
+    48	        Overwrites locks owned by dead PIDs (stale lock).
+    49	
+    50	        Creates the lock directory on demand.
+    51	        """
+    52	        self.lock_dir.mkdir(parents=True, exist_ok=True)
+    53	
+    54	        lock_path = self._lock_path(project)
+    55	        current_pid = os.getpid()
+    56	
+    57	        if lock_path.exists():
+    58	            existing_pid = self._read_pid(lock_path)
+    59	
+    60	            # Re-entrant: we already hold it
+    61	            if existing_pid == current_pid:
+    62	                return False
+    63	
+    64	            # Lock held by a live process — cannot override
+    65	            if existing_pid is not None and _pid_alive(existing_pid):
+    66	                return False
+    67	
+    68	            # Stale lock (file present but PID dead, or unreadable) — overwrite
+    69	            # Fall through to write
+    70	
+    71	        # Write (or overwrite) the lock
+    72	        lock_path.write_text(f"{current_pid}\n")
+    73	        return True
+    74	
+    75	    def release(self, project: str) -> None:
+    76	        """Release the lock for *project*.  No-op if absent or held by another process."""
+    77	        lock_path = self._lock_path(project)
+    78	        try:
+    79	            stored_pid = self._read_pid(lock_path)
+    80	            if stored_pid is not None and stored_pid != os.getpid():
+    81	                return  # lock held by another process — don't release
+    82	            lock_path.unlink(missing_ok=True)
+    83	        except OSError:
+    84	            pass  # defensive: e.g. permission error on a stale dir
+    85	
+    86	    def is_locked(self, project: str) -> bool:
+    87	        """Return True if a live process currently holds the lock."""
+    88	        lock_path = self._lock_path(project)
+    89	
+    90	        pid = self._read_pid(lock_path)
+    91	        if pid is None:
+    92	            return False
+    93	        return _pid_alive(pid)
+
+exec
+/bin/bash -lc 'nl -ba tests/test_lock.py' in /home/sean/projects/unison
+ succeeded in 0ms:
+     1	"""Tests for lock.py — FileLockManager with PID detection + stale lock override."""
+     2	import os
+     3	import tempfile
+     4	from pathlib import Path
+     5	import pytest
+     6	
+     7	from unison.lock import FileLockManager
+     8	
+     9	
+    10	class TestFileLockManager:
+    11	    """FileLockManager tests."""
+    12	
+    13	    def test_create_lock_manager(self, tmp_path):
+    14	        """Create a FileLockManager with lock_dir."""
+    15	        lm = FileLockManager(lock_dir=tmp_path)
+    16	        assert lm.lock_dir == tmp_path
+    17	
+    18	    def test_acquire_new_lock(self, tmp_path):
+    19	        """Acquire a new lock (no existing lock file)."""
+    20	        lm = FileLockManager(lock_dir=tmp_path)
+    21	        result = lm.acquire("test-project")
+    22	        assert result is True
+    23	        
+    24	        # Lock file should exist
+    25	        lock_file = tmp_path / "test-project.lock"
+    26	        assert lock_file.exists()
+    27	
+    28	    def test_acquire_lock_writes_pid(self, tmp_path):
+    29	        """Acquire lock writes current PID."""
+    30	        lm = FileLockManager(lock_dir=tmp_path)
+    31	        lm.acquire("test-project")
+    32	        
+    33	        lock_file = tmp_path / "test-project.lock"
+    34	        content = lock_file.read_text()
+    35	        pid = int(content.strip())
+    36	        assert pid == os.getpid()
+    37	
+    38	    def test_acquire_already_locked_same_pid(self, tmp_path):
+    39	        """Acquire fails if lock exists with same PID (re-entrant check)."""
+    40	        lm = FileLockManager(lock_dir=tmp_path)
+    41	        lm.acquire("test-project")
+    42	        
+    43	        # Try to acquire again
+    44	        result = lm.acquire("test-project")
+    45	        assert result is False
+    46	
+    47	    def test_acquire_already_locked_different_pid_alive(self, tmp_path):
+    48	        """Acquire fails if lock exists with different alive PID."""
+    49	        lm = FileLockManager(lock_dir=tmp_path)
+    50	        
+    51	        # Write a lock file with a different PID (use PID 1, which is usually alive)
+    52	        lock_file = tmp_path / "test-project.lock"
+    53	        lock_file.write_text("1\n")  # PID 1 (init/systemd, usually alive)
+    54	        
+    55	        result = lm.acquire("test-project")
+    56	        assert result is False
+    57	
+    58	    def test_acquire_stale_lock_override(self, tmp_path):
+    59	        """Acquire succeeds if lock exists with dead PID (stale lock)."""
+    60	        lm = FileLockManager(lock_dir=tmp_path)
+    61	        
+    62	        # Write a lock file with a dead PID (use a very high PID that doesn't exist)
+    63	        lock_file = tmp_path / "test-project.lock"
+    64	        lock_file.write_text("999999\n")  # PID that doesn't exist
+    65	        
+    66	        result = lm.acquire("test-project")
+    67	        assert result is True
+    68	        
+    69	        # Lock file should now contain current PID
+    70	        content = lock_file.read_text()
+    71	        pid = int(content.strip())
+    72	        assert pid == os.getpid()
+    73	
+    74	    def test_release_lock(self, tmp_path):
+    75	        """Release removes lock file."""
+    76	        lm = FileLockManager(lock_dir=tmp_path)
+    77	        lm.acquire("test-project")
+    78	        
+    79	        lock_file = tmp_path / "test-project.lock"
+    80	        assert lock_file.exists()
+    81	        
+    82	        lm.release("test-project")
+    83	        assert not lock_file.exists()
+    84	
+    85	    def test_release_nonexistent_lock(self, tmp_path):
+    86	        """Release of non-existent lock does not raise."""
+    87	        lm = FileLockManager(lock_dir=tmp_path)
+    88	        lm.release("nonexistent-project")  # Should not raise
+    89	
+    90	    def test_is_locked_true(self, tmp_path):
+    91	        """is_locked returns True when lock exists."""
+    92	        lm = FileLockManager(lock_dir=tmp_path)
+    93	        lm.acquire("test-project")
+    94	        
+    95	        assert lm.is_locked("test-project") is True
+    96	
+    97	    def test_is_locked_false(self, tmp_path):
+    98	        """is_locked returns False when no lock exists."""
+    99	        lm = FileLockManager(lock_dir=tmp_path)
+   100	        assert lm.is_locked("test-project") is False
+   101	
+   102	    def test_is_locked_stale_pid(self, tmp_path):
+   103	        """is_locked returns False for stale lock (dead PID)."""
+   104	        lm = FileLockManager(lock_dir=tmp_path)
+   105	        
+   106	        # Write a lock file with a dead PID
+   107	        lock_file = tmp_path / "test-project.lock"
+   108	        lock_file.write_text("999999\n")
+   109	        
+   110	        assert lm.is_locked("test-project") is False
+   111	
+   112	    def test_is_locked_alive_pid(self, tmp_path):
+   113	        """is_locked returns True for alive PID."""
+   114	        lm = FileLockManager(lock_dir=tmp_path)
+   115	        
+   116	        # Write a lock file with PID 1 (usually alive)
+   117	        lock_file = tmp_path / "test-project.lock"
+   118	        lock_file.write_text("1\n")
+   119	        
+   120	        assert lm.is_locked("test-project") is True
+   121	
+   122	    def test_lock_dir_created_automatically(self, tmp_path):
+   123	        """Lock directory is created if it doesn't exist."""
+   124	        lock_dir = tmp_path / "locks" / "subdir"
+   125	        lm = FileLockManager(lock_dir=lock_dir)
+   126	        
+   127	        result = lm.acquire("test-project")
+   128	        assert result is True
+   129	        assert lock_dir.exists()
+   130	
+   131	    def test_multiple_projects(self, tmp_path):
+   132	        """Multiple projects can have independent locks."""
+   133	        lm = FileLockManager(lock_dir=tmp_path)
+   134	        
+   135	        assert lm.acquire("project-a") is True
+   136	        assert lm.acquire("project-b") is True
+   137	        
+   138	        assert lm.is_locked("project-a") is True
+   139	        assert lm.is_locked("project-b") is True
+   140	        
+   141	        lm.release("project-a")
+   142	        assert lm.is_locked("project-a") is False
+   143	        assert lm.is_locked("project-b") is True
+   144	
+   145	
+   146	class TestFileLockManagerPIDDetection:
+   147	    """PID detection tests."""
+   148	
+   149	    def test_pid_file_format(self, tmp_path):
+   150	        """Lock file contains only PID as integer."""
+   151	        lm = FileLockManager(lock_dir=tmp_path)
+   152	        lm.acquire("test-project")
+   153	        
+   154	        lock_file = tmp_path / "test-project.lock"
+   155	        content = lock_file.read_text().strip()
+   156	        
+   157	        # Should be a valid integer
+   158	        pid = int(content)
+   159	        assert pid > 0
+   160	
+   161	    def test_stale_detection_uses_proc(self, tmp_path):
+   162	        """Stale detection checks /proc/<pid> on Linux."""
+   163	        lm = FileLockManager(lock_dir=tmp_path)
+   164	        
+   165	        # Write a lock file with current PID (alive)
+   166	        lock_file = tmp_path / "test-project.lock"
+   167	        lock_file.write_text(f"{os.getpid()}\n")
+   168	        
+   169	        assert lm.is_locked("test-project") is True
+   170	        
+   171	        # Write a lock file with dead PID
+   172	        lock_file.write_text("999999\n")
+   173	        assert lm.is_locked("test-project") is False
+
+exec
+/bin/bash -lc 'nl -ba prd/tech-design.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+     1	# Technical Design: Lock TOCTOU → fcntl.flock
+     2	
+     3	## Module-level: detect fcntl availability
+     4	
+     5	```python
+     6	try:
+     7	    import fcntl
+     8	    _HAS_FCNTL = True
+     9	except ImportError:
+    10	    _HAS_FCNTL = False
+    11	```
+    12	
+    13	When `_HAS_FCNTL` is `False`, the existing PID-based logic runs unchanged.
+    14	
+    15	## Core change: `acquire()` uses `flock`
+    16	
+    17	Replace `src/unison/lock.py:57-72` with:
+    18	
+    19	```python
+    20	def acquire(self, project: str) -> bool:
+    21	    self.lock_dir.mkdir(parents=True, exist_ok=True)
+    22	    lock_path = self._lock_path(project)
+    23	
+    24	    # Re-entrant: we already hold this project's lock
+    25	    if project in self._fds:
+    26	        return False
+    27	
+    28	    if not _HAS_FCNTL:
+    29	        # Fallback: existing PID-based logic (unchanged)
+    30	        current_pid = os.getpid()
+    31	        if lock_path.exists():
+    32	            existing_pid = self._read_pid(lock_path)
+    33	            if existing_pid == current_pid:
+    34	                return False
+    35	            if existing_pid is not None and _pid_alive(existing_pid):
+    36	                return False
+    37	        lock_path.write_text(f"{current_pid}\n")
+    38	        self._fds[project] = -1  # sentinel for fallback mode
+    39	        return True
+    40	
+    41	    try:
+    42	        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    43	        try:
+    44	            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    45	        except BlockingIOError:
+    46	            os.close(fd)
+    47	            return False
+    48	        # Lock acquired — write PID for diagnostics
+    49	        os.ftruncate(fd, 0)
+    50	        os.lseek(fd, 0, os.SEEK_SET)
+    51	        os.write(fd, f"{os.getpid()}\n".encode())
+    52	        self._fds[project] = fd
+    53	        return True
+    54	    except OSError:
+    55	        return False
+    56	```
+    57	
+    58	## `release()` unlocks per-project
+    59	
+    60	```python
+    61	def release(self, project: str) -> None:
+    62	    fd = self._fds.pop(project, None)
+    63	    if fd is not None and fd >= 0:
+    64	        try:
+    65	            fcntl.flock(fd, fcntl.LOCK_UN)
+    66	            os.close(fd)
+    67	        except OSError:
+    68	            pass
+    69	    try:
+    70	        self._lock_path(project).unlink(missing_ok=True)
+    71	    except OSError:
+    72	        pass
+    73	```
+    74	
+    75	## `__init__` addition
+    76	
+    77	Add `self._fds: dict[str, int] = {}` to `__post_init__` (convert the class from `@dataclass` to manual `__init__`, or add `_fds` as a field default).
+    78	
+    79	```python
+    80	def __post_init__(self):
+    81	    self._fds: dict[str, int] = {}
+    82	```
+    83	
+    84	## Test plan
+    85	
+    86	- `pytest tests/test_lock.py -q` — all 16 tests must pass unchanged.
+    87	- Tests exercise: acquire new, re-entrant, stale override (PID-based fallback), alive-PID rejection, release, is_locked, multiple projects, auto-create lock dir, PID format.
+    88	- On Linux (CI), `fcntl` path is exercised. Tests using dead PID (999999) for stale detection still pass because the fallback handles those; the `flock` path is exercised by acquire/release/is_locked with live processes.
+    89	- Test `test_multiple_projects` (line 131) validates the `self._fds` dict tracks two independent lock fds correctly.
+    90	
+    91	## Rollback
+    92	
+    93	Revert the commit. The PID-in-file format is unchanged; old code reads the same lock files. The `_fds` dict is internal state, invisible to callers.
+
+exec
+/bin/bash -lc 'nl -ba prd/PRD.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+     1	# Fix: Lock TOCTOU → fcntl.flock
+     2	
+     3	## Problem
+     4	
+     5	`FileLockManager.acquire()` at `src/unison/lock.py:57-72` has a TOCTOU race. Between reading the lock file (line 58) and writing our PID (line 72), a concurrent process can read the same stale state — both believe they acquired the lock and both overwrite it.
+     6	
+     7	Additionally, the current `FileLockManager` supports multiple simultaneous project locks (see `test_multiple_projects`). The initial `self._fd` design only tracks one fd, so acquiring a second lock would overwrite the first fd and leak the first lock's descriptor.
+     8	
+     9	## Solution
+    10	
+    11	Replace the check-then-write pattern with `fcntl.flock(fd, LOCK_EX | LOCK_NB)`:
+    12	- **`LOCK_EX`** — kernel-enforced exclusive lock; only one process holds it at a time.
+    13	- **`LOCK_NB`** — non-blocking; returns immediately with `BlockingIOError` if the lock is already held.
+    14	- **Auto-released** on process exit or file-descriptor close — no stale-lock cleanup needed.
+    15	
+    16	Track fds per-project in a `self._fds: dict[str, int]` to support multiple concurrent locks.
+    17	
+    18	## Fallback
+    19	
+    20	On platforms without `fcntl` (Windows), keep the current PID-based check-then-write behavior as a best-effort fallback.
+    21	
+    22	## Stale lock handling
+    23	
+    24	With `flock`, stale locks are eliminated: the kernel releases the lock when the process exits. The PID-in-file becomes metadata only (for diagnostics via `is_locked`).
+    25	
+    26	## Acceptance Criteria
+    27	
+    28	- `acquire()` uses `flock` on Linux/macOS; falls back to PID check on Windows.
+    29	- `release()` unlocks via `flock` + unlinks the lock file, keyed by project.
+    30	- All 16 lock tests pass unchanged (`pytest tests/test_lock.py -q`).
+    31	- `is_locked()` continues to work for diagnostics.
+    32	- Multiple simultaneous project locks are supported (dict of fds, not a single fd).
+
+codex
+The design fixed the earlier single-fd issue by switching to a per-project `_fds` map. One regression stands out in the proposed `release()` path, so I’m validating its impact against `flock` semantics before writing the review.
+exec
+/bin/bash -lc "python3 - <<'PY'
+import os, fcntl, tempfile
+p=tempfile.mktemp()
+fd1=os.open(p, os.O_CREAT|os.O_RDWR, 0o644)
+fcntl.flock(fd1, fcntl.LOCK_EX|fcntl.LOCK_NB)
+print('fd1 locked')
+fd2=os.open(p, os.O_CREAT|os.O_RDWR, 0o644)
+try:
+    fcntl.flock(fd2, fcntl.LOCK_EX|fcntl.LOCK_NB)
+    print('fd2 locked same process')
+except Exception as e:
+    print('fd2 failed', type(e), e)
+os.close(fd1); os.close(fd2); os.unlink(p)
+PY" in /home/sean/projects/unison
+ succeeded in 0ms:
+fd1 locked
+fd2 failed <class 'BlockingIOError'> [Errno 11] Resource temporarily unavailable
+
+codex
+The current `release()` design would remove the lock path even when this manager never acquired it. With `flock`, that can break mutual exclusion because another process can then recreate the path and lock a new inode while the original process still holds the old unlinked inode.
+exec
+/bin/bash -lc 'ls -la reviews && [ -f reviews/plan-iter-2.md ] && nl -ba reviews/plan-iter-2.md || true' in /home/sean/projects/unison
+ succeeded in 0ms:
+total 172
+drwxrwxr-x  2 sean sean  4096 Jun 20 14:44 .
+drwxrwxr-x 16 sean sean  4096 Jun 20 14:43 ..
+-rw-------  1 sean sean 19505 Jun 20 14:13 code-review-claude.md
+-rw-------  1 sean sean 20545 Jun 20 14:13 code-review-codex.md
+-rw-------  1 sean sean  4099 Jun 20 14:13 code-review-merged.md
+-rw-rw-r--  1 sean sean 14647 Jun 19 17:46 design-review-round-1.md
+-rw-rw-r--  1 sean sean  4260 Jun 19 17:51 design-review-round-2.md
+-rw-rw-r--  1 sean sean  5176 Jun 19 17:57 design-review-round-3.md
+-rw-rw-r--  1 sean sean  5465 Jun 19 18:16 design-review-round-4.md
+-rw-rw-r--  1 sean sean  4798 Jun 19 18:21 design-review-round-5.md
+-rw-rw-r--  1 sean sean  3307 Jun 19 18:26 design-review-round-6.md
+-rw-rw-r--  1 sean sean   728 Jun 20 14:44 plan-iter-1.md
+-rw-rw-r--  1 sean sean 22553 Jun 20 01:15 skill-audit.md
+-rw-------  1 sean sean  3175 Jun 19 01:45 v1.1-observer-inotify.md
+-rw-------  1 sean sean   759 Jun 19 02:20 v2-4agent-mode.md
+-rw-------  1 sean sean  1967 Jun 19 11:09 v2-context-window.md
+-rw-------  1 sean sean  2437 Jun 19 02:17 v2-dag-parallel.md
+-rw-------  1 sean sean  1109 Jun 19 10:54 v2-multi-reviewer.md
+-rw-------  1 sean sean   824 Jun 19 02:23 v2-parallel-developer.md
+-rw-------  1 sean sean  1565 Jun 19 11:21 v2-schema-migrate.md
+-rw-------  1 sean sean  3342 Jun 19 01:59 v2-sqlite-channel.md
+
+codex
+I’m writing the review as `REQUEST_CHANGES`. The existing lock tests pass, but the plan still has a correctness hole in ownership-safe release behavior.
+exec
+/bin/bash -lc 'nl -ba reviews/plan-iter-1.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+     1	---
+     2	verdict: REQUEST_CHANGES
+     3	summary: Source still uses the TOCTOU-prone PID check/write path, so the flock fix is not implemented.
+     4	findings:
+     5	  - "src/unison/lock.py:57-72 still checks lock_path.exists(), reads a PID, then writes the current PID with write_text(). That is the race this iteration was supposed to remove; tests pass only because they do not exercise concurrent acquisition."
+     6	  - "prd/tech-design.md:22 and prd/tech-design.md:31-40 track a single self._fd for all locks. A FileLockManager can currently hold multiple project locks, so the design would overwrite the first fd when acquiring a second project and release the wrong descriptor."
+     7	---
+     8	
+     9	Test run: `python3 -m pytest tests/test_lock.py -q` => 16 passed.
+
+apply patch
+patch: completed
+/home/sean/projects/unison/reviews/plan-iter-2.md
+diff --git a/reviews/plan-iter-2.md b/reviews/plan-iter-2.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..0a4425ea21a558b68584a597216763d60e04a5b3
+--- /dev/null
++++ b/reviews/plan-iter-2.md
+@@ -0,0 +1,9 @@
++---
++verdict: REQUEST_CHANGES
++summary: Tests pass, but the source still has the TOCTOU race and the revised release design can break flock mutual exclusion.
++findings:
++  - "src/unison/lock.py:57-72 still uses the old exists/read-PID/write_text flow instead of opening the lock file and acquiring fcntl.flock(LOCK_EX | LOCK_NB). The requested test suite passes, but it still does not exercise concurrent acquisition, so the original race remains unfixed in code."
++  - "prd/tech-design.md:61-71 unlinks self._lock_path(project) even when self._fds.pop(project, None) returns None, meaning a FileLockManager that does not own the lock can remove another process's lock file. With flock this is unsafe: the original process keeps a lock on the old unlinked inode, while a later acquire can create and lock a new file at the same path, allowing two active holders. release() should only unlink after confirming this manager owns the fd, with fallback ownership checks preserved for non-fcntl mode."
++---
++
++Test run: `python3 -m pytest tests/test_lock.py -q` => 16 passed.
+
+diff --git a/reviews/plan-iter-2.md b/reviews/plan-iter-2.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..0a4425ea21a558b68584a597216763d60e04a5b3
+--- /dev/null
++++ b/reviews/plan-iter-2.md
+@@ -0,0 +1,9 @@
++---
++verdict: REQUEST_CHANGES
++summary: Tests pass, but the source still has the TOCTOU race and the revised release design can break flock mutual exclusion.
++findings:
++  - "src/unison/lock.py:57-72 still uses the old exists/read-PID/write_text flow instead of opening the lock file and acquiring fcntl.flock(LOCK_EX | LOCK_NB). The requested test suite passes, but it still does not exercise concurrent acquisition, so the original race remains unfixed in code."
++  - "prd/tech-design.md:61-71 unlinks self._lock_path(project) even when self._fds.pop(project, None) returns None, meaning a FileLockManager that does not own the lock can remove another process's lock file. With flock this is unsafe: the original process keeps a lock on the old unlinked inode, while a later acquire can create and lock a new file at the same path, allowing two active holders. release() should only unlink after confirming this manager owns the fd, with fallback ownership checks preserved for non-fcntl mode."
++---
++
++Test run: `python3 -m pytest tests/test_lock.py -q` => 16 passed.
+
+codex
+The review file is written. I’m doing one quick readback to verify the frontmatter and test note are present as requested.
+exec
+/bin/bash -lc 'nl -ba reviews/plan-iter-2.md' in /home/sean/projects/unison
+ succeeded in 0ms:
+     1	---
+     2	verdict: REQUEST_CHANGES
+     3	summary: Tests pass, but the source still has the TOCTOU race and the revised release design can break flock mutual exclusion.
+     4	findings:
+     5	  - "src/unison/lock.py:57-72 still uses the old exists/read-PID/write_text flow instead of opening the lock file and acquiring fcntl.flock(LOCK_EX | LOCK_NB). The requested test suite passes, but it still does not exercise concurrent acquisition, so the original race remains unfixed in code."
+     6	  - "prd/tech-design.md:61-71 unlinks self._lock_path(project) even when self._fds.pop(project, None) returns None, meaning a FileLockManager that does not own the lock can remove another process's lock file. With flock this is unsafe: the original process keeps a lock on the old unlinked inode, while a later acquire can create and lock a new file at the same path, allowing two active holders. release() should only unlink after confirming this manager owns the fd, with fallback ownership checks preserved for non-fcntl mode."
+     7	---
+     8	
+     9	Test run: `python3 -m pytest tests/test_lock.py -q` => 16 passed.
+
+exec
+/bin/bash -lc 'git status --short reviews/plan-iter-2.md src/unison/lock.py' in /home/sean/projects/unison
+ succeeded in 0ms:
+?? reviews/plan-iter-2.md
+
+diff --git a/reviews/plan-iter-2.md b/reviews/plan-iter-2.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..0a4425ea21a558b68584a597216763d60e04a5b3
+--- /dev/null
++++ b/reviews/plan-iter-2.md
+@@ -0,0 +1,9 @@
++---
++verdict: REQUEST_CHANGES
++summary: Tests pass, but the source still has the TOCTOU race and the revised release design can break flock mutual exclusion.
++findings:
++  - "src/unison/lock.py:57-72 still uses the old exists/read-PID/write_text flow instead of opening the lock file and acquiring fcntl.flock(LOCK_EX | LOCK_NB). The requested test suite passes, but it still does not exercise concurrent acquisition, so the original race remains unfixed in code."
++  - "prd/tech-design.md:61-71 unlinks self._lock_path(project) even when self._fds.pop(project, None) returns None, meaning a FileLockManager that does not own the lock can remove another process's lock file. With flock this is unsafe: the original process keeps a lock on the old unlinked inode, while a later acquire can create and lock a new file at the same path, allowing two active holders. release() should only unlink after confirming this manager owns the fd, with fallback ownership checks preserved for non-fcntl mode."
++---
++
++Test run: `python3 -m pytest tests/test_lock.py -q` => 16 passed.
+
+codex
+Done.
+
+Test run: `python3 -m pytest tests/test_lock.py -q` => `16 passed`.
+
+Wrote the review to [reviews/plan-iter-2.md](/home/sean/projects/unison/reviews/plan-iter-2.md:1) with verdict `REQUEST_CHANGES`. I did not modify `src/`.
+diff --git a/reviews/plan-iter-2.md b/reviews/plan-iter-2.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..0a4425ea21a558b68584a597216763d60e04a5b3
+--- /dev/null
++++ b/reviews/plan-iter-2.md
+@@ -0,0 +1,9 @@
++---
++verdict: REQUEST_CHANGES
++summary: Tests pass, but the source still has the TOCTOU race and the revised release design can break flock mutual exclusion.
++findings:
++  - "src/unison/lock.py:57-72 still uses the old exists/read-PID/write_text flow instead of opening the lock file and acquiring fcntl.flock(LOCK_EX | LOCK_NB). The requested test suite passes, but it still does not exercise concurrent acquisition, so the original race remains unfixed in code."
++  - "prd/tech-design.md:61-71 unlinks self._lock_path(project) even when self._fds.pop(project, None) returns None, meaning a FileLockManager that does not own the lock can remove another process's lock file. With flock this is unsafe: the original process keeps a lock on the old unlinked inode, while a later acquire can create and lock a new file at the same path, allowing two active holders. release() should only unlink after confirming this manager owns the fd, with fallback ownership checks preserved for non-fcntl mode."
++---
++
++Test run: `python3 -m pytest tests/test_lock.py -q` => 16 passed.
+
+tokens used
+36,822
+
