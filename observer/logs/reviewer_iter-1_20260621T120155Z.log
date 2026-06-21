@@ -1,0 +1,559 @@
+=== COMMAND ===
+codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 1: 1. Run tests: python3 -m pytest tests/test_orchestrator.py tests/test_pipeline.py tests/test_custom_roles.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Git Diff
+diff --git a/interfaces.py b/interfaces.py
+index 58592bf..c001b4e 100644
+--- a/interfaces.py
++++ b/interfaces.py
+@@ -40,6 +40,15 @@ Verdict: TypeAlias = Literal["PASS", "REQUEST_CHANGES"]
+ Actor: TypeAlias = AgentRole | Literal["orchestrator", "observer", "harness_optimizer", "sean"]
+ ProjectLanguage: TypeAlias = Literal["python", "node", "rust", "go", "custom"]
+ 
++PipelineMode: TypeAlias = Literal[
++    "code-dev",       # Developer ↔ Reviewer (no planner)
++    "full-dev",       # Planner ↔ Reviewer → Developer ↔ Reviewer
++    "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no dev)
++    "inspect-only",   # Reviewer(s) → report (no planner, no dev)
++    "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
++    "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer (same as full-dev, named for clarity)
+... (truncated)
+@@ -266,6 +275,7 @@ class PipelineSpec:
+     dag: list[Stage] | None = None  # V2: DAG 多 phase 并行（None → V1 线性模式）
+     parallel_dev: WorktreeConfig | None = None  # V2: 并行 Developer
+     reviewer_config: ReviewerConfig | None = None  # V2: multi-reviewer
++    mode: PipelineMode | None = None  # Named pipeline mode (auto-detected if not set)
+     max_iterations: int = 5
+     per_agent_timeout: int = 600    # 秒。Codex 慢需 300s+
+     context_deflation_limit: int = 5  # 每次迭代只注入最近 5 条 findings
+
+
+diff --git a/src/unison/cli.py b/src/unison/cli.py
+index 4d39a54..11eac50 100644
+--- a/src/unison/cli.py
++++ b/src/unison/cli.py
+@@ -70,7 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
+     dr.add_argument("--pipeline", required=True, type=Path)
+ 
+     # --- mode --------------------------------------------------------
+-    md = sub.add_parser("mode", help="Print pipeline mode (4-agent / 2-agent)")
++    md = sub.add_parser("mode", help="Print pipeline mode (full-dev, code-dev, ...)")
+     md.add_argument("--pipeline", required=True, type=Path)
+ 
+     # --- webui -------------------------------------------------------
+
+
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 8b588dd..669ee2c 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -243,44 +243,70 @@ class Orchestrator:
+         return self._state
+ 
+     # ==================================================================
+-    # Internal: state machine (§3 two-phase loop)
++    # Internal: state machine (§3 two-phase loop → mode dispatch)
+     # ==================================================================
+ 
+-    def _run_state_machine(self) -> None:
+-        """Run the two-phase loop until done or halt.
++    _DISPATCH = {
++        "code-dev":      lambda self: self._run_dev_loop(),
++        "full-dev":      lambda self: (self._run_planning_loop(), self._run_dev_loop()),
++        "design-debate": lambda self: self._run_planning_loop(),
++        "inspect-only":  lambda self: self._run_review_only(),
++        "agent-fix":     lambda self: self._run_dev_loop(),
++        "migrate":       lambda self: (self._run_planning_loop(), self._run_dev_loop()),
++    }
+ 
+-        Phase 1 — Planning loop:  planning_active ↔ planning_review
+-        Phase 2 — Development loop: dev_active ↔ dev_review
++    def _run_state_machine(self) -> None:
++        """Dispatch to the appropriate state-machine path based on pipeline mode.
+ 
+-        Each loop is structurally identical (ARCHITECTURE.md §3):
+-          active → review → verdict → PASS (exit) / REQUEST_CHANGES (loop)
++        Replaces the old binary ``_should_plan()`` check with a named-mode
++        dispatch table that supports 6 pipeline modes.
+         """
+-        # ---- Phase 1: Planning -----------------------------------------------
+-        if self._should_plan():
+-            self._state.transition("planning_active", "orchestrator",
+-                                   iter_n=1, note="starting planning loop")
+-            self._save_checkpoint()
++        mode = self.spec.mode or "code-dev"
++        dispatch = self._DISPATCH.get(mode)
++        if dispatch is None:
++            self.halt(f"Unknown pipeline mode: {mode}")
++            return
++        dispatch(self)
+ 
+-            self._run_loop(
+-                active_phase="planning_active",
+-                review_phase="planning_review",
+-                review_of="PRD + tech-design",
+-            )
++        if not self._state.halt_signal:
++            self._state.transition("done", "orchestrator",
++                                   note="pipeline complete")
++            self._save_checkpoint()
+ 
++    def _run_planning_loop(self) -> None:
++        """Run Planning ↔ Review loop (planner phase)."""
+         if self._state.halt_signal:
+             return
++        self._state.transition("planning_active", "orchestrator",
++                               iter_n=1, note="starting planning loop")
++        self._save_checkpoint()
++        self._run_loop(
++            active_phase="planning_active",
++            review_phase="planning_review",
++            review_of="PRD + tech-design",
++        )
+ 
+-        # ---- Phase 2: Development --------------------------------------------
+-        # V2: route to DAG scheduler when dag is configured
++    def _run_dev_loop(self) -> None:
++        """Run Developer ↔ Reviewer loop."""
++        if self._state.halt_signal:
++            return
+         if self.spec.dag is not None:
+             self._run_dag_development()
+         else:
+             self._run_linear_development()
+ 
+-        if not self._state.halt_signal:
+-            self._state.transition("done", "orchestrator",
+-                                   note="pipeline complete")
+-            self._save_checkpoint()
++    def _run_review_only(self) -> None:
++        """inspect-only mode: Reviewer(s) → report (no planner, no dev)."""
++        if self._state.halt_signal:
++            return
++        self._state.transition("dev_review", "orchestrator",
++                               iter_n=1, note="starting review-only")
++        self._save_checkpoint()
++        reviewer_count = self._get_reviewer_count()
++        if reviewer_count > 1:
++            self._invoke_multi_reviewer(1, "dev_review")
++        else:
++            self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
+ 
+     def _run_dag_development(self) -> None:
+         """Run development via DAGScheduler when spec.dag is configured."""
+@@ -338,20 +364,6 @@ class Orchestrator:
+             review_of="code + tests",
+         )
+ 
+-        if not self._state.halt_signal:
+-            self._state.transition("done", "orchestrator",
+-                                   note="pipeline complete")
+-            self._save_checkpoint()
+-
+-    def _should_plan(self) -> bool:
+-        """Return True if the planning phase should run.
+-
+-        Planning runs when a ``planner`` agent is configured in the spec.
+-        If no planner is defined, we skip straight to development
+-        (PRD was authored externally — ARCHITECTURE.md §21).
+-        """
+-        return any(a.effective_role == "planner" for a in self.spec.agents.values())
+-
+     def _run_loop(
+         self,
+         active_phase: str,
+
+
+diff --git a/src/unison/pipeline.py b/src/unison/pipeline.py
+index 2b62c66..62335a9 100644
+--- a/src/unison/pipeline.py
++++ b/src/unison/pipeline.py
+@@ -42,6 +42,7 @@ from interfaces import (
+     AgentSpec,
+     BootstrapConfig,
+     BudgetConfig,
++    PipelineMode,
+     PipelineSpec,
+     ProjectConfig,
+     ReviewerConfig,
+@@ -170,6 +171,11 @@ class PipelineLoader:
+         reviewer_cfg = self._build_reviewer_config(raw.get("reviewer_config"))
+         parallel_dev_cfg = self._build_parallel_dev(raw.get("parallel_dev"))
+ 
++        # ---- mode auto-detection ----
++        mode: PipelineMode | None = raw.get("mode")  # type: ignore[assignment]
++        if mode is None:
++            mode = self._detect_mode(agents)
++
+         return PipelineSpec(
+             version=version,
+             world=world,
+@@ -182,6 +188,7 @@ class PipelineLoader:
+             dag=dag_cfg,
+             reviewer_config=reviewer_cfg,
+             parallel_dev=parallel_dev_cfg,
++           
+...[diff truncated]
+
+## Design
+# modes
+
+
+## PRD
+# Pipeline A: Named Pipeline Modes
+
+## Problem
+Pipeline mode is determined by a binary check (`_should_plan()` returns True/False
+based on whether a planner agent exists). This gives only 2 modes: "4-agent" or "2-agent".
+No way to express design-debate, inspect-only, agent-fix, or migrate patterns
+without custom YAML + task_instruction hacks.
+
+## Solution
+Add a `mode` field to PipelineSpec with 6 named values. The orchestrator dispatches
+to different state-machine paths based on mode instead of the binary `_should_plan()`.
+
+## PipelineMode values
+
+```python
+PipelineMode = Literal[
+    "code-dev",       # Developer ↔ Reviewer (no planner)
+    "full-dev",       # Planner ↔ Reviewer → Developer ↔ Reviewer
+    "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no dev)
+    "inspect-only",   # Reviewer(s) → report (no planner, no dev)
+    "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
+    "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer (same as full-dev, named for clarity)
+]
+```
+
+## Auto-detection
+If `mode` is not set in YAML, auto-detect:
+- planner present + developer present → "full-dev"
+- no planner, developer present → "code-dev"
+- only reviewer(s) → "inspect-only"
+
+## Orchestrator changes
+Replace `_run_state_machine`'s hardcoded two-phase flow with a dispatch table:
+
+```python
+_DISPATCH = {
+    "code-dev":      lambda self: self._run_dev_loop(),
+    "full-dev":      lambda self: (self._run_planning_loop(), self._run_dev_loop()),
+    "design-debate": lambda self: self._run_planning_loop(),
+    "inspect-only":  lambda self: self._run_review_only(),
+    "agent-fix":     lambda self: self._run_dev_loop(),
+    "migrate":       lambda self: (self._run_planning_loop(), self._run_dev_loop()),
+}
+```
+
+## Acceptance
+- All existing pipeline YAMLs load without mode field (auto-detected)
+- `unison mode --pipeline <yaml>` prints named mode
+- 6 modes can be explicitly set in YAML
+- 500+ tests pass
+
+
+=== OUTPUT ===
+Reading additional input from stdin...
+OpenAI Codex v0.141.0
+--------
+workdir: /home/sean/projects/unison
+model: gpt-5.5
+provider: openai-custom
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 019eea0f-13e1-7293-bd34-fb0741aed5da
+--------
+user
+Review Iteration 1: 1. Run tests: python3 -m pytest tests/test_orchestrator.py tests/test_pipeline.py tests/test_custom_roles.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Git Diff
+diff --git a/interfaces.py b/interfaces.py
+index 58592bf..c001b4e 100644
+--- a/interfaces.py
++++ b/interfaces.py
+@@ -40,6 +40,15 @@ Verdict: TypeAlias = Literal["PASS", "REQUEST_CHANGES"]
+ Actor: TypeAlias = AgentRole | Literal["orchestrator", "observer", "harness_optimizer", "sean"]
+ ProjectLanguage: TypeAlias = Literal["python", "node", "rust", "go", "custom"]
+ 
++PipelineMode: TypeAlias = Literal[
++    "code-dev",       # Developer ↔ Reviewer (no planner)
++    "full-dev",       # Planner ↔ Reviewer → Developer ↔ Reviewer
++    "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no dev)
++    "inspect-only",   # Reviewer(s) → report (no planner, no dev)
++    "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
++    "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer (same as full-dev, named for clarity)
+... (truncated)
+@@ -266,6 +275,7 @@ class PipelineSpec:
+     dag: list[Stage] | None = None  # V2: DAG 多 phase 并行（None → V1 线性模式）
+     parallel_dev: WorktreeConfig | None = None  # V2: 并行 Developer
+     reviewer_config: ReviewerConfig | None = None  # V2: multi-reviewer
++    mode: PipelineMode | None = None  # Named pipeline mode (auto-detected if not set)
+     max_iterations: int = 5
+     per_agent_timeout: int = 600    # 秒。Codex 慢需 300s+
+     context_deflation_limit: int = 5  # 每次迭代只注入最近 5 条 findings
+
+
+diff --git a/src/unison/cli.py b/src/unison/cli.py
+index 4d39a54..11eac50 100644
+--- a/src/unison/cli.py
++++ b/src/unison/cli.py
+@@ -70,7 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
+     dr.add_argument("--pipeline", required=True, type=Path)
+ 
+     # --- mode --------------------------------------------------------
+-    md = sub.add_parser("mode", help="Print pipeline mode (4-agent / 2-agent)")
++    md = sub.add_parser("mode", help="Print pipeline mode (full-dev, code-dev, ...)")
+     md.add_argument("--pipeline", required=True, type=Path)
+ 
+     # --- webui -------------------------------------------------------
+
+
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 8b588dd..669ee2c 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -243,44 +243,70 @@ class Orchestrator:
+         return self._state
+ 
+     # ==================================================================
+-    # Internal: state machine (§3 two-phase loop)
++    # Internal: state machine (§3 two-phase loop → mode dispatch)
+     # ==================================================================
+ 
+-    def _run_state_machine(self) -> None:
+-        """Run the two-phase loop until done or halt.
++    _DISPATCH = {
++        "code-dev":      lambda self: self._run_dev_loop(),
++        "full-dev":      lambda self: (self._run_planning_loop(), self._run_dev_loop()),
++        "design-debate": lambda self: self._run_planning_loop(),
++        "inspect-only":  lambda self: self._run_review_only(),
++        "agent-fix":     lambda self: self._run_dev_loop(),
++        "migrate":       lambda self: (self._run_planning_loop(), self._run_dev_loop()),
++    }
+ 
+-        Phase 1 — Planning loop:  planning_active ↔ planning_review
+-        Phase 2 — Development loop: dev_active ↔ dev_review
++    def _run_state_machine(self) -> None:
++        """Dispatch to the appropriate state-machine path based on pipeline mode.
+ 
+-        Each loop is structurally identical (ARCHITECTURE.md §3):
+-          active → review → verdict → PASS (exit) / REQUEST_CHANGES (loop)
++        Replaces the old binary ``_should_plan()`` check with a named-mode
++        dispatch table that supports 6 pipeline modes.
+         """
+-        # ---- Phase 1: Planning -----------------------------------------------
+-        if self._should_plan():
+-            self._state.transition("planning_active", "orchestrator",
+-                                   iter_n=1, note="starting planning loop")
+-            self._save_checkpoint()
++        mode = self.spec.mode or "code-dev"
++        dispatch = self._DISPATCH.get(mode)
++        if dispatch is None:
++            self.halt(f"Unknown pipeline mode: {mode}")
++            return
++        dispatch(self)
+ 
+-            self._run_loop(
+-                active_phase="planning_active",
+-                review_phase="planning_review",
+-                review_of="PRD + tech-design",
+-            )
++        if not self._state.halt_signal:
++            self._state.transition("done", "orchestrator",
++                                   note="pipeline complete")
++            self._save_checkpoint()
+ 
++    def _run_planning_loop(self) -> None:
++        """Run Planning ↔ Review loop (planner phase)."""
+         if self._state.halt_signal:
+             return
++        self._state.transition("planning_active", "orchestrator",
++                               iter_n=1, note="starting planning loop")
++        self._save_checkpoint()
++        self._run_loop(
++            active_phase="planning_active",
++            review_phase="planning_review",
++            review_of="PRD + tech-design",
++        )
+ 
+-        # ---- Phase 2: Development --------------------------------------------
+-        # V2: route to DAG scheduler when dag is configured
++    def _run_dev_loop(self) -> None:
++        """Run Developer ↔ Reviewer loop."""
++        if self._state.halt_signal:
++            return
+         if self.spec.dag is not None:
+             self._run_dag_development()
+         else:
+             self._run_linear_development()
+ 
+-        if not self._state.halt_signal:
+-            self._state.transition("done", "orchestrator",
+-                                   note="pipeline complete")
+-            self._save_checkpoint()
++    def _run_review_only(self) -> None:
++        """inspect-only mode: Reviewer(s) → report (no planner, no dev)."""
++        if self._state.halt_signal:
++            return
++        self._state.transition("dev_review", "orchestrator",
++                               iter_n=1, note="starting review-only")
++        self._save_checkpoint()
++        reviewer_count = self._get_reviewer_count()
++        if reviewer_count > 1:
++            self._invoke_multi_reviewer(1, "dev_review")
++        else:
++            self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
+ 
+     def _run_dag_development(self) -> None:
+         """Run development via DAGScheduler when spec.dag is configured."""
+@@ -338,20 +364,6 @@ class Orchestrator:
+             review_of="code + tests",
+         )
+ 
+-        if not self._state.halt_signal:
+-            self._state.transition("done", "orchestrator",
+-                                   note="pipeline complete")
+-            self._save_checkpoint()
+-
+-    def _should_plan(self) -> bool:
+-        """Return True if the planning phase should run.
+-
+-        Planning runs when a ``planner`` agent is configured in the spec.
+-        If no planner is defined, we skip straight to development
+-        (PRD was authored externally — ARCHITECTURE.md §21).
+-        """
+-        return any(a.effective_role == "planner" for a in self.spec.agents.values())
+-
+     def _run_loop(
+         self,
+         active_phase: str,
+
+
+diff --git a/src/unison/pipeline.py b/src/unison/pipeline.py
+index 2b62c66..62335a9 100644
+--- a/src/unison/pipeline.py
++++ b/src/unison/pipeline.py
+@@ -42,6 +42,7 @@ from interfaces import (
+     AgentSpec,
+     BootstrapConfig,
+     BudgetConfig,
++    PipelineMode,
+     PipelineSpec,
+     ProjectConfig,
+     ReviewerConfig,
+@@ -170,6 +171,11 @@ class PipelineLoader:
+         reviewer_cfg = self._build_reviewer_config(raw.get("reviewer_config"))
+         parallel_dev_cfg = self._build_parallel_dev(raw.get("parallel_dev"))
+ 
++        # ---- mode auto-detection ----
++        mode: PipelineMode | None = raw.get("mode")  # type: ignore[assignment]
++        if mode is None:
++            mode = self._detect_mode(agents)
++
+         return PipelineSpec(
+             version=version,
+             world=world,
+@@ -182,6 +188,7 @@ class PipelineLoader:
+             dag=dag_cfg,
+             reviewer_config=reviewer_cfg,
+             parallel_dev=parallel_dev_cfg,
++           
+...[diff truncated]
+
+## Design
+# modes
+
+
+## PRD
+# Pipeline A: Named Pipeline Modes
+
+## Problem
+Pipeline mode is determined by a binary check (`_should_plan()` returns True/False
+based on whether a planner agent exists). This gives only 2 modes: "4-agent" or "2-agent".
+No way to express design-debate, inspect-only, agent-fix, or migrate patterns
+without custom YAML + task_instruction hacks.
+
+## Solution
+Add a `mode` field to PipelineSpec with 6 named values. The orchestrator dispatches
+to different state-machine paths based on mode instead of the binary `_should_plan()`.
+
+## PipelineMode values
+
+```python
+PipelineMode = Literal[
+    "code-dev",       # Developer ↔ Reviewer (no planner)
+    "full-dev",       # Planner ↔ Reviewer → Developer ↔ Reviewer
+    "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no dev)
+    "inspect-only",   # Reviewer(s) → report (no planner, no dev)
+    "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
+    "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer (same as full-dev, named for clarity)
+]
+```
+
+## Auto-detection
+If `mode` is not set in YAML, auto-detect:
+- planner present + developer present → "full-dev"
+- no planner, developer present → "code-dev"
+- only reviewer(s) → "inspect-only"
+
+## Orchestrator changes
+Replace `_run_state_machine`'s hardcoded two-phase flow with a dispatch table:
+
+```python
+_DISPATCH = {
+    "code-dev":      lambda self: self._run_dev_loop(),
+    "full-dev":      lambda self: (self._run_planning_loop(), self._run_dev_loop()),
+    "design-debate": lambda self: self._run_planning_loop(),
+    "inspect-only":  lambda self: self._run_review_only(),
+    "agent-fix":     lambda self: self._run_dev_loop(),
+    "migrate":       lambda self: (self._run_planning_loop(), self._run_dev_loop()),
+}
+```
+
+## Acceptance
+- All existing pipeline YAMLs load without mode field (auto-detected)
+- `unison mode --pipeline <yaml>` prints named mode
+- 6 modes can be explicitly set in YAML
+- 500+ tests pass
+
+codex
+I’ll run the specified tests first, then inspect the relevant loader/orchestrator code and write the YAML-frontmatter review file. I’ll avoid touching `src/` as requested.
+exec
+/bin/bash -lc 'git diff -- interfaces.py src/unison/orchestrator.py src/unison/pipeline.py src/unison/cli.py tests/test_orchestrator.py tests/test_pipeline.py tests/test_custom_roles.py' in /home/sean/projects/unison
+ succeeded in 0ms:
+exec
+/bin/bash -lc 'python3 -m pytest tests/test_orchestrator.py tests/test_pipeline.py tests/test_custom_roles.py -q' in /home/sean/projects/unison

@@ -1,0 +1,332 @@
+=== COMMAND ===
+claude -p --dangerously-skip-permissions Implement 6 named pipeline modes per prd/PRD.md. Changes: (1) interfaces.py: add PipelineMode Literal + mode field to PipelineSpec, (2) pipeline.py: auto-detect mode in load(), (3) orchestrator.py: replace binary _should_plan with mode dispatch table in _run_state_machine, add _run_planning_loop/_run_dev_loop/_run_review_only helpers, (4) cli.py: mode subcommand shows name. Keep ~500 tests green. git add -A && git commit.
+
+# Developer — Unison code review fix
+
+Implement the fix per the approved PRD and tech-design.
+
+1. Read prd/PRD.md and prd/tech-design.md
+2. Modify only the files specified in the design
+3. Keep tests green — run the test command first
+4. git add -A && git commit with a descriptive message
+
+
+## Git Diff
+diff --git a/.unison/budget.json b/.unison/budget.json
+deleted file mode 100644
+index 3db93c1..0000000
+--- a/.unison/budget.json
++++ /dev/null
+@@ -1,13 +0,0 @@
+-{
+-  "date": "2026-06-21",
+-  "daily_used": 2604,
+-  "task_used": 2604,
+-  "phases": [
+... (truncated)
+
+diff --git a/mode-system.yaml b/mode-system.yaml
+new file mode 100644
+index 0000000..20f2ae0
+--- /dev/null
++++ b/mode-system.yaml
+@@ -0,0 +1,17 @@
++version: "2.0"
++project_root: "."
++agents:
++  developer:
++    role: developer
++    runtime: claude
++    model: deepseek-v4-pro
++    system_prompt_path: "prompts/fix-developer.md"
++    task_instruction: "Implement 6 named pipeline modes per prd/PRD.md. Changes: (1) interfaces.py: add PipelineMode Literal + mode field to PipelineSpec, (2) pipeline.py: auto-detect mode in load(), (3) orchestrator.py: replace binary _should_plan with mode dispatch table in _run_state_machine, add _run_planning_loop/_run_dev_loop/_run_review_only helpers, (4) cli.py: mode subcommand shows name. Keep ~500 tests green. git add -A && git commit."
++  reviewer:
++    role: reviewer
++    runtime: codex
++    model: gpt-5.5
++    system_prompt_path: "prompts/fix-reviewer.md"
++project:
++  test_command: "python3 -m pytest tests/test_orchestrator.py tests/test_pipeline.py tests/test_custom_roles.py -q"
++  max_iterations: 3
+
+
+diff --git a/observer/logs/developer_iter-2_20260621T110120Z.log b/observer/logs/developer_iter-2_20260621T110120Z.log
+new file mode 100644
+index 0000000..d9a5020
+--- /dev/null
++++ b/observer/logs/developer_iter-2_20260621T110120Z.log
+@@ -0,0 +1,323 @@
++=== COMMAND ===
++claude -p --dangerously-skip-permissions Fix 6 L1 issues in orchestrator.py per prd/PRD.md: (1) parallel dev halt check after runner.run(), (2) parallel dev budget check before runner.run(), (3) remove pre_invoke_cleanup from _invoke_multi_reviewer, (4) budget tracker preserve history by updating per_task_limit instead of recreating, (5) _save_checkpoint use explicit iter_n from loop, (6) DAG exec_stage validate pipeline_role=='developer'. pytest tests/test_orchestrator.py tests/test_custom_roles.py -q must pass. git add -A && git commit.
++
++# Developer — Unison code review fix
++
++Implement the fix per the approved PRD and tech-design.
++
++1. Read prd/PRD.md and prd/tech-design.md
++2. Modify only the files specified in the design
++3. Keep tests green — run the test command first
++4. git add -A && git commit with a descriptive message
++
++
++## Last Review Findings
++[INFO] src/unison/orchestrator.py:303: When a DAG stage has only non-developer agents, exec_stage logs and continues but then returns self._state.last_dev_commit is not None. If an earlier stage already set last_dev_commit, this skipped stage is reported successful to DAGScheduler, allowing dependent stages to run even though the invalid stage did no work. Track whether this stage actually invoked a developer and return false for skipped invalid stages.
++
++## Git Diff
++
+
+diff --git a/.unison/budget.json b/.unison/budget.json
++new file mode 100644
++index 0000000..3db93c1
++--- /dev/null
+++++ b/.unison/budget.json
++@@ -0,0 +1,13 @@
+++{
+++  "date": "2026-06-21",
+++  "daily_used": 2604,
+++  "task_used": 2604,
+++  "phases": [
+++    {
+++      "phase": "developer",
+++      "iter_n": 1,
++... (truncated)
++
++
+
+diff --git a/observer/logs/developer_iter-1_20260621T105713Z.log b/observer/logs/developer_iter-1_20260621T105713Z.log
++new file mode 100644
++index 0000000..990f1f8
++--- /dev/null
+++++ b/observer/logs/developer_iter-1_20260621T105713Z.log
++@@ -0,0 +1,330 @@
+++=== COMMAND ===
+++claude -p --dangerously-skip-permissions Fix 6 L1 issues in orchestrator.py per prd/PRD.md: (1) parallel dev halt check after runner.run(), (2) parallel dev budget check before runner.run(), (3) remove pre_invoke_cleanup from _invoke_multi_reviewer, (4) budget tracker preserve history by updating per_task_limit instead of recreating, (5) _save_checkpoint use explicit iter_n from loop, (6) DAG exec_stage validate pipeline_role=='developer'. pytest tests/test_orchestrator.py tests/test_custom_roles.py -q must pass. git add -A && git commit.
+++
+++# Developer — Unison code review fix
+++
+++Implement the fix per the approved PRD and tech-design.
+++
+++1. Read prd/PRD.md and prd/tech-design.md
+++2. Modify only the files specified in the design
+++3. Keep tests green — run the test command first
+++4. git add -A && git commit with a descriptive message
+++
+++
+++## Git Diff
+++
++
++
+
+diff --git a/.unison/budget.json b/.unison/budget.json
+++deleted file mode 100644
+++index 37bedda..0000000
+++--- a/.unison/budget.json
++++++ /dev/null
+++@@ -1,37 +0,0 @@
+++-{
+++-  "date": "2026-06-20",
+++-  "daily_used": 11096,
+++-  "task_used": 11096,
+++-  "phases": [
+++-    {
+++-      "phase": "developer",
+++-      "iter_n": 1,
+++-      "tokens_used": 2366,
+++-      "timestamp": "2026-06-20T07:43:32.538181+00:00"
+++-    },
+++-    {
+++-      "phase": "reviewer",
+++-      "iter_n": 1,
+++-      "tokens_used": 1290,
+++-      "timestamp": "2026-06-20T07:49:33.177872+00:00"
+++-    },
+++-    {
+++-      "phase": "developer",
+++-      "iter_n": 2,
+++-      "tokens_used": 2470,
+++-      "timestamp": "2026-06-20T07:50:35.452932+00:00"
+++-    },
+++-    {
+++-      "phase": "reviewer",
+++-      "iter_n": 2,
+++-      "tokens_used": 2401,
+++-      "timestamp": "2026-06-20T07:57:41.442641+00:00"
+++-    },
+++-    {
+++-      "phase": "developer",
+++-      "iter_n": 3,
+++-      "tokens_used": 2569,
+++... (truncated)
+++
+++
++
++
+
+diff --git a/fix-L1-orch.yaml b/fix-L1-orch.yaml
+++new file mode 100644
+++index 0000000..b912ec3
+++--- /dev/null
++++++ b/fix-L1-orch.yaml
+++@@ -0,0 +1,17 @@
++++version: "2.0"
++++project_root: "."
++++agents:
++++  developer:
++++    role: developer
++++    runtime: claude
++++    model: deepseek-v4-pro
++++    system_prompt_path: "prompts/fix-developer.md"
++++    task_instruction: "Fix 6 L1 issues in orchestrator.py per prd/PRD.md: (1) parallel dev halt check after runner.run(), (2) parallel dev budget check before runner.run(), (3) remove pre_invoke_cleanup from _invoke_multi_reviewer, (4) budget tracker preserve history by updating per_task_limit instead of recreating, (5) _save_checkpoint use explicit iter_n from loop, (6) DAG exec_stage validate pipeline_role=='developer'. pytest tests/test_orchestrator.py tests/test_custom_roles.py -q must pass. git add -A && git commit."
++++  reviewer:
++++    role: reviewer
++++    runtime: codex
++++    model: gpt-5.5
++++    system_prompt_path: "prompts/fix-reviewer.md"
++++project:
++++  test_command: "python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q"
++++  max_iterations: 2
+++
+++
+++
++
++
+
+diff --git a/observer/logs/reviewer_iter-3_20260620T080431Z.log b/observer/logs/reviewer_iter-3_20260620T080431Z.log
+++new file mode 100644
+++index 0000000..4d000ac
+++--- /dev/null
++++++ b/observer/logs/reviewer_iter-3_20260620T080431Z.log
+++@@ -0,0 +1,1636 @@
++++=== COMMAND ===
++++codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 3: 1. Run tests: python3 -m pytest tests/test_orchestrator.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-3.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
++++
++++# Reviewer — Unison code review fix
++++
++++Review the current iteration's output.
++++
++++Plan review: check PRD/tech-design for correctness, completeness, feasibility.
++++Dev review: check code changes match the design, tests pass, no regressions.
++++
++++Output:
++++```
++++verdict: PASS | REQUEST_CHANGES
++++summary: <1-line>
++++findings:
++++  - <specific issue if any>
++++```
++++
++++
++++## Git Diff
++++
+++
+++
++
++
+
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
++++index 2f3e729..7dbb45d 100644
++++--- a/src/unison/orchestrator.py
+++++++ b/src/unison/orchestrator.py
++++@@ -13,6 +13,7 @@ import os
++++ import shlex
++++ import signal
++++ import subprocess
+++++import threading
++++ import time
++++... (truncated)
++++@@ -72,6 +73,9 @@ class Orchestrator:
++++         self.dry_run = dry_run
++++         self._state = State()
++++ 
+++++  
+...[diff truncated]
+
+## Design
+# modes
+
+
+## PRD
+# Pipeline A: Named Pipeline Modes
+
+## Problem
+Pipeline mode is determined by a binary check (`_should_plan()` returns True/False
+based on whether a planner agent exists). This gives only 2 modes: "4-agent" or "2-agent".
+No way to express design-debate, inspect-only, agent-fix, or migrate patterns
+without custom YAML + task_instruction hacks.
+
+## Solution
+Add a `mode` field to PipelineSpec with 6 named values. The orchestrator dispatches
+to different state-machine paths based on mode instead of the binary `_should_plan()`.
+
+## PipelineMode values
+
+```python
+PipelineMode = Literal[
+    "code-dev",       # Developer ↔ Reviewer (no planner)
+    "full-dev",       # Planner ↔ Reviewer → Developer ↔ Reviewer
+    "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no dev)
+    "inspect-only",   # Reviewer(s) → report (no planner, no dev)
+    "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
+    "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer (same as full-dev, named for clarity)
+]
+```
+
+## Auto-detection
+If `mode` is not set in YAML, auto-detect:
+- planner present + developer present → "full-dev"
+- no planner, developer present → "code-dev"
+- only reviewer(s) → "inspect-only"
+
+## Orchestrator changes
+Replace `_run_state_machine`'s hardcoded two-phase flow with a dispatch table:
+
+```python
+_DISPATCH = {
+    "code-dev":      lambda self: self._run_dev_loop(),
+    "full-dev":      lambda self: (self._run_planning_loop(), self._run_dev_loop()),
+    "design-debate": lambda self: self._run_planning_loop(),
+    "inspect-only":  lambda self: self._run_review_only(),
+    "agent-fix":     lambda self: self._run_dev_loop(),
+    "migrate":       lambda self: (self._run_planning_loop(), self._run_dev_loop()),
+}
+```
+
+## Acceptance
+- All existing pipeline YAMLs load without mode field (auto-detected)
+- `unison mode --pipeline <yaml>` prints named mode
+- 6 modes can be explicitly set in YAML
+- 500+ tests pass
+
+
+=== OUTPUT ===
+## Summary
+
+Implemented 6 named pipeline modes per `prd/PRD.md`. All 510 tests pass. Changes across 4 files:
+
+### 1. `interfaces.py` — `PipelineMode` Literal + `mode` field
+- Added `PipelineMode` type alias with 6 literal values: `code-dev`, `full-dev`, `design-debate`, `inspect-only`, `agent-fix`, `migrate`
+- Added `mode: PipelineMode | None = None` field to `PipelineSpec`
+
+### 2. `src/unison/pipeline.py` — Auto-detect mode
+- `load()` now reads `mode` from YAML; if absent, auto-detects via `_detect_mode()`:
+  - planner + developer → `"full-dev"`  
+  - developer only → `"code-dev"`
+  - reviewer(s) only → `"inspect-only"`
+- `mode()` method returns named mode from `spec.mode` with fallback to auto-detection for pre-V2 specs
+
+### 3. `src/unison/orchestrator.py` — Mode dispatch table
+- Replaced binary `_should_plan()` with `_DISPATCH` table mapping 6 modes to state-machine paths
+- Added `_run_planning_loop()` — runs planning phase
+- Added `_run_dev_loop()` — runs dev phase (DAG or linear)
+- Added `_run_review_only()` — reviewer(s) → report (inspect-only)
+- `_run_state_machine()` dispatches via `self.spec.mode` and handles `done` transition uniformly
+- Removed `_should_plan()` method
+
+### 4. `src/unison/cli.py` — Mode subcommand
+- Updated `mode` subcommand help text to show `(full-dev, code-dev, ...)`
+
+### Tests
+- Updated `test_mode_returns_4_agent_when_planner_present` → expects `"full-dev"`
+- Updated `test_mode_returns_2_agent_when_planner_absent` → expects `"code-dev"`
+
+**Commit:** `915b23b` — `feat: 6 named pipeline modes — PipelineMode + mode dispatch`
