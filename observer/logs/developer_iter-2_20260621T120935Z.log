@@ -321,3 +321,31 @@ own system prompt with different focus areas.
 
 
 === OUTPUT ===
+All tasks complete. Here's a summary of what was implemented:
+
+## Pipeline B — Multi-Agent Parallel (all roles, dual-mode)
+
+### Changes made across 3 files:
+
+**`interfaces.py`**
+- Added `parallel_mode: Literal["homogeneous", "heterogeneous"]` field to `ReviewerConfig` (default: `"homogeneous"`)
+- Added `parallel_groups: dict[str, list[str]]` to `PipelineSpec` for tracking which agents share each `effective_role`
+
+**`src/unison/pipeline.py`**
+- Added `_build_parallel_groups(agents)` static method that groups agent names by `effective_role`, returning only groups with 2+ agents
+- Wire the computed groups into `PipelineSpec` during `load()`
+
+**`src/unison/orchestrator.py`** (the bulk of changes):
+- **`_resolve_agents(pipeline_role) → list[AgentSpec]`** — returns ALL agents matching an effective_role (replaces singular `_resolve_agent` for multi-agent discovery)
+- **`_detect_parallel_mode(agent_specs) → str`** — auto-detects homogeneous (all same runtime) vs heterogeneous (different runtimes) per role group
+- **`_invoke_agents_parallel(...)`** — dispatches via `ThreadPoolExecutor` for concurrent agent invocation, routing to `_invoke_multi_planner`, `_invoke_multi_developer`, or `_invoke_multi_reviewer` based on role
+- **`_invoke_multi_planner(...)`** — runs multiple planners concurrently, each writing to `prd/PRD-{name}.md` + `prd/tech-design-{name}.md`, symlinks first planner's output as canonical
+- **`_invoke_multi_developer(...)`** — runs developers in isolated git worktrees, merges all branches after completion
+- **`_invoke_multi_reviewer(...)`** — extended to accept optional `agent_specs` list for heterogeneous mode (each reviewer uses its own runner, spec, and system prompt)
+- **`_run_loop`** and **`_run_review_only`** — auto-detect multi-agent groups via `_resolve_agents` instead of config-only checks
+- **`_get_reviewer_count()`** — now derives from agent composition first, falls back to config/env
+- **`_build_prompt_for_agent(...)`** — builds a prompt for an explicit `AgentSpec` (needed when multiple agents share a pipeline_role)
+
+### Test results:
+- `tests/test_orchestrator.py tests/test_custom_roles.py -q`: **27 passed**
+- Full test suite: **510 passed**

@@ -305,7 +305,7 @@ class Orchestrator:
         # Pipeline B: detect multi-reviewer from agent composition
         reviewer_agents = self._resolve_agents("reviewer")
         if len(reviewer_agents) > 1:
-            self._invoke_multi_reviewer(1, "dev_review")
+            self._invoke_multi_reviewer(1, "dev_review", agent_specs=reviewer_agents)
         else:
             self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
 
@@ -426,7 +426,7 @@ class Orchestrator:
             # Pipeline B: auto-detect multi-reviewer from agent composition
             reviewer_agents = self._resolve_agents("reviewer")
             if len(reviewer_agents) > 1:
-                self._invoke_multi_reviewer(iteration, review_phase)
+                self._invoke_multi_reviewer(iteration, review_phase, agent_specs=reviewer_agents)
             else:
                 self._invoke_agent_for_role("reviewer", iteration, review_phase=review_phase)
 
