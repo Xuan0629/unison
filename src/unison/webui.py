@@ -572,6 +572,8 @@ var L = {
       done: "Done", halt: "Halted"
     },
     titlePrefix: "UNISON",
+    modes: { "code-dev":"code-dev", "full-dev":"full-dev", "design-debate":"Design Debate",
+      "inspect-only":"Inspect", "agent-fix":"Agent Fix", "migrate":"Migrate" },
   },
   cn: {
     tasks: "任务", agents: "代理",
@@ -594,6 +596,8 @@ var L = {
       done: "完成", halt: "已暂停"
     },
     titlePrefix: "万物一心",
+    modes: { "code-dev":"代码开发", "full-dev":"全流程", "design-debate":"设计讨论",
+      "inspect-only":"审查", "agent-fix":"修复", "migrate":"迁移" },
   }
 };
 
@@ -784,7 +788,8 @@ function arraysEqual(a, b) {
 function patchTitle(s) {
   var mode = s.mode || "code-dev";
   var prefix = t("titlePrefix");
-  var title = prefix + " · " + mode;
+  var modeLabel = t("modes." + mode);
+  var title = prefix + " · " + modeLabel;
   document.title = title;
   document.getElementById("topbar-title").textContent = title;
 }
