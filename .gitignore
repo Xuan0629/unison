@@ -57,3 +57,5 @@ state.json
 # IDE
 .vscode/
 .idea/
+webui-v2-*.yaml
+v2-fix-pipeline.yaml
