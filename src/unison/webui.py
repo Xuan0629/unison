@@ -22,7 +22,7 @@ Features (20 components):
   3. Language toggle — EN / CN, all labels + title translated
   4. Phase badge — colour-coded, animated on change
   5. Status cards — Phase, Iteration, Verdict (key metrics first)
-  6. Token gauge dashboard — 3 SVG ring gauges (Planner/Developer/Reviewer)
+  6. Token gauge dashboard — per-agent SVG ring gauges, gold (dark) / blue (light)
   7. Timeline — horizontal phase-transition dots
   8. Active panel — breathing glow, pulsing indicator while working
   9. Error panel — halt signal detail, commit hash with copy button
@@ -136,6 +136,9 @@ PAGE = Template("""<!DOCTYPE html>
   --shadow-card: 0 1px 3px rgba(0,0,0,0.4);
   --shadow-lift: 0 6px 20px rgba(0,0,0,0.5);
   --shadow-glow: 0 0 20px var(--accent-dim);
+
+  /* Gauge ring colours (gold shades) */
+  --gauge-0: hsl(38,70%,70%); --gauge-1: hsl(38,70%,55%); --gauge-2: hsl(38,70%,40%); --gauge-3: hsl(38,70%,25%);
 }
 
 [data-theme="light"] {
@@ -172,6 +175,9 @@ PAGE = Template("""<!DOCTYPE html>
   --shadow-card: 0 1px 3px rgba(0,0,0,0.08);
   --shadow-lift: 0 6px 20px rgba(0,0,0,0.10);
   --shadow-glow: 0 0 20px rgba(37, 99, 235, 0.25);
+
+  /* Gauge ring colours (blue shades) */
+  --gauge-0: hsl(220,70%,65%); --gauge-1: hsl(220,70%,50%); --gauge-2: hsl(220,70%,35%); --gauge-3: hsl(220,70%,20%);
 }
 
 
@@ -1264,46 +1270,9 @@ button:focus-visible,
       </div>
     </div>
 
-    <!-- Token gauge dashboard -->
+    <!-- Token gauge dashboard (dynamically created per agent) -->
     <div id="gauge-dashboard" class="card">
-      <div class="gauge-row">
-        <!-- Planner gauge -->
-        <div class="gauge">
-          <svg class="gauge__svg" viewBox="0 0 120 120" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Planner token usage">
-            <circle class="gauge__track" cx="60" cy="60" r="50" fill="none" stroke="var(--bg)" stroke-width="8"/>
-            <circle class="gauge__fill" id="gauge-planner-fill" cx="60" cy="60" r="50" fill="none" stroke="var(--blue)" stroke-width="8" stroke-linecap="round"
-                    stroke-dasharray="314.16" stroke-dashoffset="314.16" transform="rotate(-90 60 60)"/>
-            <text class="gauge__pct" id="gauge-planner-pct" x="60" y="48" text-anchor="middle">0%</text>
-            <text class="gauge__used" id="gauge-planner-used" x="60" y="66" text-anchor="middle">0k</text>
-            <text class="gauge__limit" id="gauge-planner-limit" x="60" y="80" text-anchor="middle">/ 200k</text>
-          </svg>
-          <div class="gauge__agent-label">PLANNER</div>
-        </div>
-        <!-- Developer gauge -->
-        <div class="gauge">
-          <svg class="gauge__svg" viewBox="0 0 120 120" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Developer token usage">
-            <circle class="gauge__track" cx="60" cy="60" r="50" fill="none" stroke="var(--bg)" stroke-width="8"/>
-            <circle class="gauge__fill" id="gauge-dev-fill" cx="60" cy="60" r="50" fill="none" stroke="var(--accent)" stroke-width="8" stroke-linecap="round"
-                    stroke-dasharray="314.16" stroke-dashoffset="314.16" transform="rotate(-90 60 60)"/>
-            <text class="gauge__pct" id="gauge-dev-pct" x="60" y="48" text-anchor="middle">0%</text>
-            <text class="gauge__used" id="gauge-dev-used" x="60" y="66" text-anchor="middle">0k</text>
-            <text class="gauge__limit" id="gauge-dev-limit" x="60" y="80" text-anchor="middle">/ 200k</text>
-          </svg>
-          <div class="gauge__agent-label">DEVELOPER</div>
-        </div>
-        <!-- Reviewer gauge -->
-        <div class="gauge">
-          <svg class="gauge__svg" viewBox="0 0 120 120" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Reviewer token usage">
-            <circle class="gauge__track" cx="60" cy="60" r="50" fill="none" stroke="var(--bg)" stroke-width="8"/>
-            <circle class="gauge__fill" id="gauge-reviewer-fill" cx="60" cy="60" r="50" fill="none" stroke="var(--purple)" stroke-width="8" stroke-linecap="round"
-                    stroke-dasharray="314.16" stroke-dashoffset="314.16" transform="rotate(-90 60 60)"/>
-            <text class="gauge__pct" id="gauge-reviewer-pct" x="60" y="48" text-anchor="middle">0%</text>
-            <text class="gauge__used" id="gauge-reviewer-used" x="60" y="66" text-anchor="middle">0k</text>
-            <text class="gauge__limit" id="gauge-reviewer-limit" x="60" y="80" text-anchor="middle">/ 200k</text>
-          </svg>
-          <div class="gauge__agent-label">REVIEWER</div>
-        </div>
-      </div>
+      <div class="gauge-row" id="gauge-row"></div>
     </div>
 
     <!-- Timeline -->
@@ -1665,7 +1634,7 @@ function diffPatch(prev, next) {
   if (budgetChanged) patchGauges(next);
 
   if (!arraysEqual(prev.tasks,       next.tasks))       patchTasks(next);
-  if (!arraysEqual(prev.agents,      next.agents))      { patchAgents(next); patchPipelineConfig(next); patchEmptyState(next); }
+  if (!arraysEqual(prev.agents,      next.agents))      { patchAgents(next); patchPipelineConfig(next); patchEmptyState(next); patchGauges(next); }
   if (!arraysEqual(prev.transitions, next.transitions)) { patchTimeline(next); patchTasks(next); patchLog(next); patchEmptyState(next); }
 
   // Detect phase transition to "done" for history save
@@ -1737,70 +1706,62 @@ function patchVerdict(s) {
 
 function patchGauges(s) {
   var b = s.budget || {};
+  var agents = s.agents || [];
   var used = b.per_task_used  || 0;
   var limit = b.per_task_limit || 200000;
 
-  // Apply localStorage overrides
-  var dailyOverride = parseInt(localStorage.getItem("unison-daily-limit"), 10);
-  var taskOverride  = parseInt(localStorage.getItem("unison-task-limit"), 10);
+  // Apply localStorage overrides for limit display
+  var taskOverride = parseInt(localStorage.getItem("unison-task-limit"), 10);
+  if (taskOverride && taskOverride > 0) {
+    limit = taskOverride;
+  }
 
-  // All three gauges show the same per-task budget for now
-  renderGauge("planner", used, limit);
-  renderGauge("dev", used, limit);
-  renderGauge("reviewer", used, limit);
+  var row = document.getElementById("gauge-row");
+  if (!row) return;
 
-  // Also update daily used portion if we had it
+  if (!agents.length) {
+    row.innerHTML = "";
+    return;
+  }
+
+  // Daily budget for tooltip
   var du = b.daily_used || 0;
+  var dailyOverride = parseInt(localStorage.getItem("unison-daily-limit"), 10);
   var dl = dailyOverride && dailyOverride > 0 ? dailyOverride : (b.daily_limit || 1000000);
-  // Show daily use in the planner gauge title for now
-  var svg = document.querySelector("#gauge-dashboard .gauge:nth-child(1) svg");
-  if (svg) {
-    var duk = Math.round(du / 1000);
-    var dlk = Math.round(dl / 1000);
-    svg.setAttribute("title", "Daily: " + duk + "k / " + dlk + "k  |  Per-task: " + Math.round(used/1000) + "k / " + Math.round(limit/1000) + "k");
-  }
-}
 
-function renderGauge(agent, used, limit) {
-  var pct = limit > 0 ? Math.min(100, Math.round(used / limit * 100)) : 0;
+  var html = "";
+  for (var i = 0; i < agents.length; i++) {
+    var a = agents[i];
+    var role = a.role || "agent";
+    var label = role.charAt(0).toUpperCase() + role.slice(1);
+    var colourIdx = i % 4;
+    var pct = limit > 0 ? Math.min(100, Math.round(used / limit * 100)) : 0;
+    var dashOffset = CIRC * (1 - pct / 100);
+    var uk = Math.round(used / 1000);
+    var lk = Math.round(limit / 1000);
 
-  // Determine stroke colour based on threshold
-  var fillEl = document.getElementById("gauge-" + agent + "-fill");
-  var pctEl  = document.getElementById("gauge-" + agent + "-pct");
-  var usedEl = document.getElementById("gauge-" + agent + "-used");
-  var limitEl = document.getElementById("gauge-" + agent + "-limit");
-  var svgEl = fillEl ? fillEl.closest("svg") : null;
-
-  if (!fillEl) return;
-
-  // Colour by threshold: <70% normal agent colour, 70-90% orange, >90% red
-  var colour;
-  if (pct > 90)      colour = "var(--red)";
-  else if (pct > 70) colour = "var(--orange)";
-  else {
-    if (agent === "planner")      colour = "var(--blue)";
-    else if (agent === "dev")     colour = "var(--accent)";
-    else                          colour = "var(--purple)";
-  }
-
-  var dashOffset = CIRC * (1 - pct / 100);
-  fillEl.setAttribute("stroke", colour);
-  fillEl.setAttribute("stroke-dashoffset", String(dashOffset));
-
-  if (pctEl)  pctEl.textContent  = pct + "%";
-  if (usedEl) usedEl.textContent = Math.round(used / 1000) + "k";
-  if (limitEl) limitEl.textContent = "/ " + Math.round(limit / 1000) + "k";
-
-  // Update ARIA on SVG meter
-  if (svgEl) {
-    svgEl.setAttribute("aria-valuenow", String(pct));
+    html += '<div class="gauge">';
+    html += '<svg class="gauge__svg" viewBox="0 0 120 120" role="meter"';
+    html += ' aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"';
+    html += ' aria-label="' + esc(label) + ' token usage"';
+    if (i === 0) {
+      var duk = Math.round(du / 1000);
+      var dlk = Math.round(dl / 1000);
+      html += ' title="Daily: ' + duk + 'k / ' + dlk + 'k  |  Per-task: ' + uk + 'k / ' + lk + 'k"';
+    }
+    html += '>';
+    html += '<circle class="gauge__track" cx="60" cy="60" r="50" fill="none" stroke="var(--bg)" stroke-width="8"/>';
+    html += '<circle class="gauge__fill" cx="60" cy="60" r="50" fill="none" stroke="var(--gauge-' + colourIdx + ')" stroke-width="8" stroke-linecap="round"';
+    html += ' stroke-dasharray="' + CIRC + '" stroke-dashoffset="' + dashOffset + '" transform="rotate(-90 60 60)"/>';
+    html += '<text class="gauge__pct" x="60" y="48" text-anchor="middle">' + pct + '%</text>';
+    html += '<text class="gauge__used" x="60" y="66" text-anchor="middle">' + uk + 'k</text>';
+    html += '<text class="gauge__limit" x="60" y="80" text-anchor="middle">/ ' + lk + 'k</text>';
+    html += '</svg>';
+    html += '<div class="gauge__agent-label">' + esc(label) + '</div>';
+    html += '</div>';
   }
 
-  // Update title for hover tooltip
-  var label = agent.charAt(0).toUpperCase() + agent.slice(1);
-  if (svgEl) {
-    svgEl.setAttribute("title", label + ": " + Math.round(used/1000) + "k / " + Math.round(limit/1000) + "k (" + pct + "%)");
-  }
+  row.innerHTML = html;
 }
 
 // -- 9f. Active panel -------------------------------------------------
