@@ -69,6 +69,7 @@ class ReviewerPool:
                         verdict="REQUEST_CHANGES",
                         summary=f"Reviewer crashed: {exc}",
                         findings=[],
+                        raw_path=Path("."),
                     ))
         return verdicts
 
