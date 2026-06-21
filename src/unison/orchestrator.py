@@ -243,44 +243,70 @@ class Orchestrator:
         return self._state
 
     # ==================================================================
-    # Internal: state machine (§3 two-phase loop)
+    # Internal: state machine (§3 two-phase loop → mode dispatch)
     # ==================================================================
 
+    _DISPATCH = {
+        "code-dev":      lambda self: self._run_dev_loop(),
+        "full-dev":      lambda self: (self._run_planning_loop(), self._run_dev_loop()),
+        "design-debate": lambda self: self._run_planning_loop(),
+        "inspect-only":  lambda self: self._run_review_only(),
+        "agent-fix":     lambda self: self._run_dev_loop(),
+        "migrate":       lambda self: (self._run_planning_loop(), self._run_dev_loop()),
+    }
+
     def _run_state_machine(self) -> None:
-        """Run the two-phase loop until done or halt.
+        """Dispatch to the appropriate state-machine path based on pipeline mode.
 
-        Phase 1 — Planning loop:  planning_active ↔ planning_review
-        Phase 2 — Development loop: dev_active ↔ dev_review
-
-        Each loop is structurally identical (ARCHITECTURE.md §3):
-          active → review → verdict → PASS (exit) / REQUEST_CHANGES (loop)
+        Replaces the old binary ``_should_plan()`` check with a named-mode
+        dispatch table that supports 6 pipeline modes.
         """
-        # ---- Phase 1: Planning -----------------------------------------------
-        if self._should_plan():
-            self._state.transition("planning_active", "orchestrator",
-                                   iter_n=1, note="starting planning loop")
-            self._save_checkpoint()
-
-            self._run_loop(
-                active_phase="planning_active",
-                review_phase="planning_review",
-                review_of="PRD + tech-design",
-            )
-
-        if self._state.halt_signal:
+        mode = self.spec.mode or "code-dev"
+        dispatch = self._DISPATCH.get(mode)
+        if dispatch is None:
+            self.halt(f"Unknown pipeline mode: {mode}")
             return
-
-        # ---- Phase 2: Development --------------------------------------------
-        # V2: route to DAG scheduler when dag is configured
-        if self.spec.dag is not None:
-            self._run_dag_development()
-        else:
-            self._run_linear_development()
+        dispatch(self)
 
         if not self._state.halt_signal:
             self._state.transition("done", "orchestrator",
                                    note="pipeline complete")
             self._save_checkpoint()
+
+    def _run_planning_loop(self) -> None:
+        """Run Planning ↔ Review loop (planner phase)."""
+        if self._state.halt_signal:
+            return
+        self._state.transition("planning_active", "orchestrator",
+                               iter_n=1, note="starting planning loop")
+        self._save_checkpoint()
+        self._run_loop(
+            active_phase="planning_active",
+            review_phase="planning_review",
+            review_of="PRD + tech-design",
+        )
+
+    def _run_dev_loop(self) -> None:
+        """Run Developer ↔ Reviewer loop."""
+        if self._state.halt_signal:
+            return
+        if self.spec.dag is not None:
+            self._run_dag_development()
+        else:
+            self._run_linear_development()
+
+    def _run_review_only(self) -> None:
+        """inspect-only mode: Reviewer(s) → report (no planner, no dev)."""
+        if self._state.halt_signal:
+            return
+        self._state.transition("dev_review", "orchestrator",
+                               iter_n=1, note="starting review-only")
+        self._save_checkpoint()
+        reviewer_count = self._get_reviewer_count()
+        if reviewer_count > 1:
+            self._invoke_multi_reviewer(1, "dev_review")
+        else:
+            self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
 
     def _run_dag_development(self) -> None:
         """Run development via DAGScheduler when spec.dag is configured."""
@@ -337,20 +363,6 @@ class Orchestrator:
             review_phase="dev_review",
             review_of="code + tests",
         )
-
-        if not self._state.halt_signal:
-            self._state.transition("done", "orchestrator",
-                                   note="pipeline complete")
-            self._save_checkpoint()
-
-    def _should_plan(self) -> bool:
-        """Return True if the planning phase should run.
-
-        Planning runs when a ``planner`` agent is configured in the spec.
-        If no planner is defined, we skip straight to development
-        (PRD was authored externally — ARCHITECTURE.md §21).
-        """
-        return any(a.effective_role == "planner" for a in self.spec.agents.values())
 
     def _run_loop(
         self,

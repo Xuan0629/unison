@@ -40,6 +40,15 @@ Verdict: TypeAlias = Literal["PASS", "REQUEST_CHANGES"]
 Actor: TypeAlias = AgentRole | Literal["orchestrator", "observer", "harness_optimizer", "sean"]
 ProjectLanguage: TypeAlias = Literal["python", "node", "rust", "go", "custom"]
 
+PipelineMode: TypeAlias = Literal[
+    "code-dev",       # Developer ↔ Reviewer (no planner)
+    "full-dev",       # Planner ↔ Reviewer → Developer ↔ Reviewer
+    "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no dev)
+    "inspect-only",   # Reviewer(s) → report (no planner, no dev)
+    "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
+    "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer (same as full-dev, named for clarity)
+]
+
 class RiskLevel(Enum):
     L0 = "auto_allow"              # 直接放行
     L1 = "auto_allow_session"      # 本 session 首次同意后全放行
@@ -266,6 +275,7 @@ class PipelineSpec:
     dag: list[Stage] | None = None  # V2: DAG 多 phase 并行（None → V1 线性模式）
     parallel_dev: WorktreeConfig | None = None  # V2: 并行 Developer
     reviewer_config: ReviewerConfig | None = None  # V2: multi-reviewer
+    mode: PipelineMode | None = None  # Named pipeline mode (auto-detected if not set)
     max_iterations: int = 5
     per_agent_timeout: int = 600    # 秒。Codex 慢需 300s+
     context_deflation_limit: int = 5  # 每次迭代只注入最近 5 条 findings

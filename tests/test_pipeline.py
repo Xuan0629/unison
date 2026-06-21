@@ -421,7 +421,7 @@ agents:
         assert len(spec.agents) == 3
 
     def test_mode_returns_4_agent_when_planner_present(self, tmp_path):
-        """planner 存在时 mode() 返回 "4-agent"。"""
+        """planner 存在时 mode() 返回 "full-dev"（原 "4-agent"）。"""
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text("""
 version: "1.0"
@@ -445,10 +445,10 @@ agents:
 """)
         loader = PipelineLoader()
         spec = loader.load(pipeline_file)
-        assert loader.mode(spec) == "4-agent"
+        assert loader.mode(spec) == "full-dev"
 
     def test_mode_returns_2_agent_when_planner_absent(self, tmp_path):
-        """无 planner 时 mode() 返回 "2-agent"（向后兼容 V1）。"""
+        """无 planner 时 mode() 返回 "code-dev"（原 "2-agent"）。"""
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text("""
 version: "1.0"
@@ -467,7 +467,7 @@ agents:
 """)
         loader = PipelineLoader()
         spec = loader.load(pipeline_file)
-        assert loader.mode(spec) == "2-agent"
+        assert loader.mode(spec) == "code-dev"
 
     def test_2_agent_backward_compatible(self, tmp_path):
         """无 planner 的 2-agent pipeline 正常加载（向后兼容）。"""
