@@ -31,26 +31,28 @@ PAGE = Template("""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Unison Pipeline</title>
+<title>UNISON</title>
 <style>
 /* ========================================================================
    CSS Variables — Dark Theme (default)
    ======================================================================== */
 :root, [data-theme="dark"] {
-  --bg: #111; --bg-card: #1a1a1a; --bg-sidebar: #0d0d0d;
-  --fg: #eee; --fg-dim: #888; --fg-bright: #fff;
-  --accent: #0f0; --accent-dim: #0a0;
-  --red: #f44; --red-bg: #300; --orange: #f90; --blue: #4af;
-  --border: #333; --radius: 8px; --font: system-ui, sans-serif;
-  --phase-init: #888; --phase-planning: #4af; --phase-dev: #f90;
-  --phase-review: #a0f; --phase-done: #0f0; --phase-halt: #f44;
+  --bg: #0a0a0a; --bg-card: #141414; --bg-sidebar: #0d0d0d;
+  --fg: #e0e0e0; --fg-dim: #777; --fg-bright: #fff;
+  --accent: #d4a853; --accent-dim: #a07830;
+  --red: #e05555; --red-bg: #2a1010; --orange: #d4a853; --blue: #5b9bd5;
+  --border: #2a2a2a; --radius: 8px; --font: system-ui, sans-serif;
+  --phase-init: #666; --phase-planning: #5b9bd5; --phase-dev: #d4a853;
+  --phase-review: #9b7bd5; --phase-done: #5aab5a; --phase-halt: #e05555;
 }
 [data-theme="light"] {
-  --bg: #f5f5f5; --bg-card: #fff; --bg-sidebar: #eee;
-  --fg: #222; --fg-dim: #666; --fg-bright: #000;
-  --accent: #080; --accent-dim: #060;
-  --red: #c00; --red-bg: #fdd; --orange: #c60; --blue: #06c;
-  --border: #ddd;
+  --bg: #f8fafc; --bg-card: #fff; --bg-sidebar: #f1f5f9;
+  --fg: #1e293b; --fg-dim: #64748b; --fg-bright: #0f172a;
+  --accent: #2563eb; --accent-dim: #1d4ed8;
+  --red: #dc2626; --red-bg: #fef2f2; --orange: #d97706; --blue: #2563eb;
+  --border: #e2e8f0;
+  --phase-init: #94a3b8; --phase-planning: #2563eb; --phase-dev: #d97706;
+  --phase-review: #7c3aed; --phase-done: #16a34a; --phase-halt: #dc2626;
 }
 
 /* ========================================================================
@@ -249,7 +251,7 @@ body {
 <body>
 <div id="app">
   <header id="topbar">
-    <span class="logo">&#128279; Unison</span>
+    <span class="logo" id="topbar-title">UNISON</span>
     <span id="phase-badge" class="badge phase-init">--</span>
     <span class="spacer"></span>
     <button id="lang-toggle" onclick="toggleLang()">EN</button>
@@ -308,7 +310,9 @@ var LANG = {
     pass: "PASS", requestChanges: "REQUEST_CHANGES", noTasks: "No tasks yet",
     budgetDaily: "Daily", budgetTask: "Task",
     phases: { init:"Init", planning_active:"Planning", planning_review:"Plan Review",
-      dev_active:"Developing", dev_review:"Code Review", done:"Done" }
+      dev_active:"Developing", dev_review:"Code Review", done:"Done" },
+    modes: { code-dev:"code-dev", full-dev:"full-dev", design-debate:"Design Debate",
+      inspect-only:"Inspect", agent-fix:"Agent Fix", migrate:"Migrate" }
   },
   cn: {
     title: "Unison 流水线", phase: "阶段", iteration: "迭代",
@@ -318,7 +322,9 @@ var LANG = {
     pass: "通过", requestChanges: "需修改", noTasks: "暂无任务",
     budgetDaily: "每日", budgetTask: "任务",
     phases: { init:"初始化", planning_active:"规划中", planning_review:"规划审查",
-      dev_active:"开发中", dev_review:"代码审查", done:"完成" }
+      dev_active:"开发中", dev_review:"代码审查", done:"完成" },
+    modes: { code-dev:"代码开发", full-dev:"全流程", design-debate:"设计讨论",
+      inspect-only:"审查", agent-fix:"修复", migrate:"迁移" }
   }
 };
 
@@ -424,6 +430,7 @@ async function poll() {
 }
 
 function patchAll(state) {
+  patchTitle(state);
   patchPhase(state);
   patchIter(state);
   patchBudget(state);
@@ -439,6 +446,14 @@ function patchAll(state) {
 // ======================================================================
 // Component patch functions
 // ======================================================================
+
+function patchTitle(state) {
+  var mode = (state.mode || 'code-dev');
+  var modeLabel = LANG[lang].modes ? LANG[lang].modes[mode] : mode;
+  var title = (lang === 'cn') ? ('万物一心 · ' + modeLabel) : ('UNISON · ' + mode);
+  document.title = title;
+  document.getElementById('topbar-title').textContent = title;
+}
 
 function patchPhase(state) {
   var badge = document.getElementById('phase-badge');
@@ -643,7 +658,21 @@ class UnisonHandler(BaseHTTPRequestHandler):
         # Tasks from transitions
         data["tasks"] = _derive_tasks(state.history)
 
+        # Mode from pipeline agents
+        data["mode"] = self._derive_mode(data.get("agents", []))
+
         return data
+
+    def _derive_mode(self, agents: list) -> str:
+        """Derive pipeline mode from agent roles."""
+        roles = {a.get("role", "") for a in agents}
+        has_planner = any(a.get("pipeline_role", a.get("role", "")) == "planner" for a in agents)
+        has_developer = any(a.get("pipeline_role", a.get("role", "")) == "developer" for a in agents)
+        if has_planner and has_developer:
+            return "full-dev"
+        if has_developer:
+            return "code-dev"
+        return "inspect-only"
 
     def _load_pipeline_config(self) -> dict | None:
         """Load the first valid pipeline YAML as a dict, or None.
