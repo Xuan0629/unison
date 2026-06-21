@@ -1,39 +1,41 @@
 # Unison · 万物一心
 
-> *"将弃牌堆中的所有 0 费卡返回手牌，打出 combo。"*
-> ——《Slay the Spire》故障机器人金卡
+[中文](README_CN.md) | **English**
 
-**Unison（万物一心）** 是一个本地优先、文件驱动的 Multi-Agent 自动化协作桥梁。
-不依赖 LangChain / CrewAI / AutoGen，自建 MIT 许可。
+> *"Return all 0-cost cards from the discard pile to your hand, and play them as a combo."*
+> —— *Slay the Spire*, Defect Rare Card "Unison"
 
-命名灵感来自《Slay the Spire》中"故障机器人"的金卡"万物一心"——
-从弃牌堆中回收所有 0 费资源，组合成致命连击。
-Unison 同样如此：轻量、无状态，将多个 AI Agent 编排为协作流水线，
-以最小资源消耗打出最大效果。
+**Unison（万物一心）** is a local-first, filesystem-driven multi-agent collaboration bridge.
+Zero dependencies on LangChain / CrewAI / AutoGen. Self-built, MIT licensed.
+
+The name is inspired by the Defect's rare card "Unison" from *Slay the Spire* —
+it retrieves all 0-cost resources from the discard pile and chains them into a lethal combo.
+Unison does the same: lightweight, stateless, orchestrating multiple AI agents
+into collaborative pipelines with minimal resource footprint and maximum impact.
 
 ---
 
-## 快速开始
+## Quick Start
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/Xuan0629/unison.git
 cd unison
 pip install -e .
 
-# 2-agent: Developer + Reviewer（PRD 预先写好）
+# 2-agent mode: Developer ↔ Reviewer (PRD pre-written)
 unison run --pipeline my-project.yaml
 
-# 4-agent: Planner ↔ Reviewer → Developer ↔ Reviewer
+# 4-agent mode: Planner ↔ Reviewer → Developer ↔ Reviewer
 unison run --pipeline full-dev.yaml
 
-# 查看 pipeline 模式
+# Check pipeline mode
 unison mode --pipeline my-project.yaml
 
-# Web 状态面板
+# Web dashboard
 unison webui --port 9099
 ```
 
-### 最小 pipeline.yaml
+### Minimal pipeline.yaml
 
 ```yaml
 version: "2.0"
@@ -56,77 +58,123 @@ project:
 
 ---
 
-## 功能
+## Features
 
-### Pipeline 模式
+### Pipeline Modes (auto-detected)
 
-| 模式 | 流程 | 场景 |
-|------|------|------|
-| `code-dev` | Developer ↔ Reviewer | 代码开发 |
-| `full-dev` | Planner ↔ Reviewer → Developer ↔ Reviewer | 全流程 |
-| `design-debate` | Multi-Planner ↔ Multi-Reviewer | 设计讨论 |
-| `inspect-only` | Reviewer(s) → 报告 | 审计/审查 |
-| `agent-fix` | Multi-Developer → Multi-Reviewer | Agent 修复 |
-| `migrate` | Planner ↔ Reviewer → Developer ↔ Reviewer | 跨项目迁移 |
+| Mode | Flow | Use Case |
+|------|------|----------|
+| `code-dev` | Developer ↔ Reviewer | Code development (PRD pre-written) |
+| `full-dev` | Planner ↔ Reviewer → Developer ↔ Reviewer | Full workflow |
+| `design-debate` | Multi-Planner ↔ Multi-Reviewer | Design discussions |
+| `inspect-only` | Reviewer(s) → report | Audits / inspections |
+| `agent-fix` | Multi-Developer → Multi-Reviewer | Agent repair / optimization |
+| `migrate` | Planner ↔ Reviewer → Developer ↔ Reviewer | Cross-project migration |
 
-### 自定义角色
+### Custom Roles
 
-任意角色名，通过 `pipeline_role` 映射到内建行为：
+Arbitrary role names mapped to built-in behaviors via `pipeline_role`:
 
 ```yaml
 agents:
   architect:
     role: architect
     pipeline_role: planner
-    task_instruction: "Write plugin design proposal..."
+    task_instruction: "Write plugin system design proposal..."
   critic:
     role: critic
     pipeline_role: reviewer
 ```
 
-### 多 Agent 并行
+Key fields:
+- **`pipeline_role`** — tells the Orchestrator which slot this role fills (`planner`/`developer`/`reviewer`)
+- **`task_instruction`** — overrides the default task prompt for precise control
 
-同一 `pipeline_role` 的多个 agent 自动并行：
+### Multi-Agent Parallel
+
+Multiple agents sharing the same `pipeline_role` automatically run in parallel:
 
 ```yaml
 agents:
   tech_reviewer: {pipeline_role: reviewer, runtime: codex}
   arch_reviewer: {pipeline_role: reviewer, runtime: claude}
 ```
-- **同质**（同 runtime）：N 副本，majority 投票
-- **异质**（不同 runtime）：各自从不同角度独立审查
 
-### 安全
+Two parallel modes (auto-detected):
+- **Homogeneous** — same runtime, N copies, majority vote for reviewers
+- **Heterogeneous** — different runtimes, each agent reviews from its own perspective
 
-- `fcntl.flock` 内核级互斥锁
-- 三元组风险矩阵（operation × path × command）
-- 快照安全网（操作前自动备份）
-- API key 日志自动脱敏
-- 流式子进程日志（OOM 防护）
+Works for all roles (Planner, Developer, Reviewer), not just Reviewer.
 
-### 监控
+### Safety
 
-- Observer 每分钟轮询 + Discord 通知
-- Phase transition 自动检测
-- Liveness probe（5min 无活动 → 告警）
-- Web 面板（`:9099`）
+| Feature | Description |
+|---------|-------------|
+| `fcntl.flock` | Kernel-enforced exclusive lock — no TOCTOU races |
+| Risk Matrix | operation × path × command rule engine (L0–L3) |
+| Snapshot Safety Net | Auto-backup before agent modifications |
+| API Key Masking | Logs auto-redact `sk-...`, `Bearer`, `_API_KEY=` |
+| Streaming Logs | Subprocess output written directly to disk (OOM-safe) |
 
-### 更多
+### Observability
 
-- Token 预算管理（溢出自动 downgrade）
-- Context 截断（防止 prompt 过长）
-- Timeout recovery（Claude Code 超时自动提交有效产出）
-- Checkpoint 断点续跑
-- DAG 调度（Stage 依赖图，并行执行）
-- Git Worktree 隔离开发
-- Schema 自动迁移（V1 → V2）
+| Feature | Description |
+|---------|-------------|
+| Observer Cron | Polls `state.json` every 60s |
+| Phase Detection | Auto-detects `init→planning→dev→done` transitions |
+| Discord Notifications | Phase transitions + halt reasons pushed to a configured Discord channel |
+| Liveness Probe | 5min inactivity → urgent alert |
+| Web Dashboard | `unison webui --port 9099` — real-time status, transitions, agent logs |
+| Agent Logs | Full prompt + output, 7-day retention |
+
+> **Note on Discord**: The Discord notification feature uses a per-user webhook URL and channel ID
+> configured in the Observer. Each user must provide their own Discord integration — it is
+> not shared or hardcoded for any specific channel.
+
+### Advanced
+
+| Feature | Description |
+|---------|-------------|
+| Token Budget | Per-agent limits, overflow → auto-downgrade or halt |
+| Context Deflation | Smart prompt truncation, only recent findings injected |
+| Timeout Recovery | Claude Code timeout? Uncommitted valid output auto-detected and committed |
+| Checkpoint / Resume | State saved after each phase transition |
+| DAG Scheduler | Stage dependency graph, parallel execution with deadlines |
+| Git Worktrees | Isolated parallel development branches |
+| Schema Migration | V1 pipeline.yaml auto-upgraded to V2 |
 
 ---
 
-## 支持的 Agent
+## Architecture
 
-| Agent | 运行时 | 调用方式 |
-|-------|--------|---------|
+```
+Unison Orchestrator (state machine)
+├── Planner Agent    ⇄  Reviewer Agent   ← planning loop
+├── Developer Agent  ⇄  Reviewer Agent   ← dev loop
+├── FileLockManager     (fcntl.flock)
+├── SnapshotManager     (~/.unison/snapshots/)
+├── RiskEvaluator       (3-tuple rules)
+└── BudgetTracker       (token limits)
+
+Observer (independent process, 60s poll)
+├── state.json + notifications.jsonl
+├── Discord webhook
+└── Web dashboard (:9099)
+
+World (shared filesystem)
+├── prd/PRD.md, tech-design.md
+├── reviews/iter-N.md, plan-iter-N.md
+├── inbox/ outbox/ (agent messages)
+├── observer/ logs/ reports/
+└── .unison/ state, lock, checkpoints, budget
+```
+
+---
+
+## Supported Agents
+
+| Agent | Runtime Key | Invocation |
+|-------|-------------|------------|
 | Claude Code | `claude` | `claude -p --dangerously-skip-permissions` |
 | Codex CLI | `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox` |
 | Hermes | `hermes` | `hermes chat -q --yolo` |
@@ -134,10 +182,54 @@ agents:
 
 ---
 
-## 依赖
+## Example Workflows
+
+### Code Development (`code-dev`)
+
+```yaml
+# pipeline.yaml
+version: "2.0"
+project_root: "."
+agents:
+  developer: {role: developer, runtime: claude, model: deepseek-v4-pro, system_prompt_path: "prompts/dev.md"}
+  reviewer:  {role: reviewer,  runtime: codex, model: gpt-5.5,        system_prompt_path: "prompts/review.md"}
+project: {test_command: "pytest tests/ -q", max_iterations: 3}
+```
+
+### Design Debate (`design-debate`)
+
+```yaml
+agents:
+  architect: {role: architect, pipeline_role: planner,   runtime: claude}
+  pm:        {role: pm,        pipeline_role: planner,   runtime: codex}
+  critic:    {role: critic,    pipeline_role: reviewer,  runtime: claude}
+  analyst:   {role: analyst,   pipeline_role: reviewer,  runtime: codex}
+```
+
+---
+
+## Dependencies
 
 - **Python** ≥ 3.12
 - **Claude Code** — `npm install -g @anthropic-ai/claude-code`
 - **Codex CLI** — `npm install -g @openai/codex`
 - **Git**
 - **PyYAML** — `pip install pyyaml`
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| "Could not acquire lock" | `rm -f ~/.unison/locks/<project>.lock` |
+| "ContextBudgetError" | `rm -f .unison/budget.json` (resets daily budget) |
+| Review file pollution | `rm -f reviews/iter-*.md reviews/plan-iter-*.md` between runs |
+| Codex "Missing OPENAI_API_KEY" | Ensure `~/.hermes/.env` exists with your API keys |
+| Planner writes placeholders | Use stronger `task_instruction` with explicit "WRITE NOW" directives |
+
+---
+
+## License
+
+MIT
