@@ -1,10 +1,59 @@
 # Unison
 observer/logs/
-.unison/budget.json
-.unison/locks/
-.unison/state.json
+.unison/
+.venv/
 __pycache__/
 *.pyc
-.venv/
+
+# Internal dev pipelines
+phase*.yaml
+fix-*.yaml
+mode-system.yaml
+parallel-system.yaml
+
+# Internal PRDs & working files
+prd/prd-fix*.md
+prd/PRD-phase*.md
+prd/PRD-v2-fix.bak.md
+prd/PRD-mode-system.md
+prd/PRD-parallel-system.md
+prd/tech-design-phase*.md
+prd/tech-design-v2-fix.bak.md
+prd/*.bak
+PRD.md
+tech-design.md
+prd/README-V2-FIX.md
+
+# Phase-specific prompts
+prompts/developer-phase*.md
+prompts/planner-phase*.md
+prompts/reviewer-phase*.md
+prompts/plan-reviewer-phase*.md
+prompts/developer-v2-fix.md
+prompts/reviewer-v2-fix.md
+prompts/architect-phase10.md
+prompts/critic-phase10.md
+prompts/pm-phase10.md
+prompts/cost-analyst-phase10.md
+prompts/finalizer-phase10.md
+prompts/skill-auditor-phase12.md
+prompts/audit-reviewer-phase12.md
+prompts/template-migrator-phase14.md
+prompts/migrate-reviewer-phase14.md
+
+# Stale reviews & snapshots
+reviews/*.md
+.hermes-snapshot.md
+v2-review-codex.md
+
+# Runtime state
+.budget.json
+state.json
+
+# Secrets
 .env
-*.log
+*.env
+
+# IDE
+.vscode/
+.idea/
