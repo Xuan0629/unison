@@ -58,6 +58,43 @@ project:
 
 ---
 
+## Commands
+
+```bash
+# Run a pipeline
+unison run --pipeline my-pipeline.yaml
+
+# Validate config without running
+unison dry-run --pipeline my-pipeline.yaml
+
+# Show detected pipeline mode
+unison mode --pipeline my-pipeline.yaml
+
+# Start web dashboard
+unison webui --project . --port 9099
+
+# Switch agent runtime on the fly
+unison run --pipeline my.yaml --switch developer:claude
+
+# Change agent model on the fly  
+unison run --pipeline my.yaml --model reviewer:gpt-5.5
+
+# Persist switch/model changes to pipeline.yaml
+unison run --pipeline my.yaml --switch reviewer:claude --save-pref
+```
+
+| Flag | Description |
+|------|-------------|
+| `--pipeline <path>` | Path to pipeline.yaml |
+| `--dry-run` | Validate spec without executing agents |
+| `--json` | Print final state as JSON |
+| `--switch <agent>:<runtime>` | Replace runtime for a specific agent (ex: `developer:claude`) |
+| `--model <agent>:<model>` | Override model for a specific agent (ex: `reviewer:gpt-5.5`) |
+| `--save-pref` | Persist `--switch`/`--model` changes to pipeline.yaml |
+| `--project <dir>` | Override project root (default: pipeline.yaml dir) |
+
+---
+
 ## Features
 
 ### Pipeline Modes (auto-detected)
