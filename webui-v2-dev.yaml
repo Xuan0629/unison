@@ -1,0 +1,17 @@
+version: "2.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/fix-developer.md"
+    task_instruction: "IMPLEMENT Web UI 2.0 per prd/PRD.md and prd/tech-design.md. Rewrite src/unison/webui.py completely. Single file, zero external deps. Must include: (1) SPA with JS polling /api/state every 3s, (2) dark/light CSS theme with toggle, (3) EN/CN language pack with toggle, (4) 9 components: topbar phase badge, sidebar task list + agent cards, status row with phase/iter/token/verdict cards, timeline, active panel, error panel, log preview, (5) /api/state extended with budget + agents + tasks. Use CSS Grid for layout, CSS variables for theming. No flicker on refresh. pytest -q must pass (test_webui if any). git add -A && git commit."
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/fix-reviewer.md"
+project:
+  test_command: "python3 -c \"from unison.webui import serve; print('import OK')\""
+  max_iterations: 3
