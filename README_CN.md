@@ -177,13 +177,14 @@ agents:
 |------|------|
 | Observer 轮询 | 每 60s 读取 state.json |
 | Phase 检测 | 自动识别 `init→planning→dev→done` 迁移 |
-| Discord 通知 | Phase 变化 + halt 原因推送到配置的 Discord 频道 |
+| Discord / 通知 | Phase 变化 + halt 原因推送到配置的通知频道（Discord 等） |
 | Liveness Probe | 5min 无活动 → 紧急告警 |
 | Web 面板 | `unison webui --port 9099` — 实时状态、转换历史、agent 日志 |
 | Agent 日志 | 完整 prompt + 输出，保留 7 天 |
 
-> **关于 Discord**：Discord 通知功能使用用户自己配置的 webhook URL 和频道 ID。
-> 每个用户需提供自己的 Discord 集成——不共享，也不硬编码为特定频道。
+> **关于通知**：通知功能使用用户自己配置的通知频道（webhook URL / bot token 等）。
+> 支持 Discord、Slack、Telegram、ntfy 等。每个用户需提供自己的通知集成——不共享，
+> 也不硬编码为特定频道。
 
 ### 高级
 
@@ -212,7 +213,7 @@ Unison Orchestrator（状态机）
 
 Observer（独立进程，60s 轮询）
 ├── state.json + notifications.jsonl
-├── Discord webhook
+├── Discord / 通知 webhook
 └── Web 面板 (:9099)
 
 World（共享文件系统）

@@ -177,14 +177,14 @@ Works for all roles (Planner, Developer, Reviewer), not just Reviewer.
 |---------|-------------|
 | Observer Cron | Polls `state.json` every 60s |
 | Phase Detection | Auto-detects `init→planning→dev→done` transitions |
-| Discord Notifications | Phase transitions + halt reasons pushed to a configured Discord channel |
+| Discord / Notifications | Phase transitions + halt reasons pushed to configured channel (Discord, etc.) |
 | Liveness Probe | 5min inactivity → urgent alert |
 | Web Dashboard | `unison webui --port 9099` — real-time status, transitions, agent logs |
 | Agent Logs | Full prompt + output, 7-day retention |
 
-> **Note on Discord**: The Discord notification feature uses a per-user webhook URL and channel ID
-> configured in the Observer. Each user must provide their own Discord integration — it is
-> not shared or hardcoded for any specific channel.
+> **Note on Notifications**: The notification feature uses a user-configured channel (webhook URL / bot token).
+> Supports Discord, Slack, Telegram, ntfy, and others. Each user must provide their own integration —
+> it is not shared or hardcoded for any specific channel.
 
 ### Advanced
 
@@ -213,7 +213,7 @@ Unison Orchestrator (state machine)
 
 Observer (independent process, 60s poll)
 ├── state.json + notifications.jsonl
-├── Discord webhook
+├── Discord / notification webhook
 └── Web dashboard (:9099)
 
 World (shared filesystem)
