@@ -667,7 +667,7 @@ class UnisonHandler(BaseHTTPRequestHandler):
                 import yaml
                 with open(candidate, "r", encoding="utf-8") as f:
                     raw = yaml.safe_load(f)
-                if isinstance(raw, dict):
+                if isinstance(raw, dict) and "agents" in raw:
                     return raw
             except Exception:
                 continue
