@@ -14,8 +14,9 @@ import os
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+from string import Template
 
-TEMPLATE = """<!DOCTYPE html>
+TEMPLATE = Template("""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><title>Unison Pipeline</title>
 <meta http-equiv="refresh" content="10">
@@ -29,15 +30,15 @@ h1{color:#0f0}.phase{font-size:2rem;font-weight:bold}.halt{color:red}.pass{color
 <body>
 <h1>Unison Pipeline</h1>
 <div class="card">
-<div class="phase {halt_class}">{phase}</div>
-<div>Iteration: <span class="iter">{iteration}</span></div>
-{halt_line}
+<div class="phase $halt_class">$phase</div>
+<div>Iteration: <span class="iter">$iteration</span></div>
+$halt_line
 </div>
 <h2>Recent Transitions</h2>
-{transitions}
+$transitions
 <h2>Logs</h2>
-{logs}
-</body></html>"""
+$logs
+</body></html>""")
 
 
 class UnisonHandler(BaseHTTPRequestHandler):
@@ -89,8 +90,8 @@ class UnisonHandler(BaseHTTPRequestHandler):
             for f in log_files
         ) or "<div>No logs</div>"
 
-        html = TEMPLATE.format(
-            phase=phase, iteration=state.get("iteration", 0),
+        html = TEMPLATE.substitute(
+            phase=phase, iteration=str(state.get("iteration", 0)),
             halt_class=halt_class, halt_line=halt_line,
             transitions=transitions, logs=logs,
         )
