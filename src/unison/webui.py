@@ -1553,7 +1553,7 @@ function patchError(s) {
     }
     if (s.last_commit) {
       html += ' · ' + esc(t("commit")) + ': <code>' + esc(s.last_commit) + '</code>';
-      html += ' <button class="error-panel__btn" onclick="copyCommit(\'' + esc(s.last_commit) + '\', this)">' + esc(t("copy")) + '</button>';
+      html += ' <button class="error-panel__btn" onclick="copyCommit(&apos;' + esc(s.last_commit) + '&apos;, this)">' + esc(t("copy")) + '</button>';
     }
     html += '</div>';
     el.innerHTML = html;
