@@ -91,6 +91,25 @@ def _load(spec_path: Path) -> tuple:
     return spec, loader
 
 
+def _check_tools(spec) -> None:
+    """Pre-flight: warn if required tools are missing."""
+    import shutil
+    tools = {}
+    for agent in spec.agents.values():
+        runtime = getattr(agent, 'runtime', '')
+        if runtime and runtime not in ('openclaw',):
+            tools[runtime] = shutil.which(runtime)
+    # Also check git
+    tools['git'] = shutil.which('git')
+
+    missing = [name for name, path in tools.items() if path is None]
+    if missing:
+        print(f"WARNING: Required tools not found: {', '.join(missing)}")
+        print("Install them before running the pipeline.")
+    else:
+        print(f"Tools OK: {', '.join(tools.keys())}")
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     # Load API keys from ~/.hermes/.env before subprocess agents run
     _load_api_keys()
@@ -105,6 +124,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # If world still points to spec's project_root, just trust it.
 
     orchestrator = Orchestrator(spec=spec, dry_run=args.dry_run)
+
+    # Pre-flight: check required tools
+    _check_tools(spec)
+
     final_state: State = orchestrator.run()
 
     if args.json:
