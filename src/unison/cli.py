@@ -64,6 +64,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true",
         help="Print final state as JSON (instead of human summary)",
     )
+    run.add_argument(
+        "--switch", type=str, default=None,
+        help="Replace missing runtimes: --switch codex:claude,hermes:claude",
+    )
+    run.add_argument(
+        "--save-pref", action="store_true",
+        help="Save switch preferences to pipeline.yaml",
+    )
 
     # --- dry-run -----------------------------------------------------
     dr = sub.add_parser("dry-run", help="Validate pipeline.yaml without running")
@@ -91,23 +99,56 @@ def _load(spec_path: Path) -> tuple:
     return spec, loader
 
 
-def _check_tools(spec) -> None:
-    """Pre-flight: warn if required tools are missing."""
+def _parse_switches(switch_arg: str | None) -> dict[str, str]:
+    """Parse --switch flag: 'codex:claude,hermes:claude' -> {codex: claude, hermes: claude}."""
+    if not switch_arg:
+        return {}
+    result = {}
+    for pair in switch_arg.split(','):
+        parts = pair.strip().split(':')
+        if len(parts) == 2:
+            result[parts[0].strip()] = parts[1].strip()
+    return result
+
+
+def _check_tools(spec, switches: dict[str,str] | None = None) -> bool:
+    """Pre-flight: check all required tools. Returns True if all OK.
+
+    If tools are missing, prints actionable error messages and returns False.
+    The caller should halt the pipeline.
+    """
     import shutil
-    tools = {}
-    for agent in spec.agents.values():
+    # Collect (runtime, agent_name) pairs
+    needed: dict[str, list[str]] = {}
+    for name, agent in spec.agents.items():
         runtime = getattr(agent, 'runtime', '')
         if runtime and runtime not in ('openclaw',):
-            tools[runtime] = shutil.which(runtime)
-    # Also check git
-    tools['git'] = shutil.which('git')
+            # Apply switch if configured
+            effective = switches.get(runtime, runtime) if switches else runtime
+            needed.setdefault(effective, []).append(name)
 
-    missing = [name for name, path in tools.items() if path is None]
-    if missing:
-        print(f"WARNING: Required tools not found: {', '.join(missing)}")
-        print("Install them before running the pipeline.")
-    else:
-        print(f"Tools OK: {', '.join(tools.keys())}")
+    # Also check git
+    missing: list[str] = []
+    for tool in set(list(needed.keys()) + ['git']):
+        if not shutil.which(tool):
+            missing.append(tool)
+
+    if not missing:
+        print(f"Tools OK: {', '.join(sorted(set(needed.keys()) | {'git'}))}")
+        return True
+
+    print(f"\nTOOL CHECK: {'NOT FOUND — '.join(t.upper() for t in missing)}NOT FOUND")
+    for tool in missing:
+        agents_needing = needed.get(tool, [])
+        if agents_needing:
+            print(f"  Needed by: {', '.join(agents_needing)}")
+    print()
+    print("  Fix: install the missing tools, or reconfigure pipeline:")
+    for tool in missing:
+        if tool != 'git':
+            print(f"    unison run --pipeline <yaml> --switch {tool}:claude")
+    print(f"\nPipeline halted. Fix missing tools and retry.")
+    return False
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -125,8 +166,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     orchestrator = Orchestrator(spec=spec, dry_run=args.dry_run)
 
-    # Pre-flight: check required tools
-    _check_tools(spec)
+    # Pre-flight: check required tools (halt if missing)
+    switches = _parse_switches(args.switch)
+    if not _check_tools(spec, switches):
+        print("\nTip: use --switch runtime:fallback to remap roles, --save-pref to persist")
+        return 1
 
     final_state: State = orchestrator.run()
 
