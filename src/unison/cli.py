@@ -70,7 +70,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "--save-pref", action="store_true",
-        help="Save switch preferences to pipeline.yaml",
+        help="Save switch/model preferences to pipeline.yaml",
+    )
+    run.add_argument(
+        "--model", type=str, default=None,
+        help="Override agent model: --model developer:deepseek-v4-pro",
     )
 
     # --- dry-run -----------------------------------------------------
@@ -99,13 +103,16 @@ def _load(spec_path: Path) -> tuple:
     return spec, loader
 
 
-def _parse_switches(switch_arg: str | None) -> dict[str, str]:
-    """Parse --switch flag: 'codex:claude,hermes:claude' -> {codex: claude, hermes: claude}."""
-    if not switch_arg:
+def _parse_kv(flag_arg: str | None) -> dict[str, str]:
+    """Parse key:value pairs from --switch or --model flags.
+
+    'developer:claude,reviewer:hermes' -> {'developer': 'claude', 'reviewer': 'hermes'}
+    """
+    if not flag_arg:
         return {}
     result = {}
-    for pair in switch_arg.split(','):
-        parts = pair.strip().split(':')
+    for pair in flag_arg.split(','):
+        parts = pair.strip().split(':', 1)
         if len(parts) == 2:
             result[parts[0].strip()] = parts[1].strip()
     return result
@@ -118,35 +125,38 @@ def _check_tools(spec, switches: dict[str,str] | None = None) -> bool:
     The caller should halt the pipeline.
     """
     import shutil
-    # Collect (runtime, agent_name) pairs
+    # Collect (runtime, agent_key) pairs, applying --switch if configured
     needed: dict[str, list[str]] = {}
-    for name, agent in spec.agents.items():
+    for agent_key, agent in spec.agents.items():
         runtime = getattr(agent, 'runtime', '')
         if runtime and runtime not in ('openclaw',):
-            # Apply switch if configured
-            effective = switches.get(runtime, runtime) if switches else runtime
-            needed.setdefault(effective, []).append(name)
+            # --switch overrides the runtime for this agent
+            effective = (switches or {}).get(agent_key, runtime)
+            needed.setdefault(effective, []).append(agent_key)
 
     # Also check git
     missing: list[str] = []
-    for tool in set(list(needed.keys()) + ['git']):
+    all_tools = set(needed.keys()) | {'git'}
+    for tool in all_tools:
         if not shutil.which(tool):
             missing.append(tool)
 
     if not missing:
-        print(f"Tools OK: {', '.join(sorted(set(needed.keys()) | {'git'}))}")
+        print(f"Tools OK: {', '.join(sorted(all_tools))}")
         return True
 
-    print(f"\nTOOL CHECK: {'NOT FOUND — '.join(t.upper() for t in missing)}NOT FOUND")
+    print(f"\nTOOL CHECK: {', '.join(t.upper() for t in missing)} NOT FOUND")
     for tool in missing:
         agents_needing = needed.get(tool, [])
         if agents_needing:
-            print(f"  Needed by: {', '.join(agents_needing)}")
+            print(f"  Needed by agent(s): {', '.join(agents_needing)}")
     print()
-    print("  Fix: install the missing tools, or reconfigure pipeline:")
+    print("  Options:")
+    print("    1. Install the missing tools")
     for tool in missing:
         if tool != 'git':
-            print(f"    unison run --pipeline <yaml> --switch {tool}:claude")
+            for agent_key in needed.get(tool, [])[:1]:
+                print(f"    2. Switch agent '{agent_key}' runtime: --switch {agent_key}:claude")
     print(f"\nPipeline halted. Fix missing tools and retry.")
     return False
 
@@ -167,9 +177,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
     orchestrator = Orchestrator(spec=spec, dry_run=args.dry_run)
 
     # Pre-flight: check required tools (halt if missing)
-    switches = _parse_switches(args.switch)
+    switches = _parse_kv(args.switch)
+    model_overrides = _parse_kv(args.model) if hasattr(args, 'model') else {}
     if not _check_tools(spec, switches):
-        print("\nTip: use --switch runtime:fallback to remap roles, --save-pref to persist")
+        print("\nTip: use --switch <agent>:<runtime> to remap, --model <agent>:<model> to change model, --save-pref to persist")
         return 1
 
     final_state: State = orchestrator.run()
