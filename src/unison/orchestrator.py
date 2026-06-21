@@ -574,6 +574,12 @@ class Orchestrator:
             if runner is None or effective_spec is None:
                 continue
 
+            # Check budget overflow BEFORE invoking agent (L1 fix #2)
+            tracker = self._get_budget_tracker("developer")
+            if not tracker.check_budget():
+                self.halt("budget overflow: developer")
+                return
+
             # Build feature-specific prompt
             prompt = (
                 f"=== Parallel Developer: {feature_name} ===\n"
@@ -598,8 +604,12 @@ class Orchestrator:
                 log_path=log_path,
             )
 
+            # L1 fix #1: halt check after runner.run() so agent B doesn't
+            # run if agent A triggered halt (e.g. budget overflow / SIGINT).
+            if self._state.halt_signal:
+                break
+
             # Track token usage
-            tracker = self._get_budget_tracker("developer")
             estimated_tokens = max(1, len(prompt) // 4)
             tracker.add_usage(estimated_tokens, phase=f"developer_{feature_name}", iter_n=iteration)
 
@@ -655,8 +665,8 @@ class Orchestrator:
         if reviewer_count < 2:
             return  # Safety: shouldn't be called for single reviewer
 
-        # Pre-invoke cleanup once (not per-reviewer)
-        self.pre_invoke_cleanup()
+        # L1 fix #3: reviewers only read and write reviews — they don't
+        # need a clean workspace, so skip pre_invoke_cleanup here.
         if self._state.halt_signal:
             return
 
@@ -945,11 +955,12 @@ class Orchestrator:
             if agent_spec is not None and agent_spec.context_budget is not None:
                 per_task_limit = agent_spec.context_budget
 
-        # If tracker exists but per-task limit changed for this role,
-        # invalidate so the new cap takes effect (Codex Iter 2 re-review).
+        # L1 fix #4: when per_task_limit changes, update the existing
+        # tracker's limit instead of discarding it (which loses all
+        # accumulated usage history).
         if (self._budget_tracker is not None
                 and self._budget_tracker.per_task_limit != per_task_limit):
-            self._budget_tracker = None
+            self._budget_tracker.per_task_limit = per_task_limit
 
         if self._budget_tracker is not None:
             return self._budget_tracker
@@ -1179,15 +1190,20 @@ class Orchestrator:
         except (VerdictParseError, yaml.YAMLError):
             return None
 
-    def _save_checkpoint(self) -> None:
+    def _save_checkpoint(self, iteration: int | None = None) -> None:
         """Save a checkpoint after each phase transition (§19).
 
         Checkpoints are stored under ~/.unison/checkpoints/<project>/
         with the naming convention ckpt-<iter>-<phase>-<timestamp>.json.
+
+        Args:
+            iteration: Explicit iter_n from the loop (L1 fix #5).
+                When ``None``, falls back to ``self._state.iteration``.
         """
+        iter_n = iteration if iteration is not None else self._state.iteration
         self._checkpoint_mgr.save(
             project=self.spec.world.root.name,
             state=self._state,
-            iter_n=self._state.iteration,
+            iter_n=iter_n,
             commit=self._state.last_dev_commit,
         )
