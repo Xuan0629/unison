@@ -70,7 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--pipeline", required=True, type=Path)
 
     # --- mode --------------------------------------------------------
-    md = sub.add_parser("mode", help="Print pipeline mode (4-agent / 2-agent)")
+    md = sub.add_parser("mode", help="Print pipeline mode (full-dev, code-dev, ...)")
     md.add_argument("--pipeline", required=True, type=Path)
 
     # --- webui -------------------------------------------------------

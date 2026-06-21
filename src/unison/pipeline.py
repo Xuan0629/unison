@@ -42,6 +42,7 @@ from interfaces import (
     AgentSpec,
     BootstrapConfig,
     BudgetConfig,
+    PipelineMode,
     PipelineSpec,
     ProjectConfig,
     ReviewerConfig,
@@ -170,6 +171,11 @@ class PipelineLoader:
         reviewer_cfg = self._build_reviewer_config(raw.get("reviewer_config"))
         parallel_dev_cfg = self._build_parallel_dev(raw.get("parallel_dev"))
 
+        # ---- mode auto-detection ----
+        mode: PipelineMode | None = raw.get("mode")  # type: ignore[assignment]
+        if mode is None:
+            mode = self._detect_mode(agents)
+
         return PipelineSpec(
             version=version,
             world=world,
@@ -182,6 +188,7 @@ class PipelineLoader:
             dag=dag_cfg,
             reviewer_config=reviewer_cfg,
             parallel_dev=parallel_dev_cfg,
+            mode=mode,
         )
 
     # ------------------------------------------------------------------
@@ -189,20 +196,49 @@ class PipelineLoader:
     # ------------------------------------------------------------------
 
     def mode(self, spec: PipelineSpec) -> str:
-        """返回 pipeline 模式：``"4-agent"`` 或 ``"2-agent"``。
+        """返回 pipeline 的命名模式。
 
-        Planner 存在 → ``"4-agent"``（Planner → Developer ↔ Reviewer → Observer）。
-        无 Planner → ``"2-agent"``（Developer ↔ Reviewer，向后兼容 V1）。
+        如果 spec.mode 已设置（YAML 显式指定或 auto-detection），直接返回；
+        否则 fallback 到旧的二值检测（向后兼容预 V2 PipelineSpec 实例）。
 
         Args:
             spec: A loaded ``PipelineSpec``.
 
         Returns:
-            ``"4-agent"`` 如果 spec.agents 包含 planner，否则 ``"2-agent"``。
+            Named pipeline mode (e.g. ``"full-dev"``, ``"code-dev"``).
         """
-        return "4-agent" if any(
-            a.effective_role == "planner" for a in spec.agents.values()
-        ) else "2-agent"
+        if spec.mode is not None:
+            return spec.mode
+        # Fallback: pre-V2 PipelineSpec without mode field
+        return self._detect_mode(spec.agents)
+
+    @staticmethod
+    def _detect_mode(agents: dict[str, AgentSpec]) -> PipelineMode:
+        """Auto-detect pipeline mode from agent composition.
+
+        Rules:
+        - planner present + developer present → ``"full-dev"``
+        - no planner, developer present → ``"code-dev"``
+        - only reviewer(s) → ``"inspect-only"``
+        """
+        has_planner = any(
+            a.effective_role == "planner" for a in agents.values()
+        )
+        has_developer = any(
+            a.effective_role == "developer" for a in agents.values()
+        )
+        has_reviewer = any(
+            a.effective_role == "reviewer" for a in agents.values()
+        )
+
+        if has_planner and has_developer:
+            return "full-dev"
+        if has_developer:
+            return "code-dev"
+        if has_reviewer:
+            return "inspect-only"
+        # Fallback (shouldn't reach here with valid pipelines)
+        return "code-dev"
 
     def dry_run(self, spec: PipelineSpec) -> bool:
         """Check that every agent's prompt file exists on disk.
