@@ -500,11 +500,11 @@ function patchTimeline(state) {
   if (!trans.length) { el.innerHTML = '<span style="color:var(--fg-dim)">' + t('noTasks') + '</span>'; return; }
   var html = '';
   for (var i = 0; i < trans.length; i++) {
-    var t = trans[i];
-    var phaseKey = t.to_phase || 'init';
+    var tr = trans[i];
+    var phaseKey = tr.to_phase || 'init';
     var label = t('phases.' + phaseKey);
     var cls = 'phase-' + phaseKey.replace(/_/g, '-');
-    var titleStr = (t.note || '') + (t.verdict ? ' [' + t.verdict + ']' : '');
+    var titleStr = (tr.note || '') + (tr.verdict ? ' [' + tr.verdict + ']' : '');
     html += '<div class="tl-node" title="' + titleStr.replace(/"/g, '&quot;') + '">';
     html += '<span class="tl-dot ' + cls + '"></span>';
     html += '<span class="tl-label">' + label + '</span></div>';
@@ -645,40 +645,16 @@ class UnisonHandler(BaseHTTPRequestHandler):
 
         return data
 
-    def _load_budget(self) -> dict:
-        """Load budget data from budget.json."""
-        budget_path = self.project_root / ".unison" / "budget.json"
-        if budget_path.exists():
-            try:
-                with open(budget_path, "r", encoding="utf-8") as f:
-                    budget_data = json.load(f)
-                return {
-                    "daily_used": budget_data.get("daily_used", 0),
-                    "daily_limit": budget_data.get("daily_limit", 1_000_000),
-                    "per_task_used": budget_data.get("task_used", 0),
-                    "per_task_limit": budget_data.get("per_task_limit", 200_000),
-                }
-            except (json.JSONDecodeError, OSError):
-                pass
-        return {
-            "daily_used": 0,
-            "daily_limit": 1_000_000,
-            "per_task_used": 0,
-            "per_task_limit": 200_000,
-        }
+    def _load_pipeline_config(self) -> dict | None:
+        """Load the first valid pipeline YAML as a dict, or None.
 
-    def _load_agents(self) -> list[dict]:
-        """Load agent specs from a pipeline YAML file.
-
-        Searches for pipeline.yaml, then any *.yaml with version+agents keys.
-        Falls back to the current project's known YAML files.
+        Shared by ``_load_budget()`` and ``_load_agents()`` so that both
+        budget limits and agent specs come from the same pipeline config.
         """
         candidates = [
             self.project_root / "pipeline.yaml",
             self.project_root / "webui-v2-dev.yaml",
         ]
-
-        # Also check any *.yaml in project root matching pipeline pattern
         yaml_files = sorted(self.project_root.glob("*.yaml"))
         for yf in yaml_files:
             if yf not in candidates:
@@ -691,25 +667,71 @@ class UnisonHandler(BaseHTTPRequestHandler):
                 import yaml
                 with open(candidate, "r", encoding="utf-8") as f:
                     raw = yaml.safe_load(f)
-                if not isinstance(raw, dict):
-                    continue
-                agents_raw = raw.get("agents")
-                if not isinstance(agents_raw, dict):
-                    continue
-                agents = []
-                for role, spec in agents_raw.items():
-                    if isinstance(spec, dict):
-                        agents.append({
-                            "role": role,
-                            "runtime": spec.get("runtime", "unknown"),
-                            "model": spec.get("model", "unknown"),
-                        })
-                if agents:
-                    return agents
+                if isinstance(raw, dict):
+                    return raw
             except Exception:
                 continue
+        return None
 
-        return []
+    def _load_budget(self) -> dict:
+        """Load budget data — usage from budget.json, limits from pipeline config.
+
+        PRD: limits come from pipeline config so that projects with custom
+        limits show correct TokenCard progress and warning thresholds.
+        """
+        # --- usage from budget.json (BudgetTracker._save only writes these) ---
+        daily_used = 0
+        per_task_used = 0
+        budget_path = self.project_root / ".unison" / "budget.json"
+        if budget_path.exists():
+            try:
+                with open(budget_path, "r", encoding="utf-8") as f:
+                    budget_data = json.load(f)
+                daily_used = budget_data.get("daily_used", 0)
+                per_task_used = budget_data.get("task_used", 0)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # --- limits from pipeline config (fall back to BudgetConfig defaults) ---
+        daily_limit = 1_000_000
+        per_task_limit = 200_000
+        pipeline = self._load_pipeline_config()
+        if pipeline:
+            budget_cfg = pipeline.get("budget")
+            if isinstance(budget_cfg, dict):
+                daily_limit = budget_cfg.get(
+                    "daily_token_limit", daily_limit
+                )
+                per_task_limit = budget_cfg.get(
+                    "per_task_limit", per_task_limit
+                )
+
+        return {
+            "daily_used": daily_used,
+            "daily_limit": daily_limit,
+            "per_task_used": per_task_used,
+            "per_task_limit": per_task_limit,
+        }
+
+    def _load_agents(self) -> list[dict]:
+        """Load agent specs from the pipeline YAML config."""
+        pipeline = self._load_pipeline_config()
+        if not pipeline:
+            return []
+
+        agents_raw = pipeline.get("agents")
+        if not isinstance(agents_raw, dict):
+            return []
+
+        agents = []
+        for role, spec in agents_raw.items():
+            if isinstance(spec, dict):
+                agents.append({
+                    "role": role,
+                    "runtime": spec.get("runtime", "unknown"),
+                    "model": spec.get("model", "unknown"),
+                })
+        return agents
 
     # ------------------------------------------------------------------
     # Response helpers
