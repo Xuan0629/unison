@@ -1996,17 +1996,30 @@ function patchEmptyState(s) {
   var timeline = document.getElementById("timeline");
   var active   = document.getElementById("active-panel");
   var log      = document.getElementById("log-preview");
+  var status   = document.getElementById("status-row");
+  var gauges   = document.getElementById("gauge-dashboard");
+  var agents   = document.getElementById("agent-cards");
+  var config   = document.getElementById("pipeline-config");
+  var tasks    = document.getElementById("task-list");
 
   if (isEmpty(s)) {
     el.classList.remove("u-hidden");
     if (timeline) timeline.classList.add("u-hidden");
     if (active)   active.classList.add("u-hidden");
     if (log)      log.classList.add("u-hidden");
+    if (status)   status.classList.add("u-hidden");
+    if (gauges)   gauges.classList.add("u-hidden");
+    // Clear sidebar sections that depend on pipeline data
+    if (agents)   agents.innerHTML = '<div class="agent-card"><span class="agent-card__role">' + t("noAgents") + '</span></div>';
+    if (config)   config.innerHTML = '';
+    if (tasks)    tasks.innerHTML = '<div class="task-item"><span class="task-dot pending"></span><span class="task-label">' + t("noTasks") + '</span></div>';
   } else {
     el.classList.add("u-hidden");
     if (timeline) timeline.classList.remove("u-hidden");
     if (active)   active.classList.remove("u-hidden");
     if (log)      log.classList.remove("u-hidden");
+    if (status)   status.classList.remove("u-hidden");
+    if (gauges)   gauges.classList.remove("u-hidden");
   }
 }
 
