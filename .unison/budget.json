@@ -1,25 +1,31 @@
 {
   "date": "2026-06-21",
-  "daily_used": 8511,
-  "task_used": 8511,
+  "daily_used": 11615,
+  "task_used": 11615,
   "phases": [
     {
       "phase": "developer",
       "iter_n": 1,
-      "tokens_used": 2692,
-      "timestamp": "2026-06-21T12:01:55.584767+00:00"
+      "tokens_used": 2950,
+      "timestamp": "2026-06-21T12:07:33.250170+00:00"
     },
     {
       "phase": "reviewer",
       "iter_n": 1,
-      "tokens_used": 2676,
-      "timestamp": "2026-06-21T12:13:28.010107+00:00"
+      "tokens_used": 2855,
+      "timestamp": "2026-06-21T12:09:35.281265+00:00"
     },
     {
       "phase": "developer",
       "iter_n": 2,
-      "tokens_used": 3143,
-      "timestamp": "2026-06-21T12:20:12.678311+00:00"
+      "tokens_used": 3221,
+      "timestamp": "2026-06-21T12:15:49.363530+00:00"
+    },
+    {
+      "phase": "reviewer",
+      "iter_n": 2,
+      "tokens_used": 2589,
+      "timestamp": "2026-06-21T12:26:19.706378+00:00"
     }
   ]
 }
