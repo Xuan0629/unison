@@ -302,8 +302,9 @@ class Orchestrator:
         self._state.transition("dev_review", "orchestrator",
                                iter_n=1, note="starting review-only")
         self._save_checkpoint()
-        reviewer_count = self._get_reviewer_count()
-        if reviewer_count > 1:
+        # Pipeline B: detect multi-reviewer from agent composition
+        reviewer_agents = self._resolve_agents("reviewer")
+        if len(reviewer_agents) > 1:
             self._invoke_multi_reviewer(1, "dev_review")
         else:
             self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
@@ -404,7 +405,12 @@ class Orchestrator:
             )
             self._save_checkpoint(iteration)
 
-            self._invoke_agent_for_role(agent_role, iteration)
+            # Pipeline B: detect multi-agent parallel group
+            agents = self._resolve_agents(agent_role)
+            if len(agents) > 1:
+                self._invoke_agents_parallel(agents, agent_role, iteration)
+            else:
+                self._invoke_agent_for_role(agent_role, iteration)
 
             if self._state.halt_signal:
                 return
@@ -417,8 +423,9 @@ class Orchestrator:
             )
             self._save_checkpoint(iteration)
 
-            reviewer_count = self._get_reviewer_count()
-            if reviewer_count > 1:
+            # Pipeline B: auto-detect multi-reviewer from agent composition
+            reviewer_agents = self._resolve_agents("reviewer")
+            if len(reviewer_agents) > 1:
                 self._invoke_multi_reviewer(iteration, review_phase)
             else:
                 self._invoke_agent_for_role("reviewer", iteration, review_phase=review_phase)
@@ -551,6 +558,332 @@ class Orchestrator:
             # Consecutive failure tracking is a V2 feature.
             pass
 
+    # ------------------------------------------------------------------
+    # Pipeline B: multi-agent parallel invocation (§PRD-parallel-system)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_parallel_mode(agent_specs: list[AgentSpec]) -> str:
+        """Detect homogeneous vs heterogeneous parallel mode.
+
+        **homogeneous** — all agents share the same ``runtime``.
+            N copies run with the same runner; reviewer uses majority vote.
+
+        **heterogeneous** — agents have different ``runtime`` values.
+            Each agent runs independently with its own spec and focus area.
+        """
+        if len(agent_specs) <= 1:
+            return "homogeneous"
+        runtimes = {s.runtime for s in agent_specs}
+        return "homogeneous" if len(runtimes) == 1 else "heterogeneous"
+
+    def _invoke_agents_parallel(
+        self,
+        agent_specs: list[AgentSpec],
+        pipeline_role: str,
+        iteration: int,
+        review_phase: str = "dev_review",
+    ) -> None:
+        """Invoke multiple agents concurrently for the same pipeline_role.
+
+        Pipeline B — replaces ``_invoke_agent_for_role`` when multiple
+        agents share the same ``effective_role``. Uses
+        ``ThreadPoolExecutor`` for concurrent execution with per-agent
+        failure isolation.
+
+        - **Planner**: each agent writes to ``prd/PRD-{role_name}.md``
+          and ``prd/tech-design-{role_name}.md``.  After all complete,
+          the first agent's output is symlinked/copied as the canonical
+          ``prd/PRD.md`` for reviewer consumption.
+
+        - **Developer**: each agent works in a dedicated git worktree
+          (see :meth:`_invoke_agent_in_worktree`).  After all complete,
+          branches are merged via ``WorktreeManager.merge_reconciliation``.
+
+        - **Reviewer**: delegates to :meth:`_invoke_multi_reviewer` with
+          heterogeneous support when runtimes differ.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        parallel_mode = self._detect_parallel_mode(agent_specs)
+
+        if pipeline_role == "reviewer":
+            # Multi-reviewer already has its own parallel path; extend
+            # for heterogeneous by passing all agent specs.
+            self._invoke_multi_reviewer(
+                iteration, review_phase,
+                agent_specs=agent_specs,
+            )
+            return
+
+        if pipeline_role == "planner":
+            self._invoke_multi_planner(agent_specs, iteration, parallel_mode)
+            return
+
+        if pipeline_role == "developer":
+            self._invoke_multi_developer(agent_specs, iteration, parallel_mode)
+            return
+
+        # Generic fallback: concurrent invocation for any role
+        world = self.spec.world
+
+        def invoke_one(spec: AgentSpec) -> None:
+            runner = self._runners.get(spec.runtime)
+            if runner is None:
+                return
+            prompt = self._build_prompt_for_agent(
+                spec, pipeline_role, iteration, review_phase,
+            )
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            log_path = world.agent_log(
+                pipeline_role, iteration,  # type: ignore[arg-type]
+                f"{timestamp}_{spec.role}",
+            )
+            runner.run(
+                spec=spec,
+                prompt=prompt,
+                workdir=world.root,
+                timeout=self.spec.per_agent_timeout,
+                log_path=log_path,
+            )
+            # Budget tracking per agent
+            tracker = self._get_budget_tracker(pipeline_role)
+            estimated_tokens = max(1, len(prompt) // 4)
+            tracker.add_usage(
+                estimated_tokens, phase=f"{pipeline_role}_{spec.role}",
+                iter_n=iteration,
+            )
+
+        with ThreadPoolExecutor(max_workers=len(agent_specs)) as executor:
+            futures = [executor.submit(invoke_one, s) for s in agent_specs]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    pass  # per-agent failures are non-fatal
+
+    # ------------------------------------------------------------------
+    # Pipeline B: multi-planner
+    # ------------------------------------------------------------------
+
+    def _invoke_multi_planner(
+        self,
+        agent_specs: list[AgentSpec],
+        iteration: int,
+        parallel_mode: str,
+    ) -> None:
+        """Run multiple planners concurrently, each writing to separate files.
+
+        Each planner writes its output to:
+        - ``prd/PRD-{role_name}.md``
+        - ``prd/tech-design-{role_name}.md``
+
+        After all complete, the first planner's PRD is symlinked as the
+        canonical ``prd/PRD.md`` for downstream consumption.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        world = self.spec.world
+        prd_dir = world.root / "prd"
+        prd_dir.mkdir(parents=True, exist_ok=True)
+
+        def plan_one(spec: AgentSpec) -> None:
+            runner = self._runners.get(spec.runtime)
+            if runner is None:
+                return
+
+            # Build prompt instructing the planner to write to role-specific files
+            prompt = (
+                f"=== Multi-Planner: {spec.role} ===\n"
+                f"Iteration {iteration}\n"
+                f"Role: {spec.role} (pipeline_role: planner)\n"
+                f"1. Read the project requirements\n"
+                f"2. Write PRD to prd/PRD-{spec.role}.md\n"
+                f"3. Write tech-design to prd/tech-design-{spec.role}.md\n"
+                f"4. Do NOT modify src/ or tests/"
+            )
+            # If agent has a task_instruction, prepend it
+            if spec.task_instruction:
+                prompt = f"{spec.task_instruction}\n\n{prompt}"
+
+            # Read system prompt
+            sp_path = world.root / spec.system_prompt_path
+            if sp_path.exists():
+                full_prompt = sp_path.read_text(encoding="utf-8") + "\n\n" + prompt
+            else:
+                full_prompt = prompt
+
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            log_path = world.agent_log(
+                "planner", iteration,  # type: ignore[arg-type]
+                f"{timestamp}_{spec.role}",
+            )
+
+            runner.run(
+                spec=spec,
+                prompt=full_prompt,
+                workdir=world.root,
+                timeout=self.spec.per_agent_timeout,
+                log_path=log_path,
+            )
+
+            # Budget tracking
+            tracker = self._get_budget_tracker("planner")
+            estimated_tokens = max(1, len(full_prompt) // 4)
+            tracker.add_usage(
+                estimated_tokens, phase=f"planner_{spec.role}", iter_n=iteration,
+            )
+
+        with ThreadPoolExecutor(max_workers=len(agent_specs)) as executor:
+            futures = [executor.submit(plan_one, s) for s in agent_specs]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    pass
+
+        # After all planners complete, symlink the first planner's output
+        # as the canonical PRD for downstream reviewer consumption.
+        if agent_specs:
+            first_role = agent_specs[0].role
+            first_prd = prd_dir / f"PRD-{first_role}.md"
+            first_design = prd_dir / f"tech-design-{first_role}.md"
+            canonical_prd = world.prd
+            canonical_design = world.tech_design
+            if first_prd.exists():
+                canonical_prd.parent.mkdir(parents=True, exist_ok=True)
+                if canonical_prd.exists() or canonical_prd.is_symlink():
+                    canonical_prd.unlink()
+                try:
+                    canonical_prd.symlink_to(first_prd.name)
+                except OSError:
+                    # symlink failed — fall back to copy
+                    canonical_prd.write_text(first_prd.read_text(encoding="utf-8"))
+            if first_design.exists():
+                canonical_design.parent.mkdir(parents=True, exist_ok=True)
+                if canonical_design.exists() or canonical_design.is_symlink():
+                    canonical_design.unlink()
+                try:
+                    canonical_design.symlink_to(first_design.name)
+                except OSError:
+                    canonical_design.write_text(first_design.read_text(encoding="utf-8"))
+
+    # ------------------------------------------------------------------
+    # Pipeline B: multi-developer (worktree isolation)
+    # ------------------------------------------------------------------
+
+    def _invoke_multi_developer(
+        self,
+        agent_specs: list[AgentSpec],
+        iteration: int,
+        parallel_mode: str,
+    ) -> None:
+        """Run multiple developers concurrently, each in its own git worktree.
+
+        Creates a worktree per agent, runs the developer in isolation,
+        then merges all branches back via ``WorktreeManager.merge_reconciliation``.
+        """
+        from unison.worktree import WorktreeManager, WorktreeInfo
+
+        world = self.spec.world
+
+        # Pre-invoke cleanup once
+        self.pre_invoke_cleanup()
+        if self._state.halt_signal:
+            return
+
+        # Build worktree config from spec.parallel_dev or defaults
+        pd = self.spec.parallel_dev
+        if pd is None:
+            from interfaces import WorktreeConfig
+            pd = WorktreeConfig(enabled=True)
+
+        mgr = WorktreeManager(config=pd, project_root=world.root)
+        worktree_infos: list[WorktreeInfo | None] = []
+
+        # Create worktrees for each developer agent
+        for spec in agent_specs:
+            info = mgr.create_worktree(spec.role)
+            worktree_infos.append(info)
+            if info is None:
+                self._state.transition(
+                    "dev_active", "orchestrator",
+                    iter_n=iteration,
+                    note=f"Worktree creation failed for {spec.role}",
+                )
+
+        # Dispatch one developer to each worktree
+        for spec, info in zip(agent_specs, worktree_infos):
+            if info is None or self._state.halt_signal:
+                continue
+
+            runner = self._runners.get(spec.runtime)
+            if runner is None:
+                continue
+
+            # Check budget
+            tracker = self._get_budget_tracker("developer")
+            if not tracker.check_budget():
+                self.halt("budget overflow: developer")
+                return
+
+            prompt = (
+                f"=== Parallel Developer: {spec.role} ===\n"
+                f"Iteration {iteration}\n"
+                f"Role: {spec.role}\n"
+                f"Worktree: {info.path}\n"
+                f"1. Read prd/PRD.md and prd/tech-design.md\n"
+                f"2. Implement changes in src/\n"
+                f"3. Write tests in tests/\n"
+                f"4. Run: {self.spec.project.test_command}\n"
+                f"5. Commit with: git add -A && git commit -m '{spec.role}: ...'"
+            )
+
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            log_path = world.agent_log(
+                "developer", iteration,  # type: ignore[arg-type]
+                f"{timestamp}_{spec.role}",
+            )
+
+            runner.run(
+                spec=spec,
+                prompt=prompt,
+                workdir=info.path,
+                timeout=self.spec.per_agent_timeout,
+                log_path=log_path,
+            )
+
+            estimated_tokens = max(1, len(prompt) // 4)
+            tracker.add_usage(
+                estimated_tokens, phase=f"developer_{spec.role}", iter_n=iteration,
+            )
+
+            # Completion detection
+            detected = self._detector.detect(
+                workspace=info.path,
+                expected_iter=iteration,
+                role="developer",
+                log_path=log_path,
+            )
+            if detected.commit:
+                self._state.last_dev_commit = detected.commit
+
+            if self._state.halt_signal:
+                break
+
+        # Merge all feature branches
+        branch_names = [
+            info.branch for info in worktree_infos
+            if info is not None
+        ]
+        if branch_names:
+            merge_result = mgr.merge_reconciliation(branch_names, strategy="ff")
+            if not merge_result.success:
+                logger = __import__("logging").getLogger(__name__)
+                logger.warning(
+                    "merge_reconciliation conflicts: %s", merge_result.conflicts
+                )
+
     def _invoke_parallel_developers(
         self, iteration: int, pd, feature_list: list[str]
     ) -> None:
@@ -664,7 +997,8 @@ class Orchestrator:
                 )
 
     def _invoke_multi_reviewer(
-        self, iteration: int, review_phase: str = "dev_review"
+        self, iteration: int, review_phase: str = "dev_review",
+        agent_specs: list[AgentSpec] | None = None,
     ) -> None:
         """Invoke multiple reviewers in parallel via ReviewerPool.
 
@@ -676,44 +1010,84 @@ class Orchestrator:
         Individual reviewer verdicts are stored in
         ``self._state.reviewer_verdicts`` for V2 multi-reviewer tracking.
 
+        Pipeline B — when *agent_specs* is provided, each reviewer uses
+        its own ``AgentSpec`` (heterogeneous).  When *agent_specs* is
+        ``None`` (backward compat), the first reviewer spec is resolved
+        and reused for all copies (homogeneous).
+
         Args:
             iteration: Current iteration number.
+            review_phase: ``"planning_review"`` or ``"dev_review"``.
+            agent_specs: Optional list of AgentSpecs for heterogeneous
+                parallel (Pipeline B).  When ``None``, falls back to
+                homogeneous N-copy mode.
         """
         from interfaces import ReviewerConfig
         from unison.reviewer_pool import ReviewerPool
 
         world = self.spec.world
-        agent_spec = self._resolve_agent("reviewer")
-        if agent_spec is None:
-            self.halt("No agent spec for role: reviewer")
-            return
 
-        reviewer_count = self._get_reviewer_count()
-        if reviewer_count < 2:
-            return  # Safety: shouldn't be called for single reviewer
+        # ---- resolve agent specs (Pipeline B: heterogeneous when multiple) ----
+        if agent_specs is not None and len(agent_specs) > 0:
+            use_heterogeneous = True
+            reviewer_count = len(agent_specs)
+            parallel_mode = self._detect_parallel_mode(agent_specs)
+        else:
+            use_heterogeneous = False
+            agent_spec = self._resolve_agent("reviewer")
+            if agent_spec is None:
+                self.halt("No agent spec for role: reviewer")
+                return
+            reviewer_count = self._get_reviewer_count()
+            if reviewer_count < 2:
+                return  # Safety: shouldn't be called for single reviewer
 
-        # L1 fix #3: reviewers only read and write reviews — they don't
-        # need a clean workspace, so skip pre_invoke_cleanup here.
         if self._state.halt_signal:
-            return
-
-        runner = self._runners.get(agent_spec.runtime)
-        if runner is None:
-            self.halt(f"No runner for runtime: {agent_spec.runtime}")
             return
 
         # Thread-safe index counter for reviewer identity
         reviewer_idx = itertools.count()
+        # Pre-resolve runners for heterogeneous mode
+        if use_heterogeneous:
+            _runners: dict[int, object] = {}
+            for i, spec in enumerate(agent_specs):
+                _runners[i] = self._runners.get(spec.runtime)
+        else:
+            _runners = {}
 
         def review_one(code_path: Path) -> ReviewVerdict:
             """Run a single reviewer agent and return its parsed verdict."""
             idx = next(reviewer_idx)
             review_path = world.reviews_dir / f"iter-{iteration}-R{idx}.md"
 
+            if use_heterogeneous:
+                spec = agent_specs[idx]
+                runner = _runners.get(idx)
+            else:
+                spec = agent_spec
+                runner = self._runners.get(agent_spec.runtime)
+
+            if runner is None:
+                return ReviewVerdict(
+                    iter_n=iteration,
+                    verdict="REQUEST_CHANGES",
+                    summary=f"No runner for reviewer {idx}",
+                    findings=[],
+                    raw_path=review_path,
+                )
+
             # Build reviewer-specific prompt
+            if spec.task_instruction:
+                focus = spec.task_instruction
+            elif use_heterogeneous:
+                focus = f"Focus on: {spec.role} — review from your domain expertise."
+            else:
+                focus = ""
+
             prompt = (
                 f"=== Review Iteration {iteration} "
                 f"(Reviewer {idx + 1} of {reviewer_count}) ===\n"
+                f"{focus}\n"
                 f"1. Run tests: {self.spec.project.test_command}\n"
                 f"2. Write review to reviews/iter-{iteration}-R{idx}.md\n"
                 f"3. Use YAML frontmatter format:\n"
@@ -726,6 +1100,13 @@ class Orchestrator:
                 f"4. Do NOT modify src/"
             )
 
+            # Read system prompt for the specific agent
+            sp_path = world.root / spec.system_prompt_path
+            if sp_path.exists():
+                full_prompt = sp_path.read_text(encoding="utf-8") + "\n\n" + prompt
+            else:
+                full_prompt = prompt
+
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             log_path = world.agent_log(
                 "reviewer", iteration,  # type: ignore[arg-type]
@@ -734,8 +1115,8 @@ class Orchestrator:
 
             # Run the agent subprocess
             runner.run(
-                spec=agent_spec,
-                prompt=prompt,
+                spec=spec,
+                prompt=full_prompt,
                 workdir=world.root,
                 timeout=self.spec.per_agent_timeout,
                 log_path=log_path,
@@ -836,6 +1217,102 @@ class Orchestrator:
         # Update state so verdict routing can proceed
         self._state.last_review_verdict = final.verdict
         self._state.last_review_path = review_path
+
+    def _build_prompt_for_agent(
+        self, agent_spec: AgentSpec, role: str, iteration: int,
+        review_phase: str = "dev_review",
+    ) -> str:
+        """Build a prompt for a specific *agent_spec* (Pipeline B parallel).
+
+        Unlike :meth:`_build_prompt` which resolves the agent spec by
+        role, this method accepts an explicit ``AgentSpec`` — needed when
+        multiple agents share the same ``pipeline_role`` but have different
+        system prompts, task instructions, or runtimes.
+
+        Args:
+            agent_spec: The specific agent to build a prompt for.
+            role: Pipeline role (used for task selection + budget tracking).
+            iteration: Current iteration.
+            review_phase: ``"planning_review"`` or ``"dev_review"``.
+        """
+        world = self.spec.world
+        tracker = self._get_budget_tracker(role)
+
+        # Read system prompt from the agent's configured path
+        sp_path = world.root / agent_spec.system_prompt_path
+        system_prompt = (
+            sp_path.read_text(encoding="utf-8")
+            if sp_path.exists()
+            else f"You are the {agent_spec.role} agent."
+        )
+
+        # Read PRD + tech-design content for context assembly
+        prd_content = ""
+        design_content = ""
+        _MAX_CONTEXT_CHARS = 8192
+        if world.prd.exists():
+            raw = world.prd.read_text(encoding="utf-8")
+            prd_content = raw[:_MAX_CONTEXT_CHARS] + ("\n...[truncated]" if len(raw) > _MAX_CONTEXT_CHARS else "")
+        if world.tech_design.exists():
+            raw = world.tech_design.read_text(encoding="utf-8")
+            design_content = raw[:_MAX_CONTEXT_CHARS] + ("\n...[truncated]" if len(raw) > _MAX_CONTEXT_CHARS else "")
+
+        # Extract top findings from the previous review
+        top_findings = ""
+        if iteration > 1:
+            prev_review_kind = (
+                "dev_review" if role == "developer" else "planning_review"
+            )
+            prev = self._review_file_for_phase(prev_review_kind, iteration - 1)
+            if prev.exists():
+                top_findings = extract_top_findings(
+                    prev.read_text(encoding="utf-8"), limit=3
+                )
+
+        diff = self._recent_diff()
+
+        daily_remaining = tracker.daily_limit - tracker.current_usage
+        per_task_remaining = tracker.per_task_limit - tracker._per_task_used
+        remaining = max(1, min(daily_remaining, per_task_remaining))
+
+        # Build role-specific task instruction
+        if agent_spec.task_instruction:
+            task = agent_spec.task_instruction
+        elif role == "planner":
+            task = (
+                "Write the Product Requirements Document to prd/PRD.md "
+                "and the technical design to prd/tech-design.md."
+            )
+        elif role == "developer":
+            task = (
+                f"Iteration {iteration}: Read prd/PRD.md and prd/tech-design.md. "
+                f"Write code in src/, tests in tests/. "
+                f"Run: {self.spec.project.test_command}. "
+                f"Commit with: git add -A && git commit -m '...'"
+            )
+        elif role == "reviewer":
+            review_file = self._review_file_for_phase(review_phase, iteration)
+            task = (
+                f"Review Iteration {iteration}: "
+                f"1. Run tests: {self.spec.project.test_command} "
+                f"2. Write review to {review_file} "
+                f"3. Use YAML frontmatter: verdict, summary, findings. "
+                f"4. Do NOT modify src/"
+            )
+        else:
+            task = f"Perform {role} duties for iteration {iteration}."
+
+        full_system = f"{task}\n\n{system_prompt}"
+
+        assembled = assemble_context(
+            system_prompt=full_system,
+            prd_content=prd_content,
+            design_content=design_content,
+            last_review_findings=top_findings,
+            git_diff=diff,
+            token_budget=remaining,
+        )
+        return assembled.prompt
 
     def _build_prompt(self, role: str, iteration: int, review_phase: str = "dev_review") -> str:
         """Build the agent prompt for *role* at *iteration*.
@@ -939,26 +1416,40 @@ class Orchestrator:
     # Internal: helpers
     # ==================================================================
 
-    def _resolve_agent(self, pipeline_role: str) -> AgentSpec | None:
-        """Resolve an AgentSpec by effective_role.
+    def _resolve_agents(self, pipeline_role: str) -> list[AgentSpec]:
+        """Return ALL AgentSpecs whose effective_role matches *pipeline_role*.
 
-        First tries exact key match in ``spec.agents`` (backward
-        compatible — agents named "planner"/"developer"/"reviewer").
-        Falls back to scanning all agents for one whose
-        ``effective_role`` matches *pipeline_role*.
+        Pipeline B: supports multi-agent parallel where multiple agents
+        share the same pipeline_role.  Callers that previously used
+        ``_resolve_agent`` for a single result should switch to this
+        method and handle the list (or continue using ``_resolve_agent``
+        for backward-compatible single-result access).
 
         Returns:
-            The matching ``AgentSpec``, or ``None`` if no agent maps
-            to *pipeline_role*.
+            List of matching ``AgentSpec`` instances (empty if no match).
         """
         from interfaces import AgentSpec
 
-        if pipeline_role in self.spec.agents:
-            return self.spec.agents[pipeline_role]
-        for agent in self.spec.agents.values():
-            if agent.effective_role == pipeline_role:
-                return agent
-        return None
+        agents: list[AgentSpec] = []
+        for spec in self.spec.agents.values():
+            if spec.effective_role == pipeline_role:
+                agents.append(spec)
+        return agents
+
+    def _resolve_agent(self, pipeline_role: str) -> AgentSpec | None:
+        """Resolve a single AgentSpec by effective_role (backward compat).
+
+        Delegates to :meth:`_resolve_agents` and returns the first result.
+        When multiple agents share the same pipeline_role, callers that
+        need all of them should use :meth:`_resolve_agents` +
+        :meth:`_invoke_agents_parallel` instead.
+
+        Returns:
+            The first matching ``AgentSpec``, or ``None`` if no agent
+            maps to *pipeline_role*.
+        """
+        agents = self._resolve_agents(pipeline_role)
+        return agents[0] if agents else None
 
     def _get_budget_tracker(self, role: str = "") -> BudgetTracker:
         """Return the shared BudgetTracker, creating it lazily.
@@ -1143,10 +1634,17 @@ class Orchestrator:
     def _get_reviewer_count(self) -> int:
         """Return the number of parallel reviewers to use.
 
-        Precedence:
-        1. ``spec.reviewer_config`` (when enabled)
-        2. ``UNISON_REVIEWER_COUNT`` env var (fallback, default 1)
+        Precedence (Pipeline B — agent-composition-first):
+        1. Number of agents with ``effective_role == "reviewer"``
+        2. ``spec.reviewer_config.count`` (when explicitly enabled)
+        3. ``UNISON_REVIEWER_COUNT`` env var (fallback, default 1)
         """
+        # Pipeline B: auto-detect from agent composition
+        reviewer_agents = self._resolve_agents("reviewer")
+        agent_count = len(reviewer_agents)
+        if agent_count > 1:
+            return agent_count
+        # Fall back to config/env for homogeneous N-copy mode
         if (
             self.spec.reviewer_config is not None
             and self.spec.reviewer_config.enabled

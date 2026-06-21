@@ -275,6 +275,7 @@ class PipelineSpec:
     dag: list[Stage] | None = None  # V2: DAG 多 phase 并行（None → V1 线性模式）
     parallel_dev: WorktreeConfig | None = None  # V2: 并行 Developer
     reviewer_config: ReviewerConfig | None = None  # V2: multi-reviewer
+    parallel_groups: dict[str, list[str]] = field(default_factory=dict)  # Pipeline B: effective_role → agent names
     mode: PipelineMode | None = None  # Named pipeline mode (auto-detected if not set)
     max_iterations: int = 5
     per_agent_timeout: int = 600    # 秒。Codex 慢需 300s+
@@ -510,10 +511,14 @@ class ReviewerConfig:
         reconcile_strategy: verdict 合并策略。
             "majority" — 多数投票（2 of 3 → PASS）。
             "unanimous" — 全票通过（任意一个 REQUEST_CHANGES → REQUEST_CHANGES）。
+        parallel_mode: 并行模式（Pipeline B — multi-agent parallel）。
+            "homogeneous" — N 份相同 agent 副本。
+            "heterogeneous" — 不同 agent 独立运行，各有自己的关注领域。
     """
     enabled: bool = False
     count: int = 3
     reconcile_strategy: Literal["majority", "unanimous"] = "majority"
+    parallel_mode: Literal["homogeneous", "heterogeneous"] = "homogeneous"
 
     def __post_init__(self):
         if self.count < 1:
