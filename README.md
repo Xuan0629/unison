@@ -95,6 +95,24 @@ unison run --pipeline my.yaml --switch reviewer:claude --save-pref
 
 ---
 
+## Web Dashboard
+
+Start the server and open `http://127.0.0.1:9099` for a live view of:
+
+- Current pipeline phase and iteration
+- Ring-gauge token consumption per agent
+- Task list with status indicators
+- Phase timeline
+- Run history
+- Dark/light theme + EN/CN language toggles
+- One-click state.json export
+
+```bash
+unison webui --project . --port 9099
+```
+
+---
+
 ## Features
 
 ### Pipeline Modes (auto-detected)

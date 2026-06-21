@@ -1501,7 +1501,8 @@ function arraysEqual(a, b) {
 
 /** Check if the state represents an empty pipeline (no data yet). */
 function isEmpty(s) {
-  return (!s.transitions || s.transitions.length === 0) && (!s.agents || s.agents.length === 0);
+  // Show empty state when no pipeline has ever run (0 transitions)
+  return !s.transitions || s.transitions.length === 0;
 }
 
 
