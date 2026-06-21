@@ -1,0 +1,2056 @@
+=== COMMAND ===
+codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 1: 1. Run tests: python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Git Diff
+diff --git a/.unison/budget.json b/.unison/budget.json
+deleted file mode 100644
+index 83f7e2b..0000000
+--- a/.unison/budget.json
++++ /dev/null
+@@ -1,13 +0,0 @@
+-{
+-  "date": "2026-06-21",
+-  "daily_used": 2692,
+-  "task_used": 2692,
+-  "phases": [
+-    {
+-      "phase": "developer",
+-      "iter_n": 1,
+-      "tokens_used": 2692,
+-      "timestamp": "2026-06-21T12:01:55.584767+00:00"
+-    }
+-  ]
+... (truncated)
+
+diff --git a/observer/logs/reviewer_iter-1_20260621T120155Z.log b/observer/logs/reviewer_iter-1_20260621T120155Z.log
+index 1753833..8448143 100644
+--- a/observer/logs/reviewer_iter-1_20260621T120155Z.log
++++ b/observer/logs/reviewer_iter-1_20260621T120155Z.log
+@@ -557,3 +557,1346 @@ exec
+  succeeded in 0ms:
+ exec
+ /bin/bash -lc 'python3 -m pytest tests/test_orchestrator.py tests/test_pipeline.py tests/test_custom_roles.py -q' in /home/sean/projects/unison
++ succeeded in 61646ms:
++........................................................................ [ 72%]
++...........................                                              [100%]
++99 passed in 5.53s
++
++codex
++The requested pytest command passed: `99 passed in 5.53s`. I’m checking the actual files now because the supplied diff was truncated and I need line-specific confidence for the review.
++exec
++/bin/bash -lc "sed -n '130,260p' src/unison/pipeline.py" in /home/sean/projects/unison
++exec
++/bin/bash -lc "sed -n '1,340p' interfaces.py" in /home/sean/projects/unison
++ succeeded in 1ms:
++            )
++
++        # ---- schema migration ----
++        from unison.schema_migrate import (
++            CURRENT_VERSION,
++            PIPELINE_MIGRATIONS,
++            migrate,
++        )
++
++        stored_version = raw.get("version", "1.0")
++        if stored_version != CURRENT_VERSION:
++            raw = migrate(raw, PIPELINE_MIGRATIONS, CURRENT_VERSION)
++
++        # ---- version ----
++        version = raw.get("version")
++        if not version:
++            raise PipelineValidationError("Missing required field: version")
++
++        # ---- agents ----
++        agents_raw = raw.get("agents")
++        if not agents_raw or not isinstance(agents_raw, dict):
++            raise PipelineValidationError("Missing required field: agents")
++
++        self._validate_required_agents(agents_raw)
++        agents = self._build_agents(agents_raw)
++
++        # ---- world (resolve project_root relative to pipeline file) ----
++        pipeline_dir = pipeline_file.parent.resolve()
++        project_root_str = raw.get("project_root", ".")
++        project_root = (pipeline_dir / project_root_str).resolve()
++        world = World(root=project_root)
++
++        # ---- optional sections ----
++        project_cfg = self._build_project(raw.get("project"))
++        bootstrap_cfg = self._build_bootstrap(raw.get("bootstrap"))
++        budget_cfg = self._build_budget(raw.get("budget"))
++        snapshots_cfg = self._build_snapshots(raw.get("snapshots"))
++        risk_cfg = self._build_risk_matrix(raw.get("risk_matrix"))
++
++        # ---- V2 fields ----
++        dag_cfg = self._build_dag(raw.get("dag"))
++        reviewer_cfg = self._build_reviewer_config(raw.get("reviewer_config"))
++        parallel_dev_cfg = self._build_parallel_dev(raw.get("parallel_dev"))
++
++        # ---- mode auto-detection ----
++        mode: PipelineMode | None = raw.get("mode")  # type: ignore[assignment]
++        if mode is None:
++            mode = self._detect_mode(agents)
++
++        return PipelineSpec(
++            version=version,
++            world=world,
++            agents=agents,
++            project=project_cfg,
++            bootstrap=bootstrap_cfg,
++            budget=budget_cfg,
++            snapshots=snapshots_cfg,
++            risk_matrix=risk_cfg,
++            dag=dag_cfg,
++            reviewer_config=reviewer_cfg,
++            parallel_dev=parallel_dev_cfg,
++            mode=mode,
++        )
++
++    # ------------------------------------------------------------------
++    # dry_run
++    # ------------------------------------------------------------------
++
++    def mode(self, spec: PipelineSpec) -> str:
++        """返回 pipeline 的命名模式。
++
++        如果 spec.mode 已设置（YAML 显式指定或 auto-detection），直接返回；
++        否则 fallback 到旧的二值检测（向后兼容预 V2 PipelineSpec 实例）。
++
++        Args:
++            spec: A loaded ``PipelineSpec``.
++
++        Returns:
++            Named pipeline mode (e.g. ``"full-dev"``, ``"code-dev"``).
++        """
++        if spec.mode is not None:
++            return spec.mode
++        # Fallback: pre-V2 PipelineSpec without mode field
++        return self._detect_mode(spec.agents)
++
++    @staticmethod
++    def _detect_mode(agents: dict[str, AgentSpec]) -> PipelineMode:
++        """Auto-detect pipeline mode from agent composition.
++
++        Rules:
++        - planner present + developer present → ``"full-dev"``
++        - no planner, developer present → ``"code-dev"``
++        - only reviewer(s) → ``"inspect-only"``
++        """
++        has_planner = any(
++            a.effective_role == "planner" for a in agents.values()
++        )
++        has_developer = any(
++            a.effective_role == "developer" for a in agents.values()
++        )
++        has_reviewer = any(
++            a.effective_role == "reviewer" for a in agents.values()
++        )
++
++        if has_planner and has_developer:
++            return "full-dev"
++        if has_developer:
++            return "code-dev"
++        if has_reviewer:
++            return "inspect-only"
++        # Fallback (shouldn't reach here with valid pipelines)
++        return "code-dev"
++
++    def dry_run(self, spec: PipelineSpec) -> bool:
++        """Check that every agent's prompt file exists on disk.
++
++        Args:
++            spec: A loaded ``PipelineSpec``.
++
++        Returns:
++            ``True`` when all prompt files are present.
++
++        Raises:
++            PipelineValidationError: If any prompt file is missing.
++        """
++        for role, agent in spec.agents.items():
++            prompt_path = spec.world.root / agent.system_prompt_path
++            if not prompt_path.is_file():
++                raise PipelineValidationError(
++                    f"Prompt file not found for '{role}': {prompt_path}"
++                )
++
++ succeeded in 0ms:
++"""
++interfaces.py — Unison v1 Type Signatures
++=========================================
++万物一心（Unison）Multi-Agent Collaboration Bridge
++
++约束：本文档只定义类型和接口，不含实现。
++实现前需 SEAN review。
++
++Abstractions:
++  World / PipelineSpec / AgentSpec / State / Transition
++  Channel / FileChannel
++  AgentRunner / ClaudeRunner / CodexRunner / HermesRunner / OpenClawRunner
++  VerdictParser / YamlFrontmatterParser
++  RiskEvaluator（三元组规则引擎）
++  SnapshotManager
++  LockManager
++  Observer / DiscordSink
++  HarnessOptimizer
++  Orchestrator
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Literal, Protocol, TypeAlias, Iterator, TypedDict
++from enum import Enum
++
++# ============================================================================
++# Type Aliases
++# ============================================================================
++
++Phase: TypeAlias = Literal[
++    "init", "planning_active", "planning_review",
++    "dev_active", "dev_review", "done"
++]
++AgentRole: TypeAlias = str
++Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
++Verdict: TypeAlias = Literal["PASS", "REQUEST_CHANGES"]
++Actor: TypeAlias = AgentRole | Literal["orchestrator", "observer", "harness_optimizer", "sean"]
++ProjectLanguage: TypeAlias = Literal["python", "node", "rust", "go", "custom"]
++
++PipelineMode: TypeAlias = Literal[
++    "code-dev",       # Developer ↔ Reviewer (no planner)
++    "full-dev",       # Planner ↔ Reviewer → Developer ↔ Reviewer
++    "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no dev)
++    "inspect-only",   # Reviewer(s) → report (no planner, no dev)
++    "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
++    "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer (same as full-dev, named for clarity)
++]
++
++class RiskLevel(Enum):
++    L0 = "auto_allow"              # 直接放行
++    L1 = "auto_allow_session"      # 本 se
+...[diff truncated]
+
+## Design
+# parallel
+
+
+## PRD
+# Pipeline B: Multi-Agent Parallel (all roles, dual-mode)
+
+## Problem
+Multi-reviewer only supports N copies of the same agent (homogeneous).
+Other roles (planner, developer) cannot run in parallel at all.
+No support for heterogeneous parallel (different agents reviewing from different angles).
+
+## Solution
+Extend parallel execution to ALL roles with two modes.
+
+## Configuration
+
+Agents with the same `pipeline_role` automatically form a parallel group:
+
+```yaml
+agents:
+  architect:     {pipeline_role: planner, runtime: claude}
+  pm:            {pipeline_role: planner, runtime: codex}  # parallel with architect
+  
+  dev_core:      {pipeline_role: developer, runtime: claude}
+  dev_tests:     {pipeline_role: developer, runtime: codex} # parallel with dev_core
+  
+  tech_reviewer: {pipeline_role: reviewer, runtime: codex}
+  arch_reviewer: {pipeline_role: reviewer, runtime: claude}  # parallel with tech_reviewer
+```
+
+Detection: if multiple agents share the same `pipeline_role` → parallel mode automatically.
+
+## Parallel Modes
+
+Auto-detected per role group:
+
+| Mode | Condition | Behavior |
+|------|-----------|----------|
+| homogeneous | All agents in group have same `runtime` | N× copies, majority vote for reviewer |
+| heterogeneous | Different `runtime` values | Each agent runs independently with its own focus |
+
+## Orchestrator Changes
+
+### _resolve_agents(pipeline_role) → list[AgentSpec]
+Replaces `_resolve_agent` (singular). Returns ALL agents with matching effective_role.
+Backward compat: existing code that expects single agent gets first result.
+
+### _invoke_agents_parallel(role_list, iteration)
+Replaces `_invoke_agent_for_role` when len(agents) > 1.
+Uses ThreadPoolExecutor to run all agents simultaneously.
+Collects results, handles failures per-agent.
+
+### Multi-Planner merge
+When multiple planners run, each writes to separate files:
+`prd/PRD-{role_name}.md`, `prd/tech-design-{role_name}.md`
+Then a "synthesizer" step combines them (or reviewers evaluate each).
+
+### Multi-Developer merge
+When multiple developers run, each works in its own git branch/worktree.
+After all complete, merge via git merge (already supported by worktree system).
+
+### Multi-Reviewer merge (existing, extended)
+Already implemented. Extend to support heterogeneous: each reviewer gets its
+own system prompt with different focus areas.
+
+## Acceptance
+- 500+ tests pass
+- Pipeline YAML with 2 planners, 2 reviewers loads and runs
+- Homogeneous parallel: N copies of same agent
+- Heterogeneous parallel: different agents with different focus
+- Existing single-agent pipelines unchanged
+
+
+=== OUTPUT ===
+Reading additional input from stdin...
+OpenAI Codex v0.141.0
+--------
+workdir: /home/sean/projects/unison
+model: gpt-5.5
+provider: openai-custom
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 019eea14-360e-7050-90c5-9360582e965b
+--------
+user
+Review Iteration 1: 1. Run tests: python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Git Diff
+diff --git a/.unison/budget.json b/.unison/budget.json
+deleted file mode 100644
+index 83f7e2b..0000000
+--- a/.unison/budget.json
++++ /dev/null
+@@ -1,13 +0,0 @@
+-{
+-  "date": "2026-06-21",
+-  "daily_used": 2692,
+-  "task_used": 2692,
+-  "phases": [
+-    {
+-      "phase": "developer",
+-      "iter_n": 1,
+-      "tokens_used": 2692,
+-      "timestamp": "2026-06-21T12:01:55.584767+00:00"
+-    }
+-  ]
+... (truncated)
+
+diff --git a/observer/logs/reviewer_iter-1_20260621T120155Z.log b/observer/logs/reviewer_iter-1_20260621T120155Z.log
+index 1753833..8448143 100644
+--- a/observer/logs/reviewer_iter-1_20260621T120155Z.log
++++ b/observer/logs/reviewer_iter-1_20260621T120155Z.log
+@@ -557,3 +557,1346 @@ exec
+  succeeded in 0ms:
+ exec
+ /bin/bash -lc 'python3 -m pytest tests/test_orchestrator.py tests/test_pipeline.py tests/test_custom_roles.py -q' in /home/sean/projects/unison
++ succeeded in 61646ms:
++........................................................................ [ 72%]
++...........................                                              [100%]
++99 passed in 5.53s
++
++codex
++The requested pytest command passed: `99 passed in 5.53s`. I’m checking the actual files now because the supplied diff was truncated and I need line-specific confidence for the review.
++exec
++/bin/bash -lc "sed -n '130,260p' src/unison/pipeline.py" in /home/sean/projects/unison
++exec
++/bin/bash -lc "sed -n '1,340p' interfaces.py" in /home/sean/projects/unison
++ succeeded in 1ms:
++            )
++
++        # ---- schema migration ----
++        from unison.schema_migrate import (
++            CURRENT_VERSION,
++            PIPELINE_MIGRATIONS,
++            migrate,
++        )
++
++        stored_version = raw.get("version", "1.0")
++        if stored_version != CURRENT_VERSION:
++            raw = migrate(raw, PIPELINE_MIGRATIONS, CURRENT_VERSION)
++
++        # ---- version ----
++        version = raw.get("version")
++        if not version:
++            raise PipelineValidationError("Missing required field: version")
++
++        # ---- agents ----
++        agents_raw = raw.get("agents")
++        if not agents_raw or not isinstance(agents_raw, dict):
++            raise PipelineValidationError("Missing required field: agents")
++
++        self._validate_required_agents(agents_raw)
++        agents = self._build_agents(agents_raw)
++
++        # ---- world (resolve project_root relative to pipeline file) ----
++        pipeline_dir = pipeline_file.parent.resolve()
++        project_root_str = raw.get("project_root", ".")
++        project_root = (pipeline_dir / project_root_str).resolve()
++        world = World(root=project_root)
++
++        # ---- optional sections ----
++        project_cfg = self._build_project(raw.get("project"))
++        bootstrap_cfg = self._build_bootstrap(raw.get("bootstrap"))
++        budget_cfg = self._build_budget(raw.get("budget"))
++        snapshots_cfg = self._build_snapshots(raw.get("snapshots"))
++        risk_cfg = self._build_risk_matrix(raw.get("risk_matrix"))
++
++        # ---- V2 fields ----
++        dag_cfg = self._build_dag(raw.get("dag"))
++        reviewer_cfg = self._build_reviewer_config(raw.get("reviewer_config"))
++        parallel_dev_cfg = self._build_parallel_dev(raw.get("parallel_dev"))
++
++        # ---- mode auto-detection ----
++        mode: PipelineMode | None = raw.get("mode")  # type: ignore[assignment]
++        if mode is None:
++            mode = self._detect_mode(agents)
++
++        return PipelineSpec(
++            version=version,
++            world=world,
++            agents=agents,
++            project=project_cfg,
++            bootstrap=bootstrap_cfg,
++            budget=budget_cfg,
++            snapshots=snapshots_cfg,
++            risk_matrix=risk_cfg,
++            dag=dag_cfg,
++            reviewer_config=reviewer_cfg,
++            parallel_dev=parallel_dev_cfg,
++            mode=mode,
++        )
++
++    # ------------------------------------------------------------------
++    # dry_run
++    # ------------------------------------------------------------------
++
++    def mode(self, spec: PipelineSpec) -> str:
++        """返回 pipeline 的命名模式。
++
++        如果 spec.mode 已设置（YAML 显式指定或 auto-detection），直接返回；
++        否则 fallback 到旧的二值检测（向后兼容预 V2 PipelineSpec 实例）。
++
++        Args:
++            spec: A loaded ``PipelineSpec``.
++
++        Returns:
++            Named pipeline mode (e.g. ``"full-dev"``, ``"code-dev"``).
++        """
++        if spec.mode is not None:
++            return spec.mode
++        # Fallback: pre-V2 PipelineSpec without mode field
++        return self._detect_mode(spec.agents)
++
++    @staticmethod
++    def _detect_mode(agents: dict[str, AgentSpec]) -> PipelineMode:
++        """Auto-detect pipeline mode from agent composition.
++
++        Rules:
++        - planner present + developer present → ``"full-dev"``
++        - no planner, developer present → ``"code-dev"``
++        - only reviewer(s) → ``"inspect-only"``
++        """
++        has_planner = any(
++            a.effective_role == "planner" for a in agents.values()
++        )
++        has_developer = any(
++            a.effective_role == "developer" for a in agents.values()
++        )
++        has_reviewer = any(
++            a.effective_role == "reviewer" for a in agents.values()
++        )
++
++        if has_planner and has_developer:
++            return "full-dev"
++        if has_developer:
++            return "code-dev"
++        if has_reviewer:
++            return "inspect-only"
++        # Fallback (shouldn't reach here with valid pipelines)
++        return "code-dev"
++
++    def dry_run(self, spec: PipelineSpec) -> bool:
++        """Check that every agent's prompt file exists on disk.
++
++        Args:
++            spec: A loaded ``PipelineSpec``.
++
++        Returns:
++            ``True`` when all prompt files are present.
++
++        Raises:
++            PipelineValidationError: If any prompt file is missing.
++        """
++        for role, agent in spec.agents.items():
++            prompt_path = spec.world.root / agent.system_prompt_path
++            if not prompt_path.is_file():
++                raise PipelineValidationError(
++                    f"Prompt file not found for '{role}': {prompt_path}"
++                )
++
++ succeeded in 0ms:
++"""
++interfaces.py — Unison v1 Type Signatures
++=========================================
++万物一心（Unison）Multi-Agent Collaboration Bridge
++
++约束：本文档只定义类型和接口，不含实现。
++实现前需 SEAN review。
++
++Abstractions:
++  World / PipelineSpec / AgentSpec / State / Transition
++  Channel / FileChannel
++  AgentRunner / ClaudeRunner / CodexRunner / HermesRunner / OpenClawRunner
++  VerdictParser / YamlFrontmatterParser
++  RiskEvaluator（三元组规则引擎）
++  SnapshotManager
++  LockManager
++  Observer / DiscordSink
++  HarnessOptimizer
++  Orchestrator
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Literal, Protocol, TypeAlias, Iterator, TypedDict
++from enum import Enum
++
++# ============================================================================
++# Type Aliases
++# ============================================================================
++
++Phase: TypeAlias = Literal[
++    "init", "planning_active", "planning_review",
++    "dev_active", "dev_review", "done"
++]
++AgentRole: TypeAlias = str
++Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
++Verdict: TypeAlias = Literal["PASS", "REQUEST_CHANGES"]
++Actor: TypeAlias = AgentRole | Literal["orchestrator", "observer", "harness_optimizer", "sean"]
++ProjectLanguage: TypeAlias = Literal["python", "node", "rust", "go", "custom"]
++
++PipelineMode: TypeAlias = Literal[
++    "code-dev",       # Developer ↔ Reviewer (no planner)
++    "full-dev",       # Planner ↔ Reviewer → Developer ↔ Reviewer
++    "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no dev)
++    "inspect-only",   # Reviewer(s) → report (no planner, no dev)
++    "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
++    "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer (same as full-dev, named for clarity)
++]
++
++class RiskLevel(Enum):
++    L0 = "auto_allow"              # 直接放行
++    L1 = "auto_allow_session"      # 本 se
+...[diff truncated]
+
+## Design
+# parallel
+
+
+## PRD
+# Pipeline B: Multi-Agent Parallel (all roles, dual-mode)
+
+## Problem
+Multi-reviewer only supports N copies of the same agent (homogeneous).
+Other roles (planner, developer) cannot run in parallel at all.
+No support for heterogeneous parallel (different agents reviewing from different angles).
+
+## Solution
+Extend parallel execution to ALL roles with two modes.
+
+## Configuration
+
+Agents with the same `pipeline_role` automatically form a parallel group:
+
+```yaml
+agents:
+  architect:     {pipeline_role: planner, runtime: claude}
+  pm:            {pipeline_role: planner, runtime: codex}  # parallel with architect
+  
+  dev_core:      {pipeline_role: developer, runtime: claude}
+  dev_tests:     {pipeline_role: developer, runtime: codex} # parallel with dev_core
+  
+  tech_reviewer: {pipeline_role: reviewer, runtime: codex}
+  arch_reviewer: {pipeline_role: reviewer, runtime: claude}  # parallel with tech_reviewer
+```
+
+Detection: if multiple agents share the same `pipeline_role` → parallel mode automatically.
+
+## Parallel Modes
+
+Auto-detected per role group:
+
+| Mode | Condition | Behavior |
+|------|-----------|----------|
+| homogeneous | All agents in group have same `runtime` | N× copies, majority vote for reviewer |
+| heterogeneous | Different `runtime` values | Each agent runs independently with its own focus |
+
+## Orchestrator Changes
+
+### _resolve_agents(pipeline_role) → list[AgentSpec]
+Replaces `_resolve_agent` (singular). Returns ALL agents with matching effective_role.
+Backward compat: existing code that expects single agent gets first result.
+
+### _invoke_agents_parallel(role_list, iteration)
+Replaces `_invoke_agent_for_role` when len(agents) > 1.
+Uses ThreadPoolExecutor to run all agents simultaneously.
+Collects results, handles failures per-agent.
+
+### Multi-Planner merge
+When multiple planners run, each writes to separate files:
+`prd/PRD-{role_name}.md`, `prd/tech-design-{role_name}.md`
+Then a "synthesizer" step combines them (or reviewers evaluate each).
+
+### Multi-Developer merge
+When multiple developers run, each works in its own git branch/worktree.
+After all complete, merge via git merge (already supported by worktree system).
+
+### Multi-Reviewer merge (existing, extended)
+Already implemented. Extend to support heterogeneous: each reviewer gets its
+own system prompt with different focus areas.
+
+## Acceptance
+- 500+ tests pass
+- Pipeline YAML with 2 planners, 2 reviewers loads and runs
+- Homogeneous parallel: N copies of same agent
+- Heterogeneous parallel: different agents with different focus
+- Existing single-agent pipelines unchanged
+
+codex
+I’ll run the requested tests first, then inspect the relevant diff and write the review file without touching `src/`.
+exec
+/bin/bash -lc 'python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q' in /home/sean/projects/unison
+ succeeded in 336ms:
+...........................                                              [100%]
+27 passed in 0.16s
+
+codex
+The requested test subset passed: `27 passed in 0.16s`. I’m reading the current changes and the tests around the new behavior now so the review can be specific rather than relying on the truncated diff.
+exec
+/bin/bash -lc 'rg -n "resolve_agents|_resolve_agent|parallel|pipeline_role|effective_role|ThreadPoolExecutor|reviewer" src tests interfaces.py' in /home/sean/projects/unison
+ succeeded in 0ms:
+interfaces.py:158:    pipeline_role: AgentRole | None = None  # Phase 11: maps custom role to built-in slot
+interfaces.py:162:    def effective_role(self) -> AgentRole:
+interfaces.py:163:        """Return pipeline_role if set, otherwise fall back to role."""
+interfaces.py:164:        return self.pipeline_role if self.pipeline_role else self.role
+interfaces.py:204:        "reviewer": {"from": "codex", "to": "claude"}
+interfaces.py:240:        parallel_group: 并行组标识（同组 Stage 可同时执行）。
+interfaces.py:246:    parallel_group: str | None = None
+interfaces.py:261:    features: list[str] | None = None  # V2: feature list to parallelize over
+interfaces.py:276:    parallel_dev: WorktreeConfig | None = None  # V2: 并行 Developer
+interfaces.py:277:    reviewer_config: ReviewerConfig | None = None  # V2: multi-reviewer
+src/unison/worktree.py:259:    # merge_reconciliation — consolidate parallel feature branches
+src/unison/orchestrator.py:60:    reviewer writes review + verdict, verdict routes to PASS (exit loop)
+src/unison/orchestrator.py:305:        reviewer_count = self._get_reviewer_count()
+src/unison/orchestrator.py:306:        if reviewer_count > 1:
+src/unison/orchestrator.py:307:            self._invoke_multi_reviewer(1, "dev_review")
+src/unison/orchestrator.py:309:            self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
+src/unison/orchestrator.py:332:                    pr = agent_spec.effective_role
+src/unison/orchestrator.py:353:        scheduler.execute_parallel(executor=exec_stage, max_workers=4)
+src/unison/orchestrator.py:376:        are the phase names and the reviewer's evaluation focus.
+src/unison/orchestrator.py:420:            reviewer_count = self._get_reviewer_count()
+src/unison/orchestrator.py:421:            if reviewer_count > 1:
+src/unison/orchestrator.py:422:                self._invoke_multi_reviewer(iteration, review_phase)
+src/unison/orchestrator.py:424:                self._invoke_agent_for_role("reviewer", iteration, review_phase=review_phase)
+src/unison/orchestrator.py:464:            role: Agent role ("planner", "developer", "reviewer").
+src/unison/orchestrator.py:468:        # 0. V2: parallel-dev routing
+src/unison/orchestrator.py:470:            pd = self.spec.parallel_dev
+src/unison/orchestrator.py:476:                            "parallel_dev.enabled=True but features list is empty. "
+src/unison/orchestrator.py:479:                    self._invoke_parallel_developers(iteration, pd, feature_list)
+src/unison/orchestrator.py:502:        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
+src/unison/orchestrator.py:554:    def _invoke_parallel_developers(
+src/unison/orchestrator.py:565:            pd: ``WorktreeConfig`` from ``spec.parallel_dev``.
+src/unison/orchestrator.py:566:            feature_list: Feature names to parallelize over.
+src/unison/orchestrator.py:666:    def _invoke_multi_reviewer(
+src/unison/orchestrator.py:669:        """Invoke multiple reviewers in parallel via ReviewerPool.
+src/unison/orchestrator.py:671:        Each reviewer writes to a unique path ``reviews/iter-{N}-R{i}.md``.
+src/unison/orchestrator.py:672:        After all reviewers complete, verdicts are reconciled
+src/unison/orchestrator.py:676:        Individual reviewer verdicts are stored in
+src/unison/orchestrator.py:677:        ``self._state.reviewer_verdicts`` for V2 multi-reviewer tracking.
+src/unison/orchestrator.py:683:        from unison.reviewer_pool import ReviewerPool
+src/unison/orchestrator.py:686:        agent_spec = self._resolve_agent("reviewer")
+src/unison/orchestrator.py:688:            self.halt("No agent spec for role: reviewer")
+src/unison/orchestrator.py:691:        reviewer_count = self._get_reviewer_count()
+src/unison/orchestrator.py:692:        if reviewer_count < 2:
+src/unison/orchestrator.py:693:            return  # Safety: shouldn't be called for single reviewer
+src/unison/orchestrator.py:695:        # L1 fix #3: reviewers only read and write reviews — they don't
+src/unison/orchestrator.py:705:        # Thread-safe index counter for reviewer identity
+src/unison/orchestrator.py:706:        reviewer_idx = itertools.count()
+src/unison/orchestrator.py:709:            """Run a single reviewer agent and return its parsed verdict."""
+src/unison/orchestrator.py:710:            idx = next(reviewer_idx)
+src/unison/orchestrator.py:713:            # Build reviewer-specific prompt
+src/unison/orchestrator.py:716:                f"(Reviewer {idx + 1} of {reviewer_count}) ===\n"
+src/unison/orchestrator.py:731:                "reviewer", iteration,  # type: ignore[arg-type]
+src/unison/orchestrator.py:748:                role="reviewer",
+src/unison/orchestrator.py:752:            # Parse verdict from individual reviewer output file
+src/unison/orchestrator.py:760:                        summary=f"Parse error for reviewer {idx}",
+src/unison/orchestrator.py:773:        # Build ReviewerConfig — prefer spec.reviewer_config, fall back to env
+src/unison/orchestrator.py:774:        if self.spec.reviewer_config is not None and self.spec.reviewer_config.enabled:
+src/unison/orchestrator.py:775:            config = self.spec.reviewer_config
+src/unison/orchestrator.py:786:                    count=reviewer_count,
+src/unison/orchestrator.py:793:                    count=reviewer_count,
+src/unison/orchestrator.py:799:        verdicts = pool.execute_parallel(world.root, review_fn=review_one)
+src/unison/orchestrator.py:802:        self._state.reviewer_verdicts = [
+src/unison/orchestrator.py:852:        agent_spec = self._resolve_agent(role)
+src/unison/orchestrator.py:913:        elif role == "reviewer":
+src/unison/orchestrator.py:942:    def _resolve_agent(self, pipeline_role: str) -> AgentSpec | None:
+src/unison/orchestrator.py:943:        """Resolve an AgentSpec by effective_role.
+src/unison/orchestrator.py:946:        compatible — agents named "planner"/"developer"/"reviewer").
+src/unison/orchestrator.py:948:        ``effective_role`` matches *pipeline_role*.
+src/unison/orchestrator.py:952:            to *pipeline_role*.
+src/unison/orchestrator.py:956:        if pipeline_role in self.spec.agents:
+src/unison/orchestrator.py:957:            return self.spec.agents[pipeline_role]
+src/unison/orchestrator.py:959:            if agent.effective_role == pipeline_role:
+src/unison/orchestrator.py:981:            agent_spec = self._resolve_agent(role)
+src/unison/orchestrator.py:1120:        agent_spec = self._resolve_agent(role)
+src/unison/orchestrator.py:1122:            self.halt(f"No agent spec for effective_role: {role}")
+src/unison/orchestrator.py:1143:    def _get_reviewer_count(self) -> int:
+src/unison/orchestrator.py:1144:        """Return the number of parallel reviewers to use.
+src/unison/orchestrator.py:1147:        1. ``spec.reviewer_config`` (when enabled)
+src/unison/orchestrator.py:1151:            self.spec.reviewer_config is not None
+src/unison/orchestrator.py:1152:            and self.spec.reviewer_config.enabled
+src/unison/orchestrator.py:1154:            return self.spec.reviewer_config.count
+tests/test_completion.py:69:    def test_detect_reviewer_with_verdict_file(self, tmp_path):
+tests/test_completion.py:70:        """Detect reviewer run with verdict file."""
+tests/test_completion.py:92:            role="reviewer",
+tests/test_completion.py:279:            "agents:\n  developer:\n    role: developer\n    runtime: claude\n    model: m\n    system_prompt_path: prompts/d.md\n  reviewer:\n    role: reviewer\n    runtime: codex\n    model: m\n    system_prompt_path: prompts/r.md\n"
+tests/test_completion.py:297:            "agents:\n  developer:\n    role: developer\n    runtime: claude\n    model: m\n    system_prompt_path: prompts/d.md\n  reviewer:\n    role: reviewer\n    runtime: codex\n    model: m\n    system_prompt_path: prompts/r.md\n"
+tests/test_channel.py:44:        # Write a message from developer to reviewer
+tests/test_channel.py:49:                "recipient": "reviewer",
+tests/test_channel.py:55:        # Read reviewer's inbox
+tests/test_channel.py:56:        messages = channel.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_channel.py:87:        messages = channel.read_inbox(recipient="reviewer", since_iter=1)
+tests/test_channel.py:97:        messages = channel.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_channel.py:130:    def test_developer_to_reviewer_flow(self, tmp_path):
+tests/test_channel.py:131:        """Simulate developer → reviewer message flow."""
+tests/test_channel.py:140:                "recipient": "reviewer",
+tests/test_channel.py:147:        messages = channel.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_channel.py:160:            payload={"type": "prompt_context", "recipient": "reviewer", "iter_n": 1}
+tests/test_channel.py:165:            sender="reviewer",
+tests/test_channel.py:171:        rev_messages = channel.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_channel.py:241:                "recipient": "reviewer",
+tests/test_channel.py:247:        messages = ch.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_channel.py:251:        assert msg["recipient"] == "reviewer"
+tests/test_channel.py:269:                    "recipient": "reviewer",
+tests/test_channel.py:276:        messages = ch.read_inbox(recipient="reviewer", since_iter=3)
+tests/test_channel.py:281:        messages = ch.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_channel.py:285:        messages = ch.read_inbox(recipient="reviewer", since_iter=5)
+tests/test_channel.py:293:        messages = ch.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_channel.py:321:                "recipient": "reviewer",
+tests/test_channel.py:330:                "recipient": "reviewer",
+tests/test_channel.py:336:        sub = ch.subscribe(pattern="reviewer", reader_id="test-reader-1")
+tests/test_channel.py:351:            payload={"type": "t1", "recipient": "reviewer", "iter_n": 1},
+tests/test_channel.py:361:        assert recipients == {"reviewer", "developer"}
+tests/test_channel.py:375:                    "recipient": "reviewer",
+tests/test_channel.py:386:        sub = ch.subscribe(pattern="reviewer", reader_id="test-reader-2")
+tests/test_channel.py:429:            sender = ["developer", "reviewer", "planner", "developer"][t]
+tests/test_channel.py:457:                "recipient": "reviewer",
+tests/test_channel.py:467:        assert row["recipient"] == "reviewer"
+tests/test_channel.py:487:            payload={"type": "t1", "recipient": "reviewer", "iter_n": 1},
+tests/test_channel.py:498:        assert len(ch.read_inbox(recipient="reviewer", since_iter=0)) == 1
+tests/test_channel.py:501:        assert len(ch.read_inbox(recipient="reviewer", since_iter=0)) == 1  # noqa: PLR2004
+tests/test_channel.py:514:                    "recipient": "reviewer",
+tests/test_channel.py:520:        messages = ch.read_inbox(recipient="reviewer", since_iter=-1)
+tests/test_channel.py:534:            "recipient": "reviewer",
+tests/test_channel.py:543:        messages = ch.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_channel.py:568:                    "recipient": "reviewer",
+tests/test_channel.py:575:        sub_a = ch.subscribe(pattern="reviewer", reader_id="reader-a")
+tests/test_channel.py:581:        sub_b = ch.subscribe(pattern="reviewer", reader_id="reader-b")
+tests/test_channel.py:644:                payload={"type": "test", "recipient": "reviewer", "iter_n": 1},
+tests/test_channel.py:646:            messages = ch.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_channel.py:683:                    "recipient": "reviewer",
+tests/test_channel.py:690:        sub1 = ch.subscribe(pattern="reviewer", reader_id="crash-reader")
+tests/test_channel.py:699:        sub2 = ch.subscribe(pattern="reviewer", reader_id="crash-reader")
+tests/test_channel.py:723:                    "recipient": "reviewer",
+tests/test_channel.py:730:        sub_a = ch.subscribe(pattern="reviewer", reader_id="shared-reader")
+tests/test_channel.py:731:        sub_b = ch.subscribe(pattern="reviewer", reader_id="shared-reader")
+tests/test_channel.py:760:                "recipient": "reviewer",
+tests/test_channel.py:766:        messages = ch.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_channel.py:790:                "recipient": "reviewer",
+tests/test_channel.py:802:        messages = ch2.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_channel.py:814:                "recipient": "reviewer",
+tests/test_channel.py:821:        sub = ch2.subscribe(pattern="reviewer", reader_id="persistent-reader")
+tests/test_channel.py:842:                    "recipient": "reviewer",
+tests/test_channel.py:861:                "recipient": "reviewer",
+tests/test_channel.py:869:        sub = ch.subscribe(pattern="reviewer", reader_id="delete-reader")
+tests/test_channel.py:891:            payload={"type": "test", "recipient": "reviewer", "iter_n": 1},
+tests/test_channel.py:897:        messages = ch2.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_channel.py:920:            sender="reviewer",
+tests/test_channel.py:930:        # Should also be visible to reviewer inbox
+tests/test_channel.py:931:        messages_rev = ch.read_inbox(recipient="reviewer", since_iter=-1)
+tests/test_channel.py:937:        """Write with recipient='developer'; read_inbox('reviewer') does not see it."""
+tests/test_channel.py:956:        rev_messages = ch.read_inbox(recipient="reviewer", since_iter=0)
+tests/test_verdict.py:188:        # REQUEST_CHANGES with 0 findings is not suspicious (reviewer may have reasons)
+src/unison/pipeline.py:15:from concurrent.futures import ThreadPoolExecutor
+src/unison/pipeline.py:20:class _NonWaitingThreadPoolExecutor(ThreadPoolExecutor):
+src/unison/pipeline.py:21:    """ThreadPoolExecutor marker subclass for the production default.
+src/unison/pipeline.py:25:    ``DAGScheduler.execute_parallel``'s finally block — not from
+src/unison/pipeline.py:28:    ``ThreadPoolExecutor`` and so future maintainers see the
+src/unison/pipeline.py:95:    REQUIRED_PIPELINE_ROLES: frozenset[str] = frozenset({"developer", "reviewer"})
+src/unison/pipeline.py:171:        reviewer_cfg = self._build_reviewer_config(raw.get("reviewer_config"))
+src/unison/pipeline.py:172:        parallel_dev_cfg = self._build_parallel_dev(raw.get("parallel_dev"))
+src/unison/pipeline.py:189:            reviewer_config=reviewer_cfg,
+src/unison/pipeline.py:190:            parallel_dev=parallel_dev_cfg,
+src/unison/pipeline.py:222:        - only reviewer(s) → ``"inspect-only"``
+src/unison/pipeline.py:225:            a.effective_role == "planner" for a in agents.values()
+src/unison/pipeline.py:228:            a.effective_role == "developer" for a in agents.values()
+src/unison/pipeline.py:230:        has_reviewer = any(
+src/unison/pipeline.py:231:            a.effective_role == "reviewer" for a in agents.values()
+src/unison/pipeline.py:238:        if has_reviewer:
+src/unison/pipeline.py:273:        ``pipeline_role`` if explicitly set, otherwise its ``role`` field.
+src/unison/pipeline.py:282:                pr = ad.get("pipeline_role")
+src/unison/pipeline.py:290:                    f"Missing required pipeline_role: {required_role!r}. "
+src/unison/pipeline.py:292:                    f"(via role= or pipeline_role=). "
+src/unison/pipeline.py:327:                pipeline_role=ad.get("pipeline_role"),
+src/unison/pipeline.py:429:                parallel_group=entry.get("parallel_group"),
+src/unison/pipeline.py:433:    def _build_reviewer_config(
+src/unison/pipeline.py:439:            raw: Raw YAML mapping for reviewer_config, or None.
+src/unison/pipeline.py:452:    def _build_parallel_dev(
+src/unison/pipeline.py:458:            raw: Raw YAML mapping for parallel_dev, or None.
+src/unison/pipeline.py:490:        results = scheduler.execute_parallel(executor=my_executor, max_workers=4)
+src/unison/pipeline.py:651:    def execute_parallel(
+src/unison/pipeline.py:678:                Defaults to ``ThreadPoolExecutor``.
+src/unison/pipeline.py:683:        from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+src/unison/pipeline.py:689:            # hung stage would cause `execute_parallel` to block
+src/unison/pipeline.py:692:            pool_factory = _NonWaitingThreadPoolExecutor
+tests/test_reviewer_pool.py:1:"""Tests for reviewer_pool.py — ReviewerPool + ReviewerConfig."""
+tests/test_reviewer_pool.py:10:from unison.reviewer_pool import ReviewerPool
+tests/test_reviewer_pool.py:35:    """Simulate a slow reviewer that returns PASS."""
+tests/test_reviewer_pool.py:41:    """Simulate a slow reviewer that returns REQUEST_CHANGES."""
+tests/test_reviewer_pool.py:110:        """Create pool with multi-reviewer enabled."""
+tests/test_reviewer_pool.py:118:# execute_parallel tests
+tests/test_reviewer_pool.py:123:    """ReviewerPool.execute_parallel tests."""
+tests/test_reviewer_pool.py:125:    def test_single_reviewer_mode(self, tmp_path):
+tests/test_reviewer_pool.py:140:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:146:    def test_multi_reviewer_mode(self, tmp_path):
+tests/test_reviewer_pool.py:161:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:167:    def test_parallel_execution_is_concurrent(self, tmp_path):
+tests/test_reviewer_pool.py:168:        """Multiple reviewers execute concurrently (wall clock < sum of sleeps)."""
+tests/test_reviewer_pool.py:176:        verdicts = pool.execute_parallel(code_path, review_fn=_slow_pass)
+tests/test_reviewer_pool.py:262:    def test_majority_five_reviewers(self):
+tests/test_reviewer_pool.py:263:        """5 reviewers: 3 PASS + 2 REQUEST_CHANGES → PASS."""
+tests/test_reviewer_pool.py:383:# Backward compatibility: single-reviewer integration
+tests/test_reviewer_pool.py:388:    """Single-reviewer mode is preserved (backward compatible)."""
+tests/test_reviewer_pool.py:390:    def test_single_reviewer_full_flow(self, tmp_path):
+tests/test_reviewer_pool.py:391:        """Single reviewer: execute → reconcile → PASS."""
+tests/test_reviewer_pool.py:401:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:408:    def test_single_reviewer_request_changes(self, tmp_path):
+tests/test_reviewer_pool.py:409:        """Single reviewer: execute → reconcile → REQUEST_CHANGES."""
+tests/test_reviewer_pool.py:421:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_context_deflate.py:32:        f = Finding(severity="CRITICAL", text="null pointer", source="reviewer-1")
+tests/test_context_deflate.py:35:        assert f.source == "reviewer-1"
+tests/test_context_deflate.py:468:            system_prompt="You are a reviewer.",
+tests/test_context_deflate.py:483:            system_prompt="You are a reviewer.",
+src/unison/completion.py:43:        # (Phase 4) can return failure; developer/reviewer checks are
+src/unison/completion.py:50:        elif role == "reviewer":
+src/unison/channel.py:17:AgentRole = Literal["planner", "developer", "reviewer"]
+src/unison/channel.py:41:            sender: 发送者角色（planner / developer / reviewer）。
+src/unison/channel.py:267:            sender: 发送者角色（planner / developer / reviewer）。
+tests/test_pipeline.py:39:  reviewer:
+tests/test_pipeline.py:40:    role: reviewer
+tests/test_pipeline.py:43:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:53:        assert "reviewer" in spec.agents
+tests/test_pipeline.py:67:  reviewer:
+tests/test_pipeline.py:68:    role: reviewer
+tests/test_pipeline.py:71:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:99:  reviewer:
+tests/test_pipeline.py:100:    role: reviewer
+tests/test_pipeline.py:103:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:128:  reviewer:
+tests/test_pipeline.py:129:    role: reviewer
+tests/test_pipeline.py:132:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:159:  reviewer:
+tests/test_pipeline.py:160:    role: reviewer
+tests/test_pipeline.py:163:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:202:        and is migrated to "2.0".  Still fails on missing reviewer."""
+tests/test_pipeline.py:215:        with pytest.raises(PipelineValidationError, match="reviewer"):
+tests/test_pipeline.py:237:  reviewer:
+tests/test_pipeline.py:238:    role: reviewer
+tests/test_pipeline.py:241:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:248:    def test_validate_missing_reviewer(self, tmp_path):
+tests/test_pipeline.py:249:        """Validate pipeline without reviewer agent raises error."""
+tests/test_pipeline.py:263:        with pytest.raises(PipelineValidationError, match="reviewer"):
+tests/test_pipeline.py:278:  reviewer:
+tests/test_pipeline.py:279:    role: reviewer
+tests/test_pipeline.py:282:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:299:        (prompts_dir / "reviewer.md").write_text("# Reviewer prompt")
+tests/test_pipeline.py:311:  reviewer:
+tests/test_pipeline.py:312:    role: reviewer
+tests/test_pipeline.py:315:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:337:  reviewer:
+tests/test_pipeline.py:338:    role: reviewer
+tests/test_pipeline.py:341:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:357:        (prompts_dir / "reviewer.md").write_text("# Reviewer prompt")
+tests/test_pipeline.py:369:  reviewer:
+tests/test_pipeline.py:370:    role: reviewer
+tests/test_pipeline.py:373:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:392:        """加载包含 planner、developer、reviewer 的 4-agent pipeline。"""
+tests/test_pipeline.py:408:  reviewer:
+tests/test_pipeline.py:409:    role: reviewer
+tests/test_pipeline.py:412:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:420:        assert "reviewer" in spec.agents
+tests/test_pipeline.py:440:  reviewer:
+tests/test_pipeline.py:441:    role: reviewer
+tests/test_pipeline.py:444:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:462:  reviewer:
+tests/test_pipeline.py:463:    role: reviewer
+tests/test_pipeline.py:466:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:484:  reviewer:
+tests/test_pipeline.py:485:    role: reviewer
+tests/test_pipeline.py:488:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:496:        assert "reviewer" in spec.agents
+tests/test_pipeline.py:505:        (prompts_dir / "reviewer.md").write_text("# Reviewer prompt")
+tests/test_pipeline.py:522:  reviewer:
+tests/test_pipeline.py:523:    role: reviewer
+tests/test_pipeline.py:526:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:539:        (prompts_dir / "reviewer.md").write_text("# Reviewer prompt")
+tests/test_pipeline.py:557:  reviewer:
+tests/test_pipeline.py:558:    role: reviewer
+tests/test_pipeline.py:561:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:586:  reviewer:
+tests/test_pipeline.py:587:    role: reviewer
+tests/test_pipeline.py:590:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:613:  reviewer:
+tests/test_pipeline.py:614:    role: reviewer
+tests/test_pipeline.py:617:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:629:    def test_planner_not_in_required_pipeline_roles(self):
+tests/test_pipeline.py:634:        assert "reviewer" in loader.REQUIRED_PIPELINE_ROLES
+tests/test_pipeline.py:652:        assert s.parallel_group is None
+tests/test_pipeline.py:667:            parallel_group="group-1",
+tests/test_pipeline.py:673:        assert s.parallel_group == "group-1"
+tests/test_pipeline.py:922:    """DAGScheduler execute_parallel 测试。"""
+tests/test_pipeline.py:946:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:962:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:983:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1006:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1025:        results = scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1041:        results = scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1045:    def test_execute_parallel_execution(self):
+tests/test_pipeline.py:1064:        results = scheduler.execute_parallel(executor, max_workers=3)
+tests/test_pipeline.py:1073:        assert elapsed < 0.25, f"Expected parallel execution, got {elapsed:.2f}s"
+tests/test_pipeline.py:1086:        from concurrent.futures import ThreadPoolExecutor
+tests/test_pipeline.py:1088:        class DaemonThreadPool(ThreadPoolExecutor):
+tests/test_pipeline.py:1089:            """ThreadPoolExecutor that doesn't block on hung threads at shutdown."""
+tests/test_pipeline.py:1106:        results = scheduler.execute_parallel(
+tests/test_pipeline.py:1132:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1140:        from concurrent.futures import ThreadPoolExecutor
+tests/test_pipeline.py:1142:        class DaemonThreadPool(ThreadPoolExecutor):
+tests/test_pipeline.py:1143:            """ThreadPoolExecutor subclass that doesn't block on shutdown."""
+tests/test_pipeline.py:1159:        results = scheduler.execute_parallel(
+tests/test_pipeline.py:1175:        ``with ThreadPoolExecutor(...) as pool:`` which calls
+tests/test_pipeline.py:1180:        ``_NonWaitingThreadPoolExecutor`` default factory.
+tests/test_pipeline.py:1197:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1225:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1244:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1251:        """cancel_event is cleared each time execute_parallel is called."""
+tests/test_pipeline.py:1259:        scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1267:        scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1269:            "cancel_event must be cleared at the start of each execute_parallel call"
+tests/test_pipeline.py:1292:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1321:  reviewer:
+tests/test_pipeline.py:1322:    role: reviewer
+tests/test_pipeline.py:1325:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:1341:    def test_loader_preserves_reviewer_config(self, tmp_path):
+tests/test_pipeline.py:1342:        """V2 YAML with reviewer_config: loads spec.reviewer_config."""
+tests/test_pipeline.py:1353:  reviewer:
+tests/test_pipeline.py:1354:    role: reviewer
+tests/test_pipeline.py:1357:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:1358:reviewer_config:
+tests/test_pipeline.py:1365:        assert spec.reviewer_config is not None
+tests/test_pipeline.py:1366:        assert spec.reviewer_config.enabled is True
+tests/test_pipeline.py:1367:        assert spec.reviewer_config.count == 3
+tests/test_pipeline.py:1368:        assert spec.reviewer_config.reconcile_strategy == "unanimous"
+tests/test_pipeline.py:1370:    def test_loader_preserves_parallel_dev(self, tmp_path):
+tests/test_pipeline.py:1371:        """V2 YAML with parallel_dev: loads spec.parallel_dev."""
+tests/test_pipeline.py:1382:  reviewer:
+tests/test_pipeline.py:1383:    role: reviewer
+tests/test_pipeline.py:1386:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:1387:parallel_dev:
+tests/test_pipeline.py:1393:        assert spec.parallel_dev is not None
+tests/test_pipeline.py:1394:        assert spec.parallel_dev.enabled is True
+tests/test_pipeline.py:1395:        assert spec.parallel_dev.base_branch == "main"
+tests/test_pipeline.py:1397:    def test_loader_preserves_parallel_dev_features(self, tmp_path):
+tests/test_pipeline.py:1398:        """V2 YAML with parallel_dev.features loads correctly."""
+tests/test_pipeline.py:1409:  reviewer:
+tests/test_pipeline.py:1410:    role: reviewer
+tests/test_pipeline.py:1413:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:1414:parallel_dev:
+tests/test_pipeline.py:1422:        assert spec.parallel_dev is not None
+tests/test_pipeline.py:1423:        assert spec.parallel_dev.features == ["feature-a", "feature-b"]
+tests/test_pipeline.py:1438:  reviewer:
+tests/test_pipeline.py:1439:    role: reviewer
+tests/test_pipeline.py:1442:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:1447:        # reviewer has no context_budget, should default to None
+tests/test_pipeline.py:1448:        assert spec.agents["reviewer"].context_budget is None
+tests/test_pipeline.py:1462:  reviewer:
+tests/test_pipeline.py:1463:    role: reviewer
+tests/test_pipeline.py:1466:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:1472:        assert spec.reviewer_config is None
+tests/test_pipeline.py:1473:        assert spec.parallel_dev is None
+tests/test_pipeline.py:1490:  reviewer:
+tests/test_pipeline.py:1491:    role: reviewer
+tests/test_pipeline.py:1494:    system_prompt_path: "prompts/reviewer.md"
+tests/test_pipeline.py:1497:reviewer_config:
+tests/test_pipeline.py:1501:parallel_dev:
+tests/test_pipeline.py:1510:        assert spec.reviewer_config is not None
+tests/test_pipeline.py:1511:        assert spec.parallel_dev is not None
+tests/test_snapshot.py:149:        sm.snapshot(path=original, operation=Operation.MODIFY, agent="reviewer", iteration=3)
+tests/test_state.py:126:            from_phase="dev_review", to_phase="done", by="reviewer",
+tests/test_state.py:214:        """V1 dict (no dag_status, no reviewer_verdicts) → migrated V2 State."""
+tests/test_runners.py:61:            role="reviewer",
+tests/test_runners.py:64:            system_prompt_path=Path("prompts/reviewer.md")
+tests/test_runners.py:143:    def test_create_agent_result_reviewer(self):
+tests/test_runners.py:144:        """Create an AgentResult for reviewer with verdict."""
+tests/test_custom_roles.py:5:- pipeline_role correctly maps custom roles to built-in slots
+tests/test_custom_roles.py:6:- effective_role property falls back / overrides correctly
+tests/test_custom_roles.py:7:- Loader accepts custom roles and validates pipeline_role coverage
+tests/test_custom_roles.py:39:    # 2. effective_role fallback
+tests/test_custom_roles.py:42:    def test_pipeline_role_fallback(self):
+tests/test_custom_roles.py:43:        """effective_role falls back to role when pipeline_role is None."""
+tests/test_custom_roles.py:50:        assert spec.effective_role == "developer"
+tests/test_custom_roles.py:51:        assert spec.pipeline_role is None
+tests/test_custom_roles.py:54:    # 3. effective_role override
+tests/test_custom_roles.py:57:    def test_pipeline_role_override(self):
+tests/test_custom_roles.py:58:        """effective_role returns pipeline_role when it is set."""
+tests/test_custom_roles.py:61:            pipeline_role="planner",
+tests/test_custom_roles.py:67:        assert spec.pipeline_role == "planner"
+tests/test_custom_roles.py:68:        assert spec.effective_role == "planner"
+tests/test_custom_roles.py:83:    pipeline_role: planner
+tests/test_custom_roles.py:89:    pipeline_role: developer
+tests/test_custom_roles.py:95:    pipeline_role: reviewer
+tests/test_custom_roles.py:109:        assert architect.pipeline_role == "planner"
+tests/test_custom_roles.py:110:        assert architect.effective_role == "planner"
+tests/test_custom_roles.py:113:        assert coder.effective_role == "developer"
+tests/test_custom_roles.py:116:        assert critic.effective_role == "reviewer"
+tests/test_custom_roles.py:118:    def test_custom_role_with_pipeline_role_developer(self, tmp_path):
+tests/test_custom_roles.py:119:        """Custom role with pipeline_role=developer satisfies REQUIRED_PIPELINE_ROLES."""
+tests/test_custom_roles.py:127:    pipeline_role: developer
+tests/test_custom_roles.py:131:  reviewer:
+tests/test_custom_roles.py:132:    role: reviewer
+tests/test_custom_roles.py:135:    system_prompt_path: "prompts/reviewer.md"
+tests/test_custom_roles.py:142:        assert custom.effective_role == "developer"
+tests/test_custom_roles.py:143:        assert "reviewer" in spec.agents
+tests/test_custom_roles.py:145:    def test_required_pipeline_roles_missing_developer(self, tmp_path):
+tests/test_custom_roles.py:146:        """Missing developer pipeline_role raises PipelineValidationError."""
+tests/test_custom_roles.py:157:  reviewer:
+tests/test_custom_roles.py:158:    role: reviewer
+tests/test_custom_roles.py:161:    system_prompt_path: "prompts/reviewer.md"
+tests/test_custom_roles.py:164:        with pytest.raises(PipelineValidationError, match="Missing required pipeline_role"):
+tests/test_custom_roles.py:167:    def test_required_pipeline_roles_missing_reviewer(self, tmp_path):
+tests/test_custom_roles.py:168:        """Missing reviewer pipeline_role raises PipelineValidationError."""
+tests/test_custom_roles.py:186:        with pytest.raises(PipelineValidationError, match="Missing required pipeline_role"):
+tests/test_custom_roles.py:189:    def test_required_pipeline_roles_satisfied_via_pipeline_role(self, tmp_path):
+tests/test_custom_roles.py:190:        """REQUIRED_PIPELINE_ROLES satisfied when custom roles map via pipeline_role."""
+tests/test_custom_roles.py:198:    pipeline_role: developer
+tests/test_custom_roles.py:204:    pipeline_role: reviewer
+tests/test_custom_roles.py:230:        assert "reviewer" in spec.agents
+tests/test_custom_roles.py:232:        assert dev.effective_role == "developer"
+tests/test_custom_roles.py:233:        assert dev.pipeline_role is None  # not set → fallback to role
+tests/test_custom_roles.py:234:        rev = spec.agents["reviewer"]
+tests/test_custom_roles.py:235:        assert rev.effective_role == "reviewer"
+tests/test_custom_roles.py:238:    # 6. Invalid pipeline_role (not a built-in slot) — still accepted
+tests/test_custom_roles.py:241:    def test_pipeline_role_can_be_any_string(self):
+tests/test_custom_roles.py:242:        """pipeline_role accepts any string — validation is at REQUIRED_PIPELINE_ROLES level."""
+tests/test_custom_roles.py:245:            pipeline_role="any-custom-slot",
+tests/test_custom_roles.py:250:        assert spec.pipeline_role == "any-custom-slot"
+tests/test_custom_roles.py:251:        assert spec.effective_role == "any-custom-slot"
+tests/test_custom_roles.py:254:    # 7. task_instruction + pipeline_role together
+tests/test_custom_roles.py:258:        """Custom role with both task_instruction and pipeline_role works."""
+tests/test_custom_roles.py:266:    pipeline_role: planner
+tests/test_custom_roles.py:276:  reviewer:
+tests/test_custom_roles.py:277:    role: reviewer
+tests/test_custom_roles.py:280:    system_prompt_path: "prompts/reviewer.md"
+tests/test_custom_roles.py:287:        assert architect.effective_role == "planner"
+src/unison/state.py:20:Actor = Literal["planner", "developer", "reviewer", "orchestrator", "observer", "harness_optimizer", "sean"]
+src/unison/state.py:100:    reviewer_verdicts: list[dict] = field(default_factory=list)  # V2: 多 Reviewer 裁决
+src/unison/state.py:129:            "reviewer_verdicts": self.reviewer_verdicts,
+src/unison/state.py:160:            reviewer_verdicts=d.get("reviewer_verdicts", []),
+src/unison/schema_migrate.py:238:    Adds the ``dag_status`` and ``reviewer_verdicts`` fields introduced
+src/unison/schema_migrate.py:242:    d.setdefault("reviewer_verdicts", [])
+src/unison/schema_migrate.py:260:    d.setdefault("reviewer_config", None)
+src/unison/schema_migrate.py:261:    d.setdefault("parallel_dev", None)
+tests/test_schema_migrate.py:231:        d = {"version": "1.0", "dag_status": None, "reviewer_verdicts": []}
+tests/test_schema_migrate.py:277:    def test_adds_reviewer_verdicts(self):
+tests/test_schema_migrate.py:278:        """V1 → V2 adds reviewer_verdicts default []."""
+tests/test_schema_migrate.py:281:        assert result["reviewer_verdicts"] == []
+tests/test_schema_migrate.py:327:    def test_v2_migration_adds_reviewer_config(self):
+tests/test_schema_migrate.py:328:        """V1 → V2 migration adds reviewer_config=None default."""
+tests/test_schema_migrate.py:332:        assert "reviewer_config" in result
+tests/test_schema_migrate.py:333:        assert result["reviewer_config"] is None
+tests/test_schema_migrate.py:335:    def test_v2_migration_adds_parallel_dev(self):
+tests/test_schema_migrate.py:336:        """V1 → V2 migration adds parallel_dev=None default."""
+tests/test_schema_migrate.py:340:        assert "parallel_dev" in result
+tests/test_schema_migrate.py:341:        assert result["parallel_dev"] is None
+tests/test_schema_migrate.py:453:  reviewer:
+tests/test_schema_migrate.py:454:    role: reviewer
+tests/test_schema_migrate.py:457:    system_prompt_path: "prompts/reviewer.md"
+tests/test_schema_migrate.py:477:  reviewer:
+tests/test_schema_migrate.py:478:    role: reviewer
+tests/test_schema_migrate.py:481:    system_prompt_path: "prompts/reviewer.md"
+tests/test_schema_migrate.py:500:  reviewer:
+tests/test_schema_migrate.py:501:    role: reviewer
+tests/test_schema_migrate.py:504:    system_prompt_path: "prompts/reviewer.md"
+src/unison/reviewer_pool.py:1:"""reviewer_pool.py — ReviewerPool: 多 Reviewer 并行审查 + verdict reconcile."""
+src/unison/reviewer_pool.py:4:from concurrent.futures import ThreadPoolExecutor, as_completed
+src/unison/reviewer_pool.py:16:    - 多 Reviewer（config.enabled=True）：ThreadPoolExecutor 并行执行
+src/unison/reviewer_pool.py:26:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+src/unison/reviewer_pool.py:34:    # execute_parallel
+src/unison/reviewer_pool.py:37:    def execute_parallel(
+src/unison/reviewer_pool.py:56:        # 多 Reviewer 模式：ThreadPoolExecutor 并行
+src/unison/reviewer_pool.py:58:        with ThreadPoolExecutor(max_workers=self.config.count) as executor:
+tests/test_orchestrator.py:30:  reviewer:
+tests/test_orchestrator.py:31:    role: reviewer
+tests/test_orchestrator.py:34:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:41:        (prompts_dir / "reviewer.md").write_text("# Reviewer")
+tests/test_orchestrator.py:62:  reviewer:
+tests/test_orchestrator.py:63:    role: reviewer
+tests/test_orchestrator.py:66:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:72:        (prompts_dir / "reviewer.md").write_text("# Reviewer")
+tests/test_orchestrator.py:96:  reviewer:
+tests/test_orchestrator.py:97:    role: reviewer
+tests/test_orchestrator.py:100:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:106:        (prompts_dir / "reviewer.md").write_text("# Reviewer")
+tests/test_orchestrator.py:131:  reviewer:
+tests/test_orchestrator.py:132:    role: reviewer
+tests/test_orchestrator.py:135:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:141:        (prompts_dir / "reviewer.md").write_text("# Reviewer")
+tests/test_orchestrator.py:168:  reviewer:
+tests/test_orchestrator.py:169:    role: reviewer
+tests/test_orchestrator.py:172:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:178:        (prompts_dir / "reviewer.md").write_text("# Reviewer")
+tests/test_orchestrator.py:202:  reviewer:
+tests/test_orchestrator.py:203:    role: reviewer
+tests/test_orchestrator.py:206:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:212:        (prompts_dir / "reviewer.md").write_text("# Reviewer")
+tests/test_orchestrator.py:269:  reviewer:
+tests/test_orchestrator.py:270:    role: reviewer
+tests/test_orchestrator.py:273:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:275:        (world_root / "prompts" / "reviewer.md").write_text("You are a reviewer.")
+tests/test_orchestrator.py:300:        (world_root / "prompts" / "reviewer.md").write_text("You are a reviewer.")
+tests/test_orchestrator.py:312:  reviewer:
+tests/test_orchestrator.py:313:    role: reviewer
+tests/test_orchestrator.py:316:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:361:        (world_root / "prompts" / "reviewer.md").write_text("Reviewer prompt")
+tests/test_orchestrator.py:391:  reviewer:
+tests/test_orchestrator.py:392:    role: reviewer
+tests/test_orchestrator.py:395:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:431:        (world_root / "prompts" / "reviewer.md").write_text("Rev")
+tests/test_orchestrator.py:444:  reviewer:
+tests/test_orchestrator.py:445:    role: reviewer
+tests/test_orchestrator.py:448:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:472:        (world_root / "prompts" / "reviewer.md").write_text("Rev")
+tests/test_orchestrator.py:484:  reviewer:
+tests/test_orchestrator.py:485:    role: reviewer
+tests/test_orchestrator.py:488:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:512:        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+tests/test_orchestrator.py:524:  reviewer:
+tests/test_orchestrator.py:525:    role: reviewer
+tests/test_orchestrator.py:528:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:561:        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+tests/test_orchestrator.py:573:  reviewer:
+tests/test_orchestrator.py:574:    role: reviewer
+tests/test_orchestrator.py:577:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:583:    reviewer:
+tests/test_orchestrator.py:593:        tracker = orch._get_budget_tracker("reviewer")
+tests/test_orchestrator.py:597:        runner, effective_spec = orch._select_runner("reviewer")
+tests/test_orchestrator.py:601:        assert spec.agents["reviewer"].runtime == "codex"
+tests/test_orchestrator.py:614:        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+tests/test_orchestrator.py:626:  reviewer:
+tests/test_orchestrator.py:627:    role: reviewer
+tests/test_orchestrator.py:630:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:636:    reviewer:
+tests/test_orchestrator.py:646:        tracker = orch._get_budget_tracker("reviewer")
+tests/test_orchestrator.py:649:        runner, effective_spec = orch._select_runner("reviewer")
+tests/test_orchestrator.py:667:        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+tests/test_orchestrator.py:679:  reviewer:
+tests/test_orchestrator.py:680:    role: reviewer
+tests/test_orchestrator.py:683:    system_prompt_path: "prompts/reviewer.md"
+tests/test_orchestrator.py:727:        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+tests/test_orchestrator.py:739:  reviewer:
+tests/test_orchestrator.py:740:    role: reviewer
+tests/test_orchestrator.py:743:    system_prompt_path: "prompts/reviewer.md"
+src/unison/world.py:144:    def agent_log(self, role: Literal["planner", "developer", "reviewer"], iter_n: int, timestamp: str) -> Path:
+src/unison/world.py:148:            role: Agent role (planner / developer / reviewer).
+
+exec
+/bin/bash -lc 'git diff --stat && git diff -- interfaces.py src/unison/pipeline.py src/unison/orchestrator.py tests/test_orchestrator.py tests/test_custom_roles.py' in /home/sean/projects/unison
+ succeeded in 0ms:
+ observer/logs/reviewer_iter-1_20260621T120155Z.log | 660 +++++++++++++++++++++
+ 1 file changed, 660 insertions(+)
+
+exec
+/bin/bash -lc "ls -la reviews && rg -n \"Pipeline B|parallel|pipeline_role|multi\" prd docs .unison src tests -g '"'!observer/logs/**'"'" in /home/sean/projects/unison
+ succeeded in 0ms:
+total 8
+drwxrwxr-x  2 sean sean 4096 Jun 21 19:52 .
+drwxrwxr-x 16 sean sean 4096 Jun 21 20:06 ..
+src/unison/worktree.py:259:    # merge_reconciliation — consolidate parallel feature branches
+src/unison/orchestrator.py:307:            self._invoke_multi_reviewer(1, "dev_review")
+src/unison/orchestrator.py:353:        scheduler.execute_parallel(executor=exec_stage, max_workers=4)
+src/unison/orchestrator.py:422:                self._invoke_multi_reviewer(iteration, review_phase)
+src/unison/orchestrator.py:468:        # 0. V2: parallel-dev routing
+src/unison/orchestrator.py:470:            pd = self.spec.parallel_dev
+src/unison/orchestrator.py:476:                            "parallel_dev.enabled=True but features list is empty. "
+src/unison/orchestrator.py:479:                    self._invoke_parallel_developers(iteration, pd, feature_list)
+src/unison/orchestrator.py:554:    def _invoke_parallel_developers(
+src/unison/orchestrator.py:565:            pd: ``WorktreeConfig`` from ``spec.parallel_dev``.
+src/unison/orchestrator.py:566:            feature_list: Feature names to parallelize over.
+src/unison/orchestrator.py:666:    def _invoke_multi_reviewer(
+src/unison/orchestrator.py:669:        """Invoke multiple reviewers in parallel via ReviewerPool.
+src/unison/orchestrator.py:677:        ``self._state.reviewer_verdicts`` for V2 multi-reviewer tracking.
+src/unison/orchestrator.py:799:        verdicts = pool.execute_parallel(world.root, review_fn=review_one)
+src/unison/orchestrator.py:942:    def _resolve_agent(self, pipeline_role: str) -> AgentSpec | None:
+src/unison/orchestrator.py:948:        ``effective_role`` matches *pipeline_role*.
+src/unison/orchestrator.py:952:            to *pipeline_role*.
+src/unison/orchestrator.py:956:        if pipeline_role in self.spec.agents:
+src/unison/orchestrator.py:957:            return self.spec.agents[pipeline_role]
+src/unison/orchestrator.py:959:            if agent.effective_role == pipeline_role:
+src/unison/orchestrator.py:1144:        """Return the number of parallel reviewers to use.
+prd/prd-fix7-dag-thread.md:4:DAGScheduler.execute_parallel() shuts down the thread pool with
+src/unison/pipeline.py:25:    ``DAGScheduler.execute_parallel``'s finally block — not from
+src/unison/pipeline.py:172:        parallel_dev_cfg = self._build_parallel_dev(raw.get("parallel_dev"))
+src/unison/pipeline.py:190:            parallel_dev=parallel_dev_cfg,
+src/unison/pipeline.py:273:        ``pipeline_role`` if explicitly set, otherwise its ``role`` field.
+src/unison/pipeline.py:282:                pr = ad.get("pipeline_role")
+src/unison/pipeline.py:290:                    f"Missing required pipeline_role: {required_role!r}. "
+src/unison/pipeline.py:292:                    f"(via role= or pipeline_role=). "
+src/unison/pipeline.py:327:                pipeline_role=ad.get("pipeline_role"),
+src/unison/pipeline.py:429:                parallel_group=entry.get("parallel_group"),
+src/unison/pipeline.py:452:    def _build_parallel_dev(
+src/unison/pipeline.py:458:            raw: Raw YAML mapping for parallel_dev, or None.
+src/unison/pipeline.py:490:        results = scheduler.execute_parallel(executor=my_executor, max_workers=4)
+src/unison/pipeline.py:621:                multiple done futures at once but only one was
+src/unison/pipeline.py:651:    def execute_parallel(
+src/unison/pipeline.py:689:            # hung stage would cause `execute_parallel` to block
+src/unison/context_deflate.py:5:and assembling a token-budgeted prompt from multiple content sections.
+src/unison/context_deflate.py:179:    Strategy for multi-file (``diff --git``) diffs:
+docs/v2-dag-parallel-design.md:30:  └── execute_parallel(stages, executor) — 并行执行无依赖 Stage
+docs/v2-dag-parallel-design.md:48:        parallel_group: 并行组标识（同组 Stage 可同时执行）。
+docs/v2-dag-parallel-design.md:54:    parallel_group: str | None = None
+docs/v2-dag-parallel-design.md:145:    def execute_parallel(
+docs/v2-dag-parallel-design.md:286:4. **execute_parallel** — 并行执行、超时、失败处理
+docs/v2-dag-parallel-design.md:299:2. **死锁检测** — 依赖图有环时 execute_parallel 会死锁。_has_cycle() 在初始化时检测。
+src/unison/cli.py:1:"""cli.py — CLI entry point for the Unison multi-agent bridge.
+src/unison/schema_migrate.py:261:    d.setdefault("parallel_dev", None)
+prd/PRD-phase11.md:19:> 1. `pipeline_role`：行为映射——告诉 Orchestrator 这个自定义角色在状态机中扮演哪个内置角色
+prd/PRD-phase11.md:32:### R2: pipeline_role 行为映射
+prd/PRD-phase11.md:33:- `AgentSpec` 新增 `pipeline_role: AgentRole | None = None`
+prd/PRD-phase11.md:35:- 为 `None` 时，用 `role` 本身作为 pipeline_role（向后兼容）
+prd/PRD-phase11.md:36:- Orchestrator 所有调度点改用 `pipeline_role` 而非 `role`
+prd/PRD-phase11.md:46:- `REQUIRED_AGENTS` 改为按 `pipeline_role` 检查：至少一个 developer + 一个 reviewer
+prd/PRD-phase11.md:47:- 如果任何 agent 的 `pipeline_role` 是无效值，抛出错误
+prd/PRD-phase11.md:51:- 按 Stage 的 agent 的 `pipeline_role` 调度
+prd/PRD-phase11.md:60:2. `pipeline_role` 正确映射到 Orchestrator 行为调度
+prd/PRD-phase11.md:62:4. `agent.role = "architect"` + `agent.pipeline_role = "planner"` → Orchestrator 将其用作 planner
+src/unison/reviewer_pool.py:26:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+src/unison/reviewer_pool.py:34:    # execute_parallel
+src/unison/reviewer_pool.py:37:    def execute_parallel(
+prd/PRD-phase14.md:44:| 角色 | pipeline_role | 职责 |
+prd/PRD-phase10.md:9:- Phase 11 提供了自定义角色能力（AgentRole=str, pipeline_role, task_instruction）
+prd/PRD-phase10.md:21:| 角色 | pipeline_role | 职责 |
+prd/PRD-phase10.md:27:4 个角色不可能全部并行——当前 pipeline_role 只有 3 个 slot。折中方案：
+prd/tech-design.md:1:# parallel
+src/unison/world.py:159:        Idempotent — safe to call multiple times.
+prd/tech-design-phase9.md:7:Phase 9 使用标准 2-agent 模式。单 reviewer，不做 multi-reviewer。
+prd/tech-design-phase9.md:83:  mode: parallel
+prd/prd-fix-L1-orch.md:4:in `_invoke_parallel_developers`, after `runner.run()` at line ~559,
+prd/prd-fix-L1-orch.md:8:in `_invoke_parallel_developers`, before `runner.run()`, add:
+prd/prd-fix-L1-orch.md:15:## 3. Remove pre_invoke_cleanup from multi-reviewer
+prd/prd-fix-L1-orch.md:16:in `_invoke_multi_reviewer`, delete `self.pre_invoke_cleanup()` call.
+prd/prd-fix-L1-orch.md:31:## 6. DAG exec_stage validate pipeline_role
+prd/tech-design-phase9-final.md:7:Phase 9 使用标准 2-agent 模式。单 reviewer，不做 multi-reviewer。
+prd/tech-design-phase9-final.md:83:  mode: parallel
+prd/PRD.md:1:# Pipeline B: Multi-Agent Parallel (all roles, dual-mode)
+prd/PRD.md:5:Other roles (planner, developer) cannot run in parallel at all.
+prd/PRD.md:6:No support for heterogeneous parallel (different agents reviewing from different angles).
+prd/PRD.md:9:Extend parallel execution to ALL roles with two modes.
+prd/PRD.md:13:Agents with the same `pipeline_role` automatically form a parallel group:
+prd/PRD.md:17:  architect:     {pipeline_role: planner, runtime: claude}
+prd/PRD.md:18:  pm:            {pipeline_role: planner, runtime: codex}  # parallel with architect
+prd/PRD.md:20:  dev_core:      {pipeline_role: developer, runtime: claude}
+prd/PRD.md:21:  dev_tests:     {pipeline_role: developer, runtime: codex} # parallel with dev_core
+prd/PRD.md:23:  tech_reviewer: {pipeline_role: reviewer, runtime: codex}
+prd/PRD.md:24:  arch_reviewer: {pipeline_role: reviewer, runtime: claude}  # parallel with tech_reviewer
+prd/PRD.md:27:Detection: if multiple agents share the same `pipeline_role` → parallel mode automatically.
+prd/PRD.md:40:### _resolve_agents(pipeline_role) → list[AgentSpec]
+prd/PRD.md:44:### _invoke_agents_parallel(role_list, iteration)
+prd/PRD.md:50:When multiple planners run, each writes to separate files:
+prd/PRD.md:55:When multiple developers run, each works in its own git branch/worktree.
+prd/PRD.md:65:- Homogeneous parallel: N copies of same agent
+prd/PRD.md:66:- Heterogeneous parallel: different agents with different focus
+prd/tech-design-phase10.md:5:### 问题：4 角色 vs 3 pipeline_role slot + 1 Dev slot
+prd/tech-design-phase10.md:7:当前 pipeline_role 映射到 3 个内建行为：
+prd/tech-design-phase10.md:49:    pipeline_role: planner
+prd/tech-design-phase10.md:57:    pipeline_role: reviewer
+prd/tech-design-phase10.md:85:    pipeline_role: planner
+prd/tech-design-phase10.md:93:    pipeline_role: reviewer
+prd/PRD-phase12.md:42:| 角色 | pipeline_role | 职责 |
+prd/PRD-parallel-system.md:1:# Pipeline B: Multi-Agent Parallel (all roles, dual-mode)
+prd/PRD-parallel-system.md:5:Other roles (planner, developer) cannot run in parallel at all.
+prd/PRD-parallel-system.md:6:No support for heterogeneous parallel (different agents reviewing from different angles).
+prd/PRD-parallel-system.md:9:Extend parallel execution to ALL roles with two modes.
+prd/PRD-parallel-system.md:13:Agents with the same `pipeline_role` automatically form a parallel group:
+prd/PRD-parallel-system.md:17:  architect:     {pipeline_role: planner, runtime: claude}
+prd/PRD-parallel-system.md:18:  pm:            {pipeline_role: planner, runtime: codex}  # parallel with architect
+prd/PRD-parallel-system.md:20:  dev_core:      {pipeline_role: developer, runtime: claude}
+prd/PRD-parallel-system.md:21:  dev_tests:     {pipeline_role: developer, runtime: codex} # parallel with dev_core
+prd/PRD-parallel-system.md:23:  tech_reviewer: {pipeline_role: reviewer, runtime: codex}
+prd/PRD-parallel-system.md:24:  arch_reviewer: {pipeline_role: reviewer, runtime: claude}  # parallel with tech_reviewer
+prd/PRD-parallel-system.md:27:Detection: if multiple agents share the same `pipeline_role` → parallel mode automatically.
+prd/PRD-parallel-system.md:40:### _resolve_agents(pipeline_role) → list[AgentSpec]
+prd/PRD-parallel-system.md:44:### _invoke_agents_parallel(role_list, iteration)
+prd/PRD-parallel-system.md:50:When multiple planners run, each writes to separate files:
+prd/PRD-parallel-system.md:55:When multiple developers run, each works in its own git branch/worktree.
+prd/PRD-parallel-system.md:65:- Homogeneous parallel: N copies of same agent
+prd/PRD-parallel-system.md:66:- Heterogeneous parallel: different agents with different focus
+prd/tech-design-v2-fix.bak.md:8:   - `PipelineSpec.parallel_dev: WorktreeConfig | None`
+prd/tech-design-v2-fix.bak.md:37:All prompts, multi-reviewer output paths, and verdict parsing call
+prd/tech-design-v2-fix.bak.md:138:   `DAGScheduler(self.spec.dag).execute_parallel(...)` instead of
+prd/tech-design-v2-fix.bak.md:144:   `execute_parallel(executor, max_workers)` shape has
+prd/tech-design-v2-fix.bak.md:149:   **New `execute_parallel` shape (target)**:
+prd/tech-design-v2-fix.bak.md:155:   def execute_parallel(
+prd/tech-design-v2-fix.bak.md:239:  assert `_run_state_machine` calls `DAGScheduler.execute_parallel`
+prd/tech-design-v2-fix.bak.md:249:  `pool_factory=DaemonThreadPool`; after `execute_parallel`
+prd/tech-design-v2-fix.bak.md:300:- `interfaces.py` (add `parallel_dev: WorktreeConfig | None` to
+prd/tech-design-v2-fix.bak.md:304:  `spec.parallel_dev is not None AND spec.parallel_dev.enabled is True`)
+prd/tech-design-v2-fix.bak.md:306:- `src/unison/pipeline.py:145` (loader parses `parallel_dev:` and
+prd/tech-design-v2-fix.bak.md:307:  `parallel_dev.features:`)
+prd/tech-design-v2-fix.bak.md:313:parallel_dev: WorktreeConfig | None = None  # V2: 并行 Developer
+prd/tech-design-v2-fix.bak.md:316:features: list[str] | None = None  # V2: feature list to parallelize over
+prd/tech-design-v2-fix.bak.md:328:had no way to express "which features to parallelize over".
+prd/tech-design-v2-fix.bak.md:339:1. **Loader (pipeline.py:145)**: parse `parallel_dev:` block in
+prd/tech-design-v2-fix.bak.md:340:   `PipelineLoader._build_parallel_dev()` (new private method,
+prd/tech-design-v2-fix.bak.md:346:   `self.spec.parallel_dev is not None` and `iter == 1`:
+prd/tech-design-v2-fix.bak.md:350:   pd = self.spec.parallel_dev
+prd/tech-design-v2-fix.bak.md:352:       # parallel-dev path
+prd/tech-design-v2-fix.bak.md:358:               "parallel_dev.enabled=True but features list is empty. "
+prd/tech-design-v2-fix.bak.md:363:       # Single-developer fallback (parallel_dev is None OR enabled=False)
+prd/tech-design-v2-fix.bak.md:369:   - `parallel_dev is None`: single-developer mode (existing V1 behavior).
+prd/tech-design-v2-fix.bak.md:370:   - `parallel_dev is not None and enabled is False`: single-developer
+prd/tech-design-v2-fix.bak.md:372:   - `parallel_dev is not None and enabled is True and features`:
+prd/tech-design-v2-fix.bak.md:373:     parallel-dev mode, one Developer per feature.
+prd/tech-design-v2-fix.bak.md:374:   - `parallel_dev is not None and enabled is True and not features`:
+prd/tech-design-v2-fix.bak.md:380:     - `mgr = WorktreeManager(config=self.spec.parallel_dev,
+prd/tech-design-v2-fix.bak.md:405:- `test_loader_parses_parallel_dev_with_features` — pipeline.yaml
+prd/tech-design-v2-fix.bak.md:406:  with `parallel_dev: { features: [feature-a, feature-b] }`;
+prd/tech-design-v2-fix.bak.md:407:  assert `spec.parallel_dev.features == ["feature-a", "feature-b"]`.
+prd/tech-design-v2-fix.bak.md:409:  set `spec.parallel_dev=WorktreeConfig(enabled=True, features=["f1", "f2"])`;
+prd/tech-design-v2-fix.bak.md:412:- `test_orchestrator_uses_single_developer_when_parallel_dev_disabled` —
+prd/tech-design-v2-fix.bak.md:413:  `spec.parallel_dev=WorktreeConfig(enabled=False, features=["f1"])`;
+prd/tech-design-v2-fix.bak.md:418:  `spec.parallel_dev=WorktreeConfig(enabled=True, features=[])`;
+prd/tech-design-v2-fix.bak.md:420:  "parallel_dev.enabled=True but features list is empty".
+prd/tech-design-v2-fix.bak.md:426:- `test_orchestrator_uses_single_developer_when_no_parallel_dev` —
+prd/tech-design-v2-fix.bak.md:427:  `spec.parallel_dev=None`; assert no `WorktreeManager.create_worktree`
+prd/tech-design-v2-fix.bak.md:443:reviewer_config: ReviewerConfig | None = None  # V2: multi-reviewer
+prd/tech-design-v2-fix.bak.md:498:- `test_multi_reviewer_writes_to_separated_path` — run multi-reviewer;
+prd/tech-design-v2-fix.bak.md:686:- `parallel_dev: WorktreeConfig | None` — representable (added Phase 5)
+prd/tech-design-v2-fix.bak.md:697:   d.setdefault("parallel_dev", None)
+prd/tech-design-v2-fix.bak.md:720:       parallel_dev=parallel_dev_cfg,     # Phase 5 + Phase 8
+prd/tech-design-v2-fix.bak.md:723:   `dag_cfg`, `reviewer_cfg`, `parallel_dev_cfg` are parsed by the
+prd/tech-design-v2-fix.bak.md:744:`dag=None`, `reviewer_config=None`, `parallel_dev=None`.
+prd/tech-design-v2-fix.bak.md:764:- `test_v2_migration_adds_parallel_dev` — V1 YAML migrates to V2
+prd/tech-design-v2-fix.bak.md:765:  with `"parallel_dev" in result and result["parallel_dev"] is None`.
+prd/tech-design-v2-fix.bak.md:773:- `test_loader_preserves_parallel_dev` — V2 YAML with
+prd/tech-design-v2-fix.bak.md:774:  `parallel_dev:`; assert `spec.parallel_dev` is set.
+prd/tech-design-v2-fix.bak.md:775:- `test_loader_preserves_parallel_dev_features` — V2 YAML with
+prd/tech-design-v2-fix.bak.md:776:  `parallel_dev: { features: [a, b] }`; assert
+prd/tech-design-v2-fix.bak.md:777:  `spec.parallel_dev.features == ["a", "b"]`.
+prd/tech-design-v2-fix.bak.md:809:fix: Phase 8 — schema migrate V2 fields (dag, reviewer_config, parallel_dev, context_budget)
+prd/tech-design-v2-fix.bak.md:816:fix: Phase 5 — worktree.merge_reconciliation() + parallel_dev orchestrator wiring
+prd/tech-design-phase14.md:51:    pipeline_role: planner
+prd/tech-design-phase14.md:58:    pipeline_role: reviewer
+prd/tech-design-phase12.md:48:    pipeline_role: developer
+prd/tech-design-phase12.md:55:    pipeline_role: reviewer
+tests/test_worktree.py:204:    def test_create_multiple_worktrees(self, enabled_config, git_repo):
+tests/test_worktree.py:205:        """Create multiple independent worktrees."""
+tests/test_worktree.py:267:    def test_list_worktrees_multiple(self, enabled_config, git_repo):
+tests/test_checkpoint.py:76:    def test_load_latest_multiple_checkpoints(self, tmp_path):
+tests/test_checkpoint.py:80:        # Save multiple checkpoints
+tests/test_checkpoint.py:111:    def test_list_checkpoints_multiple(self, tmp_path):
+tests/test_observer.py:156:        """Calling stop() multiple times is safe."""
+tests/test_observer.py:366:        """Calling stop multiple times is safe."""
+tests/test_observer.py:730:    def test_write_multiple_notifications(self, tmp_path):
+tests/test_observer.py:731:        """Observer appends multiple notifications."""
+tests/test_context_deflate.py:170:    def test_multiple_findings(self):
+tests/test_context_deflate.py:263:        plain = "some plain text\nwith multiple lines"
+tests/test_context_deflate.py:360:    def test_multi_file_diff(self):
+tests/test_context_deflate.py:384:    def test_multi_file_drops_oldest_when_tight(self):
+tests/test_channel.py:60:    def test_write_multiple_messages(self, tmp_path):
+tests/test_channel.py:61:        """Write multiple messages."""
+tests/test_channel.py:558:    def test_multiple_readers_independent_cursors(self, tmp_path):
+tests/test_reviewer_pool.py:110:        """Create pool with multi-reviewer enabled."""
+tests/test_reviewer_pool.py:118:# execute_parallel tests
+tests/test_reviewer_pool.py:123:    """ReviewerPool.execute_parallel tests."""
+tests/test_reviewer_pool.py:140:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:146:    def test_multi_reviewer_mode(self, tmp_path):
+tests/test_reviewer_pool.py:161:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:167:    def test_parallel_execution_is_concurrent(self, tmp_path):
+tests/test_reviewer_pool.py:176:        verdicts = pool.execute_parallel(code_path, review_fn=_slow_pass)
+tests/test_reviewer_pool.py:401:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:421:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_lock.py:2:import multiprocessing
+tests/test_lock.py:132:    def test_multiple_projects(self, tmp_path):
+tests/test_lock.py:156:        results = multiprocessing.Queue()
+tests/test_lock.py:157:        p1 = multiprocessing.Process(
+tests/test_lock.py:160:        p2 = multiprocessing.Process(
+tests/test_custom_roles.py:5:- pipeline_role correctly maps custom roles to built-in slots
+tests/test_custom_roles.py:7:- Loader accepts custom roles and validates pipeline_role coverage
+tests/test_custom_roles.py:42:    def test_pipeline_role_fallback(self):
+tests/test_custom_roles.py:43:        """effective_role falls back to role when pipeline_role is None."""
+tests/test_custom_roles.py:51:        assert spec.pipeline_role is None
+tests/test_custom_roles.py:57:    def test_pipeline_role_override(self):
+tests/test_custom_roles.py:58:        """effective_role returns pipeline_role when it is set."""
+tests/test_custom_roles.py:61:            pipeline_role="planner",
+tests/test_custom_roles.py:67:        assert spec.pipeline_role == "planner"
+tests/test_custom_roles.py:83:    pipeline_role: planner
+tests/test_custom_roles.py:89:    pipeline_role: developer
+tests/test_custom_roles.py:95:    pipeline_role: reviewer
+tests/test_custom_roles.py:109:        assert architect.pipeline_role == "planner"
+tests/test_custom_roles.py:118:    def test_custom_role_with_pipeline_role_developer(self, tmp_path):
+tests/test_custom_roles.py:119:        """Custom role with pipeline_role=developer satisfies REQUIRED_PIPELINE_ROLES."""
+tests/test_custom_roles.py:127:    pipeline_role: developer
+tests/test_custom_roles.py:145:    def test_required_pipeline_roles_missing_developer(self, tmp_path):
+tests/test_custom_roles.py:146:        """Missing developer pipeline_role raises PipelineValidationError."""
+tests/test_custom_roles.py:164:        with pytest.raises(PipelineValidationError, match="Missing required pipeline_role"):
+tests/test_custom_roles.py:167:    def test_required_pipeline_roles_missing_reviewer(self, tmp_path):
+tests/test_custom_roles.py:168:        """Missing reviewer pipeline_role raises PipelineValidationError."""
+tests/test_custom_roles.py:186:        with pytest.raises(PipelineValidationError, match="Missing required pipeline_role"):
+tests/test_custom_roles.py:189:    def test_required_pipeline_roles_satisfied_via_pipeline_role(self, tmp_path):
+tests/test_custom_roles.py:190:        """REQUIRED_PIPELINE_ROLES satisfied when custom roles map via pipeline_role."""
+tests/test_custom_roles.py:198:    pipeline_role: developer
+tests/test_custom_roles.py:204:    pipeline_role: reviewer
+tests/test_custom_roles.py:233:        assert dev.pipeline_role is None  # not set → fallback to role
+tests/test_custom_roles.py:238:    # 6. Invalid pipeline_role (not a built-in slot) — still accepted
+tests/test_custom_roles.py:241:    def test_pipeline_role_can_be_any_string(self):
+tests/test_custom_roles.py:242:        """pipeline_role accepts any string — validation is at REQUIRED_PIPELINE_ROLES level."""
+tests/test_custom_roles.py:245:            pipeline_role="any-custom-slot",
+tests/test_custom_roles.py:250:        assert spec.pipeline_role == "any-custom-slot"
+tests/test_custom_roles.py:254:    # 7. task_instruction + pipeline_role together
+tests/test_custom_roles.py:258:        """Custom role with both task_instruction and pipeline_role works."""
+tests/test_custom_roles.py:266:    pipeline_role: planner
+tests/test_schema_migrate.py:222:    def test_multi_hop_migration(self):
+tests/test_schema_migrate.py:223:        """Chain: 1.0 → 2.0 → 2.1 works with multi-hop."""
+tests/test_schema_migrate.py:335:    def test_v2_migration_adds_parallel_dev(self):
+tests/test_schema_migrate.py:336:        """V1 → V2 migration adds parallel_dev=None default."""
+tests/test_schema_migrate.py:340:        assert "parallel_dev" in result
+tests/test_schema_migrate.py:341:        assert result["parallel_dev"] is None
+tests/test_budget.py:184:    def test_multiple_phases(self):
+tests/test_pipeline.py:629:    def test_planner_not_in_required_pipeline_roles(self):
+tests/test_pipeline.py:652:        assert s.parallel_group is None
+tests/test_pipeline.py:667:            parallel_group="group-1",
+tests/test_pipeline.py:673:        assert s.parallel_group == "group-1"
+tests/test_pipeline.py:902:    def test_ready_multiple_dependencies(self):
+tests/test_pipeline.py:922:    """DAGScheduler execute_parallel 测试。"""
+tests/test_pipeline.py:946:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:962:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:983:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1006:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1025:        results = scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1041:        results = scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1045:    def test_execute_parallel_execution(self):
+tests/test_pipeline.py:1064:        results = scheduler.execute_parallel(executor, max_workers=3)
+tests/test_pipeline.py:1073:        assert elapsed < 0.25, f"Expected parallel execution, got {elapsed:.2f}s"
+tests/test_pipeline.py:1106:        results = scheduler.execute_parallel(
+tests/test_pipeline.py:1132:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1159:        results = scheduler.execute_parallel(
+tests/test_pipeline.py:1197:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1225:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1244:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1251:        """cancel_event is cleared each time execute_parallel is called."""
+tests/test_pipeline.py:1259:        scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1267:        scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1269:            "cancel_event must be cleared at the start of each execute_parallel call"
+tests/test_pipeline.py:1292:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1370:    def test_loader_preserves_parallel_dev(self, tmp_path):
+tests/test_pipeline.py:1371:        """V2 YAML with parallel_dev: loads spec.parallel_dev."""
+tests/test_pipeline.py:1387:parallel_dev:
+tests/test_pipeline.py:1393:        assert spec.parallel_dev is not None
+tests/test_pipeline.py:1394:        assert spec.parallel_dev.enabled is True
+tests/test_pipeline.py:1395:        assert spec.parallel_dev.base_branch == "main"
+tests/test_pipeline.py:1397:    def test_loader_preserves_parallel_dev_features(self, tmp_path):
+tests/test_pipeline.py:1398:        """V2 YAML with parallel_dev.features loads correctly."""
+tests/test_pipeline.py:1414:parallel_dev:
+tests/test_pipeline.py:1422:        assert spec.parallel_dev is not None
+tests/test_pipeline.py:1423:        assert spec.parallel_dev.features == ["feature-a", "feature-b"]
+tests/test_pipeline.py:1473:        assert spec.parallel_dev is None
+tests/test_pipeline.py:1501:parallel_dev:
+tests/test_pipeline.py:1511:        assert spec.parallel_dev is not None
+tests/test_bootstrap.py:29:    def test_execute_multiple_commands(self, tmp_path):
+tests/test_bootstrap.py:30:        """Execute multiple commands."""
+prd/PRD-v2-fix.bak.md:36:| `PipelineSpec.parallel_dev` | `WorktreeConfig \| None` | `None` |
+prd/PRD-v2-fix.bak.md:57:multiple phases. The Reviewer (Codex) writes one review file per
+prd/PRD-v2-fix.bak.md:106:| `PipelineSpec.parallel_dev` | `WorktreeConfig \| None` | `interfaces.py` PipelineSpec | 5 |
+prd/PRD-v2-fix.bak.md:119:- **Phase 5** (parallel dev): env-var fallback is un-testable and
+prd/PRD-v2-fix.bak.md:122:- **Phase 6** (multi-reviewer): `ReviewerConfig` is already defined
+tests/test_snapshot.py:141:    def test_list_snapshots_multiple(self, tmp_path):
+tests/test_snapshot.py:142:        """list_snapshots returns multiple snapshots."""
+prd/tech-design-phase11.md:12:# 改：AgentSpec 新增 pipeline_role + task_instruction
+prd/tech-design-phase11.md:19:    pipeline_role: AgentRole | None = None     # NEW: 行为映射
+prd/tech-design-phase11.md:25:        """返回 pipeline_role（如果有），否则返回 role 本身。"""
+prd/tech-design-phase11.md:26:        return self.pipeline_role if self.pipeline_role else self.role
+prd/tech-design-phase11.md:46:        pipeline_role=ad.get("pipeline_role"),
+prd/tech-design-phase11.md:90:        # 从 Stage 的 agents 配置中取第一个 agent 的 pipeline_role
+prd/tech-design-phase11.md:108:| 现有 `v2-fix-pipeline.yaml`（无 pipeline_role 字段） | ✅ `effective_role` fallback 到 `role` |
+prd/tech-design-phase11.md:109:| `agent.role = "developer"` 无 pipeline_role | ✅ `effective_role = "developer"` |
+prd/tech-design-phase11.md:110:| `agent.role = "architect"` + `pipeline_role = "planner"` | ✅ planner 调度 |
+prd/tech-design-phase11.md:118:2. `test_pipeline_role_fallback` — effective_role 回退到 role
+prd/tech-design-phase11.md:119:3. `test_pipeline_role_override` — pipeline_role 覆盖 role
+prd/tech-design-phase11.md:121:5. `test_required_pipeline_roles` — 缺少 developer/reviewer 时报错
+prd/tech-design-phase11.md:129:| `AgentSpec.pipeline_role: AgentRole \| None = None` | interfaces.py | 新增 optional |
+
+codex
+The working tree only shows observer log changes, so I’m checking the implemented behavior already present in `src/` against the PRD. The main risk I’m seeing is that the PRD’s “same `pipeline_role` forms a parallel group” behavior may not actually be wired into orchestration.
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '280,330p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   280	        self._state.transition("planning_active", "orchestrator",
+   281	                               iter_n=1, note="starting planning loop")
+   282	        self._save_checkpoint()
+   283	        self._run_loop(
+   284	            active_phase="planning_active",
+   285	            review_phase="planning_review",
+   286	            review_of="PRD + tech-design",
+   287	        )
+   288	
+   289	    def _run_dev_loop(self) -> None:
+   290	        """Run Developer ↔ Reviewer loop."""
+   291	        if self._state.halt_signal:
+   292	            return
+   293	        if self.spec.dag is not None:
+   294	            self._run_dag_development()
+   295	        else:
+   296	            self._run_linear_development()
+   297	
+   298	    def _run_review_only(self) -> None:
+   299	        """inspect-only mode: Reviewer(s) → report (no planner, no dev)."""
+   300	        if self._state.halt_signal:
+   301	            return
+   302	        self._state.transition("dev_review", "orchestrator",
+   303	                               iter_n=1, note="starting review-only")
+   304	        self._save_checkpoint()
+   305	        reviewer_count = self._get_reviewer_count()
+   306	        if reviewer_count > 1:
+   307	            self._invoke_multi_reviewer(1, "dev_review")
+   308	        else:
+   309	            self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
+   310	
+   311	    def _run_dag_development(self) -> None:
+   312	        """Run development via DAGScheduler when spec.dag is configured."""
+   313	        from unison.pipeline import DAGScheduler
+   314	
+   315	        self._state.transition("dev_active", "orchestrator",
+   316	                               iter_n=1, note="starting DAG development")
+   317	        self._save_checkpoint()
+   318	
+   319	        scheduler = DAGScheduler(self.spec.dag)
+   320	        cancel_event = scheduler.cancel_event
+   321	        self._dag_cancel_event = cancel_event
+   322	
+   323	        def exec_stage(stage):
+   324	            # Cooperative cancellation: if another stage timed out,
+   325	            # don't start file-system mutations.
+   326	            if cancel_event.is_set():
+   327	                return False
+   328	            invoked = False  # L1 fix #6: track if we actually ran a developer
+   329	            # Use stage.agents when available, fall back to default developer
+   330	            if stage.agents:
+
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '450,510p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   450	        if self._state.last_review_verdict != "PASS":
+   451	            self.halt(
+   452	                f"Max iterations ({max_iter}) reached in {review_of} loop "
+   453	                f"without PASS verdict"
+   454	            )
+   455	
+   456	    # ==================================================================
+   457	    # Internal: agent invocation
+   458	    # ==================================================================
+   459	
+   460	    def _invoke_agent_for_role(self, role: str, iteration: int, review_phase: str = "dev_review") -> None:
+   461	        """Invoke an agent subprocess for *role* at *iteration*.
+   462	
+   463	        Args:
+   464	            role: Agent role ("planner", "developer", "reviewer").
+   465	            iteration: Current iteration number.
+   466	            review_phase: "planning_review" or "dev_review" (for correct review file path).
+   467	        """
+   468	        # 0. V2: parallel-dev routing
+   469	        if role == "developer":
+   470	            pd = self.spec.parallel_dev
+   471	            if pd is not None:
+   472	                if pd.enabled:
+   473	                    feature_list = pd.features or []
+   474	                    if not feature_list:
+   475	                        raise PipelineValidationError(
+   476	                            "parallel_dev.enabled=True but features list is empty. "
+   477	                            "Either set features=[...] or set enabled=False."
+   478	                        )
+   479	                    self._invoke_parallel_developers(iteration, pd, feature_list)
+   480	                    return
+   481	                # enabled=False → fall through to single-developer path
+   482	                # (documented kill switch, tested as regression guard)
+   483	
+   484	        world = self.spec.world
+   485	
+   486	        # 1. Select runner with budget-aware downgrade
+   487	        runner, effective_spec = self._select_runner(role)
+   488	        if runner is None or effective_spec is None:
+   489	            return
+   490	
+   491	        # 2. Check budget overflow BEFORE invoking agent
+   492	        tracker = self._get_budget_tracker(role)
+   493	        if not tracker.check_budget():
+   494	            if self.spec.budget.overflow_action == "halt":
+   495	                self.halt(
+   496	                    f"budget overflow: {role} "
+   497	                    f"(daily={tracker.current_usage}/{tracker.daily_limit})"
+   498	                )
+   499	                return
+   500	            # overflow_action == "downgrade" — already handled in _select_runner
+   501	
+   502	        # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
+   503	        if role == "developer":
+   504	            self.pre_invoke_cleanup()
+   505	
+   506	        if self._state.halt_signal:
+   507	            return
+   508	
+   509	        # 4. Build prompt (uses BudgetTracker for token budget)
+   510	        prompt = self._build_prompt(role, iteration, review_phase=review_phase)
+
+exec
+/bin/bash -lc "nl -ba src/unison/pipeline.py | sed -n '260,332p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   260	                )
+   261	        return True
+   262	
+   263	    # ==================================================================
+   264	    # Private helpers
+   265	    # ==================================================================
+   266	
+   267	    # -- validation ----------------------------------------------------
+   268	
+   269	    def _validate_required_agents(self, agents_raw: dict[str, Any]) -> None:
+   270	        """Check that all required pipeline roles are covered.
+   271	
+   272	        Each agent in *agents_raw* has an effective pipeline role:
+   273	        ``pipeline_role`` if explicitly set, otherwise its ``role`` field.
+   274	        At least one agent must map to each role in
+   275	        ``REQUIRED_PIPELINE_ROLES``.
+   276	        """
+   277	        for required_role in self.REQUIRED_PIPELINE_ROLES:
+   278	            found = False
+   279	            for key, ad in agents_raw.items():
+   280	                if not isinstance(ad, dict):
+   281	                    continue
+   282	                pr = ad.get("pipeline_role")
+   283	                role = ad.get("role", "")
+   284	                effective = pr if pr else role
+   285	                if effective == required_role:
+   286	                    found = True
+   287	                    break
+   288	            if not found:
+   289	                raise PipelineValidationError(
+   290	                    f"Missing required pipeline_role: {required_role!r}. "
+   291	                    f"At least one agent must map to this role "
+   292	                    f"(via role= or pipeline_role=). "
+   293	                    f"Currently configured: {list(agents_raw.keys())}"
+   294	                )
+   295	
+   296	    # -- builders ------------------------------------------------------
+   297	
+   298	    def _build_agents(
+   299	        self, agents_raw: dict[str, Any]
+   300	    ) -> dict[str, AgentSpec]:
+   301	        """Build AgentSpec dict from raw YAML agent definitions."""
+   302	        result: dict[str, AgentSpec] = {}
+   303	        for key, ad in agents_raw.items():
+   304	            if not isinstance(ad, dict):
+   305	                raise PipelineValidationError(
+   306	                    f"Agent '{key}' definition must be a mapping"
+   307	                )
+   308	
+   309	            role = ad.get("role", "")
+   310	            if not role:
+   311	                raise PipelineValidationError(
+   312	                    f"Agent '{key}' is missing required field: role"
+   313	                )
+   314	
+   315	            runtime = ad.get("runtime", "")
+   316	            if runtime not in self.VALID_RUNTIMES:
+   317	                raise PipelineValidationError(
+   318	                    f"Invalid runtime '{runtime}' for agent '{key}'"
+   319	                )
+   320	
+   321	            result[role] = AgentSpec(
+   322	                role=role,
+   323	                runtime=runtime,
+   324	                model=ad.get("model", ""),
+   325	                system_prompt_path=Path(ad.get("system_prompt_path", "")),
+   326	                task_instruction=ad.get("task_instruction"),
+   327	                pipeline_role=ad.get("pipeline_role"),
+   328	                context_budget=ad.get("context_budget"),
+   329	            )
+   330	        return result
+   331	
+   332	    def _build_project(self, raw: dict[str, Any] | None) -> ProjectConfig:
+
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '930,970p;1138,1165p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   930	            prd_content=prd_content,
+   931	            design_content=design_content,
+   932	            last_review_findings=top_findings,
+   933	            git_diff=diff,
+   934	            token_budget=remaining,
+   935	        )
+   936	        return assembled.prompt
+   937	
+   938	    # ==================================================================
+   939	    # Internal: helpers
+   940	    # ==================================================================
+   941	
+   942	    def _resolve_agent(self, pipeline_role: str) -> AgentSpec | None:
+   943	        """Resolve an AgentSpec by effective_role.
+   944	
+   945	        First tries exact key match in ``spec.agents`` (backward
+   946	        compatible — agents named "planner"/"developer"/"reviewer").
+   947	        Falls back to scanning all agents for one whose
+   948	        ``effective_role`` matches *pipeline_role*.
+   949	
+   950	        Returns:
+   951	            The matching ``AgentSpec``, or ``None`` if no agent maps
+   952	            to *pipeline_role*.
+   953	        """
+   954	        from interfaces import AgentSpec
+   955	
+   956	        if pipeline_role in self.spec.agents:
+   957	            return self.spec.agents[pipeline_role]
+   958	        for agent in self.spec.agents.values():
+   959	            if agent.effective_role == pipeline_role:
+   960	                return agent
+   961	        return None
+   962	
+   963	    def _get_budget_tracker(self, role: str = "") -> BudgetTracker:
+   964	        """Return the shared BudgetTracker, creating it lazily.
+   965	
+   966	        Per-agent ``context_budget`` overrides the global
+   967	        ``BudgetConfig.per_task_limit`` when set on the agent's spec.
+   968	
+   969	        If the tracker already exists but the requested role has a
+   970	        different per-task limit (e.g. planner ran first with the
+  1138	        if runner is None:
+  1139	            self.halt(f"No runner for runtime: {effective_spec.runtime}")
+  1140	            return None, None
+  1141	        return runner, effective_spec
+  1142	
+  1143	    def _get_reviewer_count(self) -> int:
+  1144	        """Return the number of parallel reviewers to use.
+  1145	
+  1146	        Precedence:
+  1147	        1. ``spec.reviewer_config`` (when enabled)
+  1148	        2. ``UNISON_REVIEWER_COUNT`` env var (fallback, default 1)
+  1149	        """
+  1150	        if (
+  1151	            self.spec.reviewer_config is not None
+  1152	            and self.spec.reviewer_config.enabled
+  1153	        ):
+  1154	            return self.spec.reviewer_config.count
+  1155	        return int(os.environ.get("UNISON_REVIEWER_COUNT", "1"))
+  1156	
+  1157	    def _run_bootstrap(self) -> None:
+  1158	        """Execute bootstrap commands in local shell (§12).
+  1159	
+  1160	        Bootstrap runs before the state machine.  Commands are executed
+  1161	        sequentially in the project root directory.
+  1162	        """
+  1163	        for cmd in self.spec.bootstrap.commands:
+  1164	            if self._state.halt_signal:
+  1165	                return
+
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '666,810p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   666	    def _invoke_multi_reviewer(
+   667	        self, iteration: int, review_phase: str = "dev_review"
+   668	    ) -> None:
+   669	        """Invoke multiple reviewers in parallel via ReviewerPool.
+   670	
+   671	        Each reviewer writes to a unique path ``reviews/iter-{N}-R{i}.md``.
+   672	        After all reviewers complete, verdicts are reconciled
+   673	        (majority or unanimous) and the final verdict is written to
+   674	        ``reviews/iter-{N}.md`` for the standard verdict routing path.
+   675	
+   676	        Individual reviewer verdicts are stored in
+   677	        ``self._state.reviewer_verdicts`` for V2 multi-reviewer tracking.
+   678	
+   679	        Args:
+   680	            iteration: Current iteration number.
+   681	        """
+   682	        from interfaces import ReviewerConfig
+   683	        from unison.reviewer_pool import ReviewerPool
+   684	
+   685	        world = self.spec.world
+   686	        agent_spec = self._resolve_agent("reviewer")
+   687	        if agent_spec is None:
+   688	            self.halt("No agent spec for role: reviewer")
+   689	            return
+   690	
+   691	        reviewer_count = self._get_reviewer_count()
+   692	        if reviewer_count < 2:
+   693	            return  # Safety: shouldn't be called for single reviewer
+   694	
+   695	        # L1 fix #3: reviewers only read and write reviews — they don't
+   696	        # need a clean workspace, so skip pre_invoke_cleanup here.
+   697	        if self._state.halt_signal:
+   698	            return
+   699	
+   700	        runner = self._runners.get(agent_spec.runtime)
+   701	        if runner is None:
+   702	            self.halt(f"No runner for runtime: {agent_spec.runtime}")
+   703	            return
+   704	
+   705	        # Thread-safe index counter for reviewer identity
+   706	        reviewer_idx = itertools.count()
+   707	
+   708	        def review_one(code_path: Path) -> ReviewVerdict:
+   709	            """Run a single reviewer agent and return its parsed verdict."""
+   710	            idx = next(reviewer_idx)
+   711	            review_path = world.reviews_dir / f"iter-{iteration}-R{idx}.md"
+   712	
+   713	            # Build reviewer-specific prompt
+   714	            prompt = (
+   715	                f"=== Review Iteration {iteration} "
+   716	                f"(Reviewer {idx + 1} of {reviewer_count}) ===\n"
+   717	                f"1. Run tests: {self.spec.project.test_command}\n"
+   718	                f"2. Write review to reviews/iter-{iteration}-R{idx}.md\n"
+   719	                f"3. Use YAML frontmatter format:\n"
+   720	                f"   ---\n"
+   721	                f"   verdict: PASS | REQUEST_CHANGES\n"
+   722	                f"   summary: ...\n"
+   723	                f"   findings:\n"
+   724	                f"     - [severity] description\n"
+   725	                f"   ---\n"
+   726	                f"4. Do NOT modify src/"
+   727	            )
+   728	
+   729	            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+   730	            log_path = world.agent_log(
+   731	                "reviewer", iteration,  # type: ignore[arg-type]
+   732	                f"{timestamp}_R{idx}",
+   733	            )
+   734	
+   735	            # Run the agent subprocess
+   736	            runner.run(
+   737	                spec=agent_spec,
+   738	                prompt=prompt,
+   739	                workdir=world.root,
+   740	                timeout=self.spec.per_agent_timeout,
+   741	                log_path=log_path,
+   742	            )
+   743	
+   744	            # Post-invoke completion detection
+   745	            self._detector.detect(
+   746	                workspace=world.root,
+   747	                expected_iter=iteration,
+   748	                role="reviewer",
+   749	                log_path=log_path,
+   750	            )
+   751	
+   752	            # Parse verdict from individual reviewer output file
+   753	            if review_path.exists():
+   754	                try:
+   755	                    return self._verdict_parser.parse(review_path, iteration)
+   756	                except Exception:
+   757	                    return ReviewVerdict(
+   758	                        iter_n=iteration,
+   759	                        verdict="REQUEST_CHANGES",
+   760	                        summary=f"Parse error for reviewer {idx}",
+   761	                        findings=[],
+   762	                        raw_path=review_path,
+   763	                    )
+   764	            else:
+   765	                return ReviewVerdict(
+   766	                    iter_n=iteration,
+   767	                    verdict="REQUEST_CHANGES",
+   768	                    summary=f"Reviewer {idx} produced no output",
+   769	                    findings=[],
+   770	                    raw_path=review_path,
+   771	                )
+   772	
+   773	        # Build ReviewerConfig — prefer spec.reviewer_config, fall back to env
+   774	        if self.spec.reviewer_config is not None and self.spec.reviewer_config.enabled:
+   775	            config = self.spec.reviewer_config
+   776	        else:
+   777	            reconcile_strategy = os.environ.get(
+   778	                "UNISON_REVIEWER_STRATEGY", "majority"
+   779	            )
+   780	            if reconcile_strategy not in ("majority", "unanimous"):
+   781	                reconcile_strategy = "majority"
+   782	
+   783	            try:
+   784	                config = ReviewerConfig(
+   785	                    enabled=True,
+   786	                    count=reviewer_count,
+   787	                    reconcile_strategy=reconcile_strategy,  # type: ignore[arg-type]
+   788	                )
+   789	            except ValueError:
+   790	                # Even count + majority → fall back to unanimous
+   791	                config = ReviewerConfig(
+   792	                    enabled=True,
+   793	                    count=reviewer_count,
+   794	                    reconcile_strategy="unanimous",
+   795	                )
+   796	
+   797	        pool = ReviewerPool(config)
+   798	
+   799	        verdicts = pool.execute_parallel(world.root, review_fn=review_one)
+   800	
+   801	        # Store individual verdicts in state for V2 tracking
+   802	        self._state.reviewer_verdicts = [
+   803	            {
+   804	                "iter_n": v.iter_n,
+   805	                "verdict": v.verdict,
+   806	                "summary": v.summary,
+   807	                "findings": v.findings,
+   808	                "raw_path": str(v.raw_path),
+   809	                "suspicious": v.suspicious,
+   810	            }
+
+codex
+I have enough to write the review. The requested tests pass, but the implementation still resolves a single agent per pipeline role and derives reviewer parallelism from config/env rather than from agents sharing `pipeline_role`, which is a PRD-level mismatch.
+apply patch
+patch: completed
+/home/sean/projects/unison/reviews/iter-1.md
+diff --git a/reviews/iter-1.md b/reviews/iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..e60fea45aa588ffdaa2ec1e545e9b7f748ab972b
+--- /dev/null
++++ b/reviews/iter-1.md
+@@ -0,0 +1,8 @@
++---
++verdict: REQUEST_CHANGES
++summary: "Tests pass, but automatic heterogeneous parallel role groups are not implemented."
++findings:
++  - "src/unison/orchestrator.py:305 and src/unison/orchestrator.py:1143 still derive multi-reviewer execution from reviewer_config/UNISON_REVIEWER_COUNT, not from multiple agents sharing pipeline_role=reviewer. A YAML with tech_reviewer and arch_reviewer will load but run only one reviewer unless count is separately configured, violating the PRD detection rule and acceptance case."
++  - "src/unison/orchestrator.py:686 resolves one reviewer spec and reuses its runner/spec for every parallel reviewer copy, while src/unison/orchestrator.py:942 returns only the first effective_role match. This preserves homogeneous N-copy behavior but cannot run heterogeneous reviewers with distinct runtimes/prompts/focus areas as required."
++  - "src/unison/orchestrator.py:460 keeps planner and developer invocation singular except for the older parallel_dev features path, so multiple agents sharing pipeline_role=planner or pipeline_role=developer are not automatically invoked in parallel and no multi-planner or multi-developer merge flow from the PRD is wired."
++---
+
+diff --git a/reviews/iter-1.md b/reviews/iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..e60fea45aa588ffdaa2ec1e545e9b7f748ab972b
+--- /dev/null
++++ b/reviews/iter-1.md
+@@ -0,0 +1,8 @@
++---
++verdict: REQUEST_CHANGES
++summary: "Tests pass, but automatic heterogeneous parallel role groups are not implemented."
++findings:
++  - "src/unison/orchestrator.py:305 and src/unison/orchestrator.py:1143 still derive multi-reviewer execution from reviewer_config/UNISON_REVIEWER_COUNT, not from multiple agents sharing pipeline_role=reviewer. A YAML with tech_reviewer and arch_reviewer will load but run only one reviewer unless count is separately configured, violating the PRD detection rule and acceptance case."
++  - "src/unison/orchestrator.py:686 resolves one reviewer spec and reuses its runner/spec for every parallel reviewer copy, while src/unison/orchestrator.py:942 returns only the first effective_role match. This preserves homogeneous N-copy behavior but cannot run heterogeneous reviewers with distinct runtimes/prompts/focus areas as required."
++  - "src/unison/orchestrator.py:460 keeps planner and developer invocation singular except for the older parallel_dev features path, so multiple agents sharing pipeline_role=planner or pipeline_role=developer are not automatically invoked in parallel and no multi-planner or multi-developer merge flow from the PRD is wired."
++---
+
+exec
+/bin/bash -lc "sed -n '1,80p' reviews/iter-1.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+---
+verdict: REQUEST_CHANGES
+summary: "Tests pass, but automatic heterogeneous parallel role groups are not implemented."
+findings:
+  - "src/unison/orchestrator.py:305 and src/unison/orchestrator.py:1143 still derive multi-reviewer execution from reviewer_config/UNISON_REVIEWER_COUNT, not from multiple agents sharing pipeline_role=reviewer. A YAML with tech_reviewer and arch_reviewer will load but run only one reviewer unless count is separately configured, violating the PRD detection rule and acceptance case."
+  - "src/unison/orchestrator.py:686 resolves one reviewer spec and reuses its runner/spec for every parallel reviewer copy, while src/unison/orchestrator.py:942 returns only the first effective_role match. This preserves homogeneous N-copy behavior but cannot run heterogeneous reviewers with distinct runtimes/prompts/focus areas as required."
+  - "src/unison/orchestrator.py:460 keeps planner and developer invocation singular except for the older parallel_dev features path, so multiple agents sharing pipeline_role=planner or pipeline_role=developer are not automatically invoked in parallel and no multi-planner or multi-developer merge flow from the PRD is wired."
+---
+
+exec
+/bin/bash -lc 'git diff --name-only' in /home/sean/projects/unison
+ succeeded in 0ms:
+observer/logs/reviewer_iter-1_20260621T120155Z.log
+
+diff --git a/reviews/iter-1.md b/reviews/iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..e60fea45aa588ffdaa2ec1e545e9b7f748ab972b
+--- /dev/null
++++ b/reviews/iter-1.md
+@@ -0,0 +1,8 @@
++---
++verdict: REQUEST_CHANGES
++summary: "Tests pass, but automatic heterogeneous parallel role groups are not implemented."
++findings:
++  - "src/unison/orchestrator.py:305 and src/unison/orchestrator.py:1143 still derive multi-reviewer execution from reviewer_config/UNISON_REVIEWER_COUNT, not from multiple agents sharing pipeline_role=reviewer. A YAML with tech_reviewer and arch_reviewer will load but run only one reviewer unless count is separately configured, violating the PRD detection rule and acceptance case."
++  - "src/unison/orchestrator.py:686 resolves one reviewer spec and reuses its runner/spec for every parallel reviewer copy, while src/unison/orchestrator.py:942 returns only the first effective_role match. This preserves homogeneous N-copy behavior but cannot run heterogeneous reviewers with distinct runtimes/prompts/focus areas as required."
++  - "src/unison/orchestrator.py:460 keeps planner and developer invocation singular except for the older parallel_dev features path, so multiple agents sharing pipeline_role=planner or pipeline_role=developer are not automatically invoked in parallel and no multi-planner or multi-developer merge flow from the PRD is wired."
++---
+
+codex
+Review written to [reviews/iter-1.md](/home/sean/projects/unison/reviews/iter-1.md).
+
+Tests passed: `python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q` -> `27 passed in 0.16s`.
+
+Verdict: `REQUEST_CHANGES`. I did not modify `src/`.
+diff --git a/reviews/iter-1.md b/reviews/iter-1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..e60fea45aa588ffdaa2ec1e545e9b7f748ab972b
+--- /dev/null
++++ b/reviews/iter-1.md
+@@ -0,0 +1,8 @@
++---
++verdict: REQUEST_CHANGES
++summary: "Tests pass, but automatic heterogeneous parallel role groups are not implemented."
++findings:
++  - "src/unison/orchestrator.py:305 and src/unison/orchestrator.py:1143 still derive multi-reviewer execution from reviewer_config/UNISON_REVIEWER_COUNT, not from multiple agents sharing pipeline_role=reviewer. A YAML with tech_reviewer and arch_reviewer will load but run only one reviewer unless count is separately configured, violating the PRD detection rule and acceptance case."
++  - "src/unison/orchestrator.py:686 resolves one reviewer spec and reuses its runner/spec for every parallel reviewer copy, while src/unison/orchestrator.py:942 returns only the first effective_role match. This preserves homogeneous N-copy behavior but cannot run heterogeneous reviewers with distinct runtimes/prompts/focus areas as required."
++  - "src/unison/orchestrator.py:460 keeps planner and developer invocation singular except for the older parallel_dev features path, so multiple agents sharing pipeline_role=planner or pipeline_role=developer are not automatically invoked in parallel and no multi-planner or multi-developer merge flow from the PRD is wired."
++---
+
+tokens used
+36,620
+Review written to [reviews/iter-1.md](/home/sean/projects/unison/reviews/iter-1.md).
+
+Tests passed: `python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q` -> `27 passed in 0.16s`.
+
+Verdict: `REQUEST_CHANGES`. I did not modify `src/`.

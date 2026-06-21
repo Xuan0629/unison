@@ -171,6 +171,9 @@ class PipelineLoader:
         reviewer_cfg = self._build_reviewer_config(raw.get("reviewer_config"))
         parallel_dev_cfg = self._build_parallel_dev(raw.get("parallel_dev"))
 
+        # ---- parallel agent groups (Pipeline B) ----
+        parallel_groups = self._build_parallel_groups(agents)
+
         # ---- mode auto-detection ----
         mode: PipelineMode | None = raw.get("mode")  # type: ignore[assignment]
         if mode is None:
@@ -188,6 +191,7 @@ class PipelineLoader:
             dag=dag_cfg,
             reviewer_config=reviewer_cfg,
             parallel_dev=parallel_dev_cfg,
+            parallel_groups=parallel_groups,
             mode=mode,
         )
 
@@ -448,6 +452,28 @@ class PipelineLoader:
             if key in raw:
                 kwargs[key] = raw[key]
         return ReviewerConfig(**kwargs)
+
+    @staticmethod
+    def _build_parallel_groups(
+        agents: dict[str, AgentSpec],
+    ) -> dict[str, list[str]]:
+        """Group agent names by effective_role (Pipeline B — multi-agent parallel).
+
+        Agents that share the same ``effective_role`` form an automatic
+        parallel group. The orchestrator uses this grouping to decide
+        whether to invoke agents concurrently (multiple agents per role)
+        or sequentially (single agent per role).
+
+        Returns:
+            ``{effective_role: [agent_name, ...], ...}`` — only roles
+            with 2+ agents are included (single-agent roles are omitted).
+        """
+        groups: dict[str, list[str]] = {}
+        for name, spec in agents.items():
+            er = spec.effective_role
+            groups.setdefault(er, []).append(name)
+        # Only return groups with multiple agents
+        return {role: names for role, names in groups.items() if len(names) > 1}
 
     def _build_parallel_dev(
         self, raw: dict[str, Any] | None
