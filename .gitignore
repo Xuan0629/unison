@@ -1,7 +1,10 @@
-.venv/
+# Unison
+observer/logs/
+.unison/budget.json
+.unison/locks/
+.unison/state.json
 __pycache__/
 *.pyc
-.pytest_cache/
-*.egg-info/
-dist/
-build/
+.venv/
+.env
+*.log
