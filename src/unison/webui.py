@@ -16,13 +16,13 @@ Design methodology: Universal UI Design System
   - Responsive: sidebar collapses to horizontal strip below 768 px
   - JS polls /api/state every 3 s, diff-based DOM patching, zero flicker
 
-Features (13 components):
-  1. Topbar — title + phase badge + lang/theme toggles
+Features (20 components):
+  1. Topbar — title + phase badge + lang/theme toggles + export button
   2. Theme toggle — data-theme attr, localStorage, instant CSS transition
   3. Language toggle — EN / CN, all labels + title translated
   4. Phase badge — colour-coded, animated on change
   5. Status cards — Phase, Iteration, Verdict (key metrics first)
-  6. Token card — dual progress bars (daily + per-task) with thresholds
+  6. Token gauge dashboard — 3 SVG ring gauges (Planner/Developer/Reviewer)
   7. Timeline — horizontal phase-transition dots
   8. Active panel — breathing glow, pulsing indicator while working
   9. Error panel — halt signal detail, commit hash with copy button
@@ -30,6 +30,11 @@ Features (13 components):
   11. Agent cards — sidebar, role + runtime + model, active highlight
   12. Task list — sidebar, derived from transition history
   13. Responsive layout — media-query sidebar collapse
+  14. Empty state — shown when no pipeline data yet
+  15. Token settings panel — collapsible sidebar section for localStorage limits
+  16. Pipeline config card — sidebar section with agent config
+  17. Quick export — download state.json from topbar
+  18. History tasks — collapsible sidebar section of past runs
 """
 
 from __future__ import annotations
@@ -384,6 +389,34 @@ body {
   user-select: none;
 }
 
+/* ---- Collapsible sidebar sections ---- */
+
+.sidebar__heading--collapsible {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.sidebar__heading--collapsible:hover {
+  color: var(--fg);
+}
+
+.sidebar__heading-arrow {
+  font-size: 10px;
+  display: inline-block;
+  transition: transform 0.2s ease;
+  line-height: 1;
+}
+
+.sidebar__heading--collapsible.open .sidebar__heading-arrow {
+  transform: rotate(90deg);
+}
+
+.sidebar__collapsible {
+  margin-bottom: var(--space-8);
+}
+
 /* ---- Task list ---- */
 
 .task-item {
@@ -425,6 +458,57 @@ body {
   font-size: var(--fs-xs);
   color: var(--fg-dim);
   flex-shrink: 0;
+}
+
+/* ---- History list ---- */
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-4) var(--space-8);
+  border-radius: 5px;
+  margin-bottom: 2px;
+  font-size: var(--fs-sm);
+  transition: background var(--transition-fast);
+}
+
+.history-item:hover {
+  background: var(--bg-card);
+}
+
+.history-item__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--green);
+}
+
+.history-item__title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.history-item__meta {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+
+.history-item__date {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+
+.history-item--empty {
+  padding: var(--space-4) var(--space-8);
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
 }
 
 /* ---- Agent cards ---- */
@@ -473,6 +557,75 @@ body {
 .agent-card__dot--online  { background: var(--accent); }
 .agent-card__dot--offline { background: var(--fg-dim); }
 
+/* ---- Pipeline config ---- */
+
+.config-agent {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-4) var(--space-8);
+  border-radius: 5px;
+  margin-bottom: 2px;
+  font-size: var(--fs-sm);
+}
+
+.config-agent__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.config-agent__dot--planner   { background: var(--blue); }
+.config-agent__dot--developer  { background: var(--accent); }
+.config-agent__dot--reviewer   { background: var(--purple); }
+.config-agent__dot--default    { background: var(--fg-dim); }
+
+.config-agent__role {
+  font-weight: 500;
+  min-width: 70px;
+  text-transform: capitalize;
+}
+
+.config-agent__meta {
+  color: var(--fg-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Token settings ---- */
+
+.token-settings__field {
+  margin-bottom: var(--space-8);
+}
+
+.token-settings__input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4) var(--space-8);
+  font-size: var(--fs-sm);
+  font-family: var(--font);
+  transition: border-color var(--transition-fast);
+}
+
+.token-settings__input:focus {
+  border-color: var(--border-focus);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.token-settings__hint {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  margin-top: var(--space-4);
+  line-height: 1.4;
+}
+
 
 /* ========================================================================
    7. MAIN CONTENT AREA
@@ -518,12 +671,12 @@ body {
 
 
 /* ========================================================================
-   8. STATUS ROW
+   8. STATUS ROW  (3 columns: Phase | Iteration | Verdict)
    ======================================================================== */
 
 #status-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: var(--space-12);
 }
 
@@ -550,62 +703,115 @@ body {
 .status-card__value--pass            { color: var(--green); }
 .status-card__value--request_changes { color: var(--orange); }
 
-/* ---- Token card ---- */
 
-#token-card {
-  grid-column: span 2;
-  text-align: left;
+/* ========================================================================
+   9. TOKEN GAUGE DASHBOARD
+   ======================================================================== */
+
+#gauge-dashboard {
+  padding: var(--space-16) var(--space-12);
 }
 
-.token-card__row {
+.gauge-row {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: var(--space-4);
+  justify-content: space-around;
+  align-items: flex-start;
+  gap: var(--space-16);
 }
 
-.token-card__row--second {
-  margin-top: var(--space-8);
+.gauge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-8);
+  flex: 1;
+  min-width: 0;
 }
 
-.token-card__label {
-  font-size: 11px;
-  color: var(--fg-dim);
-  user-select: none;
+.gauge__svg {
+  display: block;
+  width: 100%;
+  max-width: 140px;
+  height: auto;
 }
 
-.token-card__nums {
-  font-size: 11px;
-  color: var(--fg);
-  font-weight: 500;
+.gauge__track {
+  stroke: var(--bg);
+}
+
+.gauge__fill {
+  transition: stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.3s ease;
+}
+
+.gauge__pct {
+  font-size: 16px;
+  font-weight: 700;
+  font-family: var(--font);
+  fill: var(--fg);
+}
+
+.gauge__used {
+  font-size: 10px;
   font-family: var(--font-mono);
+  fill: var(--fg-dim);
 }
 
-.token-card__bar-outer {
-  height: 8px;
-  background: var(--bg);
-  border-radius: 4px;
-  overflow: hidden;
+.gauge__limit {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  fill: var(--fg-dim);
 }
 
-.token-card__bar-fill {
-  --bar-width: 0%;
-  width: var(--bar-width);
-  height: 100%;
-  border-radius: 4px;
-  transition: var(--transition-token);
-  min-width: 2px;
+.gauge__agent-label {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  user-select: none;
+  text-align: center;
 }
-
-.token-card__bar-fill--safe   { background: var(--accent); }
-.token-card__bar-fill--warn   { background: var(--orange); }
-.token-card__bar-fill--danger { background: var(--red); }
-
-#token-daily-row { margin-bottom: var(--space-8); }
 
 
 /* ========================================================================
-   9. TIMELINE
+   10. EMPTY STATE
+   ======================================================================== */
+
+.empty-state {
+  text-align: center;
+  padding: var(--space-32) var(--space-16);
+}
+
+.empty-state__icon {
+  font-size: 40px;
+  margin-bottom: var(--space-12);
+  opacity: 0.4;
+}
+
+.empty-state__title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--fg-dim);
+  margin-bottom: var(--space-8);
+}
+
+.empty-state__hint {
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+}
+
+.empty-state__hint code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: var(--accent);
+}
+
+
+/* ========================================================================
+   11. TIMELINE
    ======================================================================== */
 
 #timeline {
@@ -668,7 +874,7 @@ body {
 
 
 /* ========================================================================
-   10. ACTIVE PANEL
+   12. ACTIVE PANEL
    ======================================================================== */
 
 #active-panel {
@@ -725,7 +931,7 @@ body {
 
 
 /* ========================================================================
-   11. ERROR PANEL
+   13. ERROR PANEL
    ======================================================================== */
 
 #error-panel {
@@ -785,7 +991,7 @@ body {
 
 
 /* ========================================================================
-   12. LOG PREVIEW
+   14. LOG PREVIEW
    ======================================================================== */
 
 #log-preview {
@@ -830,7 +1036,7 @@ body {
 
 
 /* ========================================================================
-   13. ANIMATIONS
+   15. ANIMATIONS
    ======================================================================== */
 
 @keyframes fade-in {
@@ -844,7 +1050,7 @@ body {
 
 
 /* ========================================================================
-   14. RESPONSIVE — sidebar collapses below 768 px
+   16. RESPONSIVE — sidebar collapses below 768 px
    ======================================================================== */
 
 @media (max-width: 767px) {
@@ -888,18 +1094,26 @@ body {
     gap: var(--space-8);
   }
 
-  #token-card {
+  #status-row .status-card:last-child {
     grid-column: span 2;
   }
 
   .status-card {
     padding: var(--space-12) var(--space-8);
   }
+
+  .gauge-row {
+    gap: var(--space-8);
+  }
+
+  .gauge__svg {
+    max-width: 100px;
+  }
 }
 
 
 /* ========================================================================
-   15. ACCESSIBILITY
+   17. ACCESSIBILITY
    ======================================================================== */
 
 /* Focus-visible on all interactive elements */
@@ -932,7 +1146,7 @@ button:focus-visible,
 }
 
 /* ========================================================================
-   16. UTILITY
+   18. UTILITY
    ======================================================================== */
 
 .u-hidden { display: none !important; }
@@ -947,6 +1161,11 @@ button:focus-visible,
   <!-- ================================================================== -->
   <header id="topbar" role="banner">
     <span class="topbar__title" id="topbar-title" aria-live="polite">UNISON</span>
+    <button id="export-btn"
+            class="topbar__btn topbar__btn--icon"
+            onclick="exportState()"
+            aria-label="Export state"
+            title="Download state.json">&darr;</button>
     <span id="phase-badge" class="badge badge--init" role="status" aria-label="Pipeline phase">
       <span class="badge__dot" aria-hidden="true"></span>
       <span id="phase-badge-text">--</span>
@@ -977,9 +1196,41 @@ button:focus-visible,
         </div>
       </div>
     </div>
+
+    <div class="sidebar__section">
+      <h3 class="sidebar__heading sidebar__heading--collapsible" id="history-heading-toggle" onclick="toggleSection('history-list')" role="button" tabindex="0" aria-expanded="false">
+        <span class="sidebar__heading-arrow">&#9654;</span>
+        <span id="history-heading">HISTORY</span>
+      </h3>
+      <div id="history-list" class="sidebar__collapsible u-hidden"></div>
+    </div>
+
     <div class="sidebar__section">
       <h3 class="sidebar__heading" id="agents-heading">AGENTS</h3>
       <div id="agent-cards"></div>
+    </div>
+
+    <div class="sidebar__section">
+      <h3 class="sidebar__heading" id="config-heading">CONFIG</h3>
+      <div id="pipeline-config"></div>
+    </div>
+
+    <div class="sidebar__section">
+      <h3 class="sidebar__heading sidebar__heading--collapsible" id="token-settings-heading-toggle" onclick="toggleSection('token-settings')" role="button" tabindex="0" aria-expanded="false">
+        <span class="sidebar__heading-arrow">&#9654;</span>
+        <span id="token-settings-heading">TOKEN SETTINGS</span>
+      </h3>
+      <div id="token-settings" class="sidebar__collapsible u-hidden">
+        <div class="token-settings__field">
+          <input class="token-settings__input" id="daily-limit-input" type="number" placeholder="&infin;" step="1000" min="0" onchange="onTokenSettingChange()" aria-label="Daily token limit">
+          <div class="token-settings__hint" id="daily-limit-hint">Daily Limit</div>
+        </div>
+        <div class="token-settings__field">
+          <input class="token-settings__input" id="task-limit-input" type="number" placeholder="&infin;" step="1000" min="0" onchange="onTokenSettingChange()" aria-label="Per-task token limit">
+          <div class="token-settings__hint" id="task-limit-hint">Per-Task Limit</div>
+        </div>
+        <div class="token-settings__hint" id="settings-hint">Configure in pipeline.yaml budget field for persistence</div>
+      </div>
     </div>
   </nav>
 
@@ -988,7 +1239,14 @@ button:focus-visible,
   <!-- ================================================================== -->
   <main id="content">
 
-    <!-- Status row: Phase | Iteration | Verdict | Token(span 2) -->
+    <!-- Empty state (hidden when data present) -->
+    <div id="no-data-state" class="card empty-state u-hidden">
+      <div class="empty-state__icon">&#128736;</div>
+      <div class="empty-state__title" id="no-data-title">No pipeline data yet.</div>
+      <div class="empty-state__hint" id="no-data-hint"><code>unison run --pipeline my-pipeline.yaml</code></div>
+    </div>
+
+    <!-- Status row: Phase | Iteration | Verdict (3 cards) -->
     <div id="status-row">
       <div class="card status-card card--interactive">
         <div class="status-card__label" id="phase-label">PHASE</div>
@@ -1004,21 +1262,46 @@ button:focus-visible,
         <div class="status-card__label" id="verdict-label">VERDICT</div>
         <div class="status-card__value" id="verdict-value">--</div>
       </div>
+    </div>
 
-      <div class="card" id="token-card">
-        <div class="token-card__row" id="token-daily-row">
-          <span class="token-card__label" id="token-daily-label">Daily</span>
-          <span class="token-card__nums" id="token-daily-nums">0k / 0k</span>
+    <!-- Token gauge dashboard -->
+    <div id="gauge-dashboard" class="card">
+      <div class="gauge-row">
+        <!-- Planner gauge -->
+        <div class="gauge">
+          <svg class="gauge__svg" viewBox="0 0 120 120" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Planner token usage">
+            <circle class="gauge__track" cx="60" cy="60" r="50" fill="none" stroke="var(--bg)" stroke-width="8"/>
+            <circle class="gauge__fill" id="gauge-planner-fill" cx="60" cy="60" r="50" fill="none" stroke="var(--blue)" stroke-width="8" stroke-linecap="round"
+                    stroke-dasharray="314.16" stroke-dashoffset="314.16" transform="rotate(-90 60 60)"/>
+            <text class="gauge__pct" id="gauge-planner-pct" x="60" y="48" text-anchor="middle">0%</text>
+            <text class="gauge__used" id="gauge-planner-used" x="60" y="66" text-anchor="middle">0k</text>
+            <text class="gauge__limit" id="gauge-planner-limit" x="60" y="80" text-anchor="middle">/ 200k</text>
+          </svg>
+          <div class="gauge__agent-label">PLANNER</div>
         </div>
-        <div class="token-card__bar-outer">
-          <div class="token-card__bar-fill token-card__bar-fill--safe" id="token-daily-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Daily token usage"></div>
+        <!-- Developer gauge -->
+        <div class="gauge">
+          <svg class="gauge__svg" viewBox="0 0 120 120" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Developer token usage">
+            <circle class="gauge__track" cx="60" cy="60" r="50" fill="none" stroke="var(--bg)" stroke-width="8"/>
+            <circle class="gauge__fill" id="gauge-dev-fill" cx="60" cy="60" r="50" fill="none" stroke="var(--accent)" stroke-width="8" stroke-linecap="round"
+                    stroke-dasharray="314.16" stroke-dashoffset="314.16" transform="rotate(-90 60 60)"/>
+            <text class="gauge__pct" id="gauge-dev-pct" x="60" y="48" text-anchor="middle">0%</text>
+            <text class="gauge__used" id="gauge-dev-used" x="60" y="66" text-anchor="middle">0k</text>
+            <text class="gauge__limit" id="gauge-dev-limit" x="60" y="80" text-anchor="middle">/ 200k</text>
+          </svg>
+          <div class="gauge__agent-label">DEVELOPER</div>
         </div>
-        <div class="token-card__row token-card__row--second">
-          <span class="token-card__label" id="token-task-label">Per Task</span>
-          <span class="token-card__nums" id="token-task-nums">0k / 0k</span>
-        </div>
-        <div class="token-card__bar-outer">
-          <div class="token-card__bar-fill token-card__bar-fill--safe" id="token-task-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Per-task token usage"></div>
+        <!-- Reviewer gauge -->
+        <div class="gauge">
+          <svg class="gauge__svg" viewBox="0 0 120 120" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Reviewer token usage">
+            <circle class="gauge__track" cx="60" cy="60" r="50" fill="none" stroke="var(--bg)" stroke-width="8"/>
+            <circle class="gauge__fill" id="gauge-reviewer-fill" cx="60" cy="60" r="50" fill="none" stroke="var(--purple)" stroke-width="8" stroke-linecap="round"
+                    stroke-dasharray="314.16" stroke-dashoffset="314.16" transform="rotate(-90 60 60)"/>
+            <text class="gauge__pct" id="gauge-reviewer-pct" x="60" y="48" text-anchor="middle">0%</text>
+            <text class="gauge__used" id="gauge-reviewer-used" x="60" y="66" text-anchor="middle">0k</text>
+            <text class="gauge__limit" id="gauge-reviewer-limit" x="60" y="80" text-anchor="middle">/ 200k</text>
+          </svg>
+          <div class="gauge__agent-label">REVIEWER</div>
         </div>
       </div>
     </div>
@@ -1051,13 +1334,15 @@ var L = {
   en: {
     tasks: "Tasks",
     agents: "Agents",
+    history: "History",
+    config: "Config",
     phase: "Phase",
     iteration: "Iteration",
     tokens: "Tokens",
     verdict: "Verdict",
     daily: "Daily",
     perTask: "Per Task",
-    active: "{agent} is working…",
+    active: "{agent} is working&hellip;",
     halted: "HALTED",
     reason: "Reason",
     done: "Pipeline Complete",
@@ -1067,8 +1352,18 @@ var L = {
     pass: "PASS",
     requestChanges: "REQUEST CHANGES",
     noTasks: "No tasks yet",
-    loading: "Loading…",
-    waiting: "Waiting for pipeline data…",
+    noData: "No pipeline data yet.",
+    noDataHint: "Run your pipeline to see data here.",
+    noAgents: "No agents configured",
+    noHistory: "No completed runs yet",
+    loading: "Loading&hellip;",
+    waiting: "Waiting for pipeline data&hellip;",
+    tokenSettings: "Token Settings",
+    dailyLimit: "Daily Limit",
+    perTaskLimit: "Per-Task Limit",
+    settingsHint: "Configure in pipeline.yaml budget field for persistence",
+    export: "Export state",
+    phasesCount: "{n} phases",
     phases: {
       init: "Init",
       planning_active: "Planning",
@@ -1093,13 +1388,15 @@ var L = {
   cn: {
     tasks: "任务",
     agents: "代理",
+    history: "历史",
+    config: "配置",
     phase: "阶段",
     iteration: "迭代",
     tokens: "令牌",
     verdict: "裁决",
     daily: "每日",
     perTask: "任务",
-    active: "{agent} 正在工作…",
+    active: "{agent} 正在工作&hellip;",
     halted: "已暂停",
     reason: "原因",
     done: "流水线完成",
@@ -1109,8 +1406,18 @@ var L = {
     pass: "通过",
     requestChanges: "需修改",
     noTasks: "暂无任务",
-    loading: "加载中…",
-    waiting: "等待管线数据…",
+    noData: "暂无流水线数据。",
+    noDataHint: "运行流水线以查看数据。",
+    noAgents: "未配置代理",
+    noHistory: "暂无已完成的运行",
+    loading: "加载中&hellip;",
+    waiting: "等待管线数据&hellip;",
+    tokenSettings: "令牌设置",
+    dailyLimit: "每日限额",
+    perTaskLimit: "任务限额",
+    settingsHint: "在 pipeline.yaml 预算字段中配置以持久化",
+    export: "导出状态",
+    phasesCount: "{n} 个阶段",
     phases: {
       init: "初始化",
       planning_active: "规划中",
@@ -1141,6 +1448,7 @@ var _lang   = localStorage.getItem("unison-lang")  || "en";
 var _theme  = localStorage.getItem("unison-theme") || "dark";
 var _prev   = null;   // last /api/state snapshot
 var _pollId = null;   // setInterval handle
+var CIRC    = 314.16; // SVG ring circumference (2 * PI * 50)
 
 // ======================================================================
 // 3. HELPERS
@@ -1178,7 +1486,7 @@ function esc(s) {
 
 /**
  * Map a phase string to its broad colour category.
- * e.g. "planning_active" → "planning"
+ * e.g. "planning_active" &rarr; "planning"
  */
 function phaseCategory(phase) {
   if (!phase) return "init";
@@ -1203,9 +1511,28 @@ function fmtTime(iso) {
   } catch (e) { return iso; }
 }
 
+/** Format an ISO timestamp into a short date string. */
+function fmtDate(iso) {
+  if (!iso) return "";
+  try {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    var m = (d.getMonth() + 1).toString().padStart(2, "0");
+    var day = d.getDate().toString().padStart(2, "0");
+    var hrs = d.getHours().toString().padStart(2, "0");
+    var min = d.getMinutes().toString().padStart(2, "0");
+    return m + "/" + day + " " + hrs + ":" + min;
+  } catch (e) { return iso; }
+}
+
 /** Shallow compare two arrays (via JSON serialisation). */
 function arraysEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Check if the state represents an empty pipeline (no data yet). */
+function isEmpty(s) {
+  return (!s.transitions || s.transitions.length === 0) && (!s.agents || s.agents.length === 0);
 }
 
 
@@ -1244,16 +1571,30 @@ function toggleLang() {
 // ======================================================================
 
 function updateStaticLabels() {
-  document.getElementById("tasks-heading").textContent  = t("tasks");
-  document.getElementById("agents-heading").textContent = t("agents");
-  document.getElementById("phase-label").textContent    = t("phase");
-  document.getElementById("iter-label").textContent     = t("iteration");
-  document.getElementById("verdict-label").textContent  = t("verdict");
-  document.getElementById("token-daily-label").textContent = t("daily");
-  document.getElementById("token-task-label").textContent  = t("perTask");
+  document.getElementById("tasks-heading").textContent              = t("tasks");
+  document.getElementById("history-heading").textContent            = t("history");
+  document.getElementById("agents-heading").textContent             = t("agents");
+  document.getElementById("config-heading").textContent             = t("config");
+  document.getElementById("token-settings-heading").textContent     = t("tokenSettings");
+  document.getElementById("phase-label").textContent                = t("phase");
+  document.getElementById("iter-label").textContent                 = t("iteration");
+  document.getElementById("verdict-label").textContent              = t("verdict");
+  document.getElementById("daily-limit-hint").textContent           = t("dailyLimit");
+  document.getElementById("task-limit-hint").textContent            = t("perTaskLimit");
+  document.getElementById("settings-hint").textContent              = t("settingsHint");
+  document.getElementById("no-data-title").textContent              = t("noData");
+  document.getElementById("no-data-hint").textContent               = t("noDataHint");
+  document.getElementById("export-btn").setAttribute("aria-label",  t("export"));
+  document.getElementById("export-btn").title = t("export");
 
   var no = document.getElementById("no-tasks-label");
   if (no) no.textContent = t("noTasks");
+
+  // Also update config and history if already rendered
+  if (_prev) {
+    patchPipelineConfig(_prev);
+    patchHistory();
+  }
 }
 
 
@@ -1287,14 +1628,17 @@ function patchAll(s) {
   patchTitle(s);
   patchPhaseBadge(s);
   patchStatusCards(s);
-  patchTokenCard(s);
+  patchGauges(s);
   patchVerdict(s);
   patchActive(s);
   patchTimeline(s);
   patchTasks(s);
   patchAgents(s);
+  patchPipelineConfig(s);
   patchError(s);
   patchLog(s);
+  patchEmptyState(s);
+  patchHistory();
   updateStaticLabels();
 }
 
@@ -1318,11 +1662,16 @@ function diffPatch(prev, next) {
     prev.budget.daily_limit     !== next.budget.daily_limit ||
     prev.budget.per_task_used   !== next.budget.per_task_used ||
     prev.budget.per_task_limit  !== next.budget.per_task_limit;
-  if (budgetChanged) patchTokenCard(next);
+  if (budgetChanged) patchGauges(next);
 
   if (!arraysEqual(prev.tasks,       next.tasks))       patchTasks(next);
-  if (!arraysEqual(prev.agents,      next.agents))      patchAgents(next);
-  if (!arraysEqual(prev.transitions, next.transitions)) { patchTimeline(next); patchTasks(next); patchLog(next); }
+  if (!arraysEqual(prev.agents,      next.agents))      { patchAgents(next); patchPipelineConfig(next); patchEmptyState(next); }
+  if (!arraysEqual(prev.transitions, next.transitions)) { patchTimeline(next); patchTasks(next); patchLog(next); patchEmptyState(next); }
+
+  // Detect phase transition to "done" for history save
+  if (prev.phase !== "done" && next.phase === "done") {
+    saveHistoryEntry(next);
+  }
 }
 
 
@@ -1384,41 +1733,74 @@ function patchVerdict(s) {
   el.className = "status-card__value status-card__value--" + v.toLowerCase();
 }
 
-// -- 9e. Token card (dual progress bars) -------------------------------
+// -- 9e. Token gauge dashboard -----------------------------------------
 
-function patchTokenCard(s) {
+function patchGauges(s) {
   var b = s.budget || {};
-  var du = b.daily_used     || 0;
-  var dl = b.daily_limit    || 1000000;
-  var pu = b.per_task_used  || 0;
-  var pl = b.per_task_limit || 200000;
+  var used = b.per_task_used  || 0;
+  var limit = b.per_task_limit || 200000;
 
-  renderTokenBar("token-daily-bar", "token-daily-nums", du, dl);
-  renderTokenBar("token-task-bar",  "token-task-nums",  pu, pl);
+  // Apply localStorage overrides
+  var dailyOverride = parseInt(localStorage.getItem("unison-daily-limit"), 10);
+  var taskOverride  = parseInt(localStorage.getItem("unison-task-limit"), 10);
+
+  // All three gauges show the same per-task budget for now
+  renderGauge("planner", used, limit);
+  renderGauge("dev", used, limit);
+  renderGauge("reviewer", used, limit);
+
+  // Also update daily used portion if we had it
+  var du = b.daily_used || 0;
+  var dl = dailyOverride && dailyOverride > 0 ? dailyOverride : (b.daily_limit || 1000000);
+  // Show daily use in the planner gauge title for now
+  var svg = document.querySelector("#gauge-dashboard .gauge:nth-child(1) svg");
+  if (svg) {
+    var duk = Math.round(du / 1000);
+    var dlk = Math.round(dl / 1000);
+    svg.setAttribute("title", "Daily: " + duk + "k / " + dlk + "k  |  Per-task: " + Math.round(used/1000) + "k / " + Math.round(limit/1000) + "k");
+  }
 }
 
-function renderTokenBar(barId, numsId, used, limit) {
+function renderGauge(agent, used, limit) {
   var pct = limit > 0 ? Math.min(100, Math.round(used / limit * 100)) : 0;
-  var bar = document.getElementById(barId);
 
-  // Set width via CSS custom property (NEVER inline style)
-  bar.style.setProperty("--bar-width", pct + "%");
+  // Determine stroke colour based on threshold
+  var fillEl = document.getElementById("gauge-" + agent + "-fill");
+  var pctEl  = document.getElementById("gauge-" + agent + "-pct");
+  var usedEl = document.getElementById("gauge-" + agent + "-used");
+  var limitEl = document.getElementById("gauge-" + agent + "-limit");
+  var svgEl = fillEl ? fillEl.closest("svg") : null;
 
-  // Threshold class for colour
-  var thresholdCls;
-  if (pct > 90)      thresholdCls = "token-card__bar-fill--danger";
-  else if (pct > 70) thresholdCls = "token-card__bar-fill--warn";
-  else               thresholdCls = "token-card__bar-fill--safe";
+  if (!fillEl) return;
 
-  bar.className = "token-card__bar-fill " + thresholdCls;
+  // Colour by threshold: <70% normal agent colour, 70-90% orange, >90% red
+  var colour;
+  if (pct > 90)      colour = "var(--red)";
+  else if (pct > 70) colour = "var(--orange)";
+  else {
+    if (agent === "planner")      colour = "var(--blue)";
+    else if (agent === "dev")     colour = "var(--accent)";
+    else                          colour = "var(--purple)";
+  }
 
-  // Update ARIA
-  bar.setAttribute("aria-valuenow", String(pct));
+  var dashOffset = CIRC * (1 - pct / 100);
+  fillEl.setAttribute("stroke", colour);
+  fillEl.setAttribute("stroke-dashoffset", String(dashOffset));
 
-  // Update numeric label
-  var uk = Math.round(used / 1000);
-  var lk = Math.round(limit / 1000);
-  document.getElementById(numsId).textContent = uk + "k / " + lk + "k";
+  if (pctEl)  pctEl.textContent  = pct + "%";
+  if (usedEl) usedEl.textContent = Math.round(used / 1000) + "k";
+  if (limitEl) limitEl.textContent = "/ " + Math.round(limit / 1000) + "k";
+
+  // Update ARIA on SVG meter
+  if (svgEl) {
+    svgEl.setAttribute("aria-valuenow", String(pct));
+  }
+
+  // Update title for hover tooltip
+  var label = agent.charAt(0).toUpperCase() + agent.slice(1);
+  if (svgEl) {
+    svgEl.setAttribute("title", label + ": " + Math.round(used/1000) + "k / " + Math.round(limit/1000) + "k (" + pct + "%)");
+  }
 }
 
 // -- 9f. Active panel -------------------------------------------------
@@ -1540,7 +1922,33 @@ function patchAgents(s) {
   el.innerHTML = html;
 }
 
-// -- 9j. Error panel ---------------------------------------------------
+// -- 9j. Pipeline config card ------------------------------------------
+
+function patchPipelineConfig(s) {
+  var el = document.getElementById("pipeline-config");
+  var agents = s.agents || [];
+  if (!agents.length) {
+    el.innerHTML = '<div class="history-item--empty">' + esc(t("noAgents")) + '</div>';
+    return;
+  }
+  var html = "";
+  for (var i = 0; i < agents.length; i++) {
+    var a = agents[i];
+    var dotCls = "config-agent__dot config-agent__dot--";
+    if (a.role === "planner")       dotCls += "planner";
+    else if (a.role === "developer") dotCls += "developer";
+    else if (a.role === "reviewer")  dotCls += "reviewer";
+    else                             dotCls += "default";
+    html += '<div class="config-agent">';
+    html += '<span class="' + dotCls + '" aria-hidden="true"></span>';
+    html += '<span class="config-agent__role">' + esc(a.role) + '</span>';
+    html += '<span class="config-agent__meta">' + esc(a.runtime || "") + ' / ' + esc(a.model || "") + '</span>';
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+// -- 9k. Error panel ---------------------------------------------------
 
 function patchError(s) {
   var el = document.getElementById("error-panel");
@@ -1563,7 +1971,7 @@ function patchError(s) {
   }
 }
 
-// -- 9k. Copy commit ---------------------------------------------------
+// -- 9l. Copy commit ---------------------------------------------------
 
 function copyCommit(hash, btn) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1591,7 +1999,7 @@ function fallbackCopy(text, btn) {
   setTimeout(function () { btn.textContent = t("copy"); }, 2000);
 }
 
-// -- 9l. Log preview ---------------------------------------------------
+// -- 9m. Log preview ---------------------------------------------------
 
 function patchLog(s) {
   var el = document.getElementById("log-preview");
@@ -1619,14 +2027,194 @@ function patchLog(s) {
   el.innerHTML = html;
 }
 
+// -- 9n. Empty state ---------------------------------------------------
+
+function patchEmptyState(s) {
+  var el = document.getElementById("no-data-state");
+  var timeline = document.getElementById("timeline");
+  var active   = document.getElementById("active-panel");
+  var log      = document.getElementById("log-preview");
+
+  if (isEmpty(s)) {
+    el.classList.remove("u-hidden");
+    if (timeline) timeline.classList.add("u-hidden");
+    if (active)   active.classList.add("u-hidden");
+    if (log)      log.classList.add("u-hidden");
+  } else {
+    el.classList.add("u-hidden");
+    if (timeline) timeline.classList.remove("u-hidden");
+    if (active)   active.classList.remove("u-hidden");
+    if (log)      log.classList.remove("u-hidden");
+  }
+}
+
 
 // ======================================================================
-// 10. INITIALISATION
+// 10. TOKEN SETTINGS
+// ======================================================================
+
+function onTokenSettingChange() {
+  var daily = document.getElementById("daily-limit-input").value;
+  var task  = document.getElementById("task-limit-input").value;
+
+  if (daily && parseInt(daily, 10) > 0) {
+    localStorage.setItem("unison-daily-limit", daily);
+  } else {
+    localStorage.removeItem("unison-daily-limit");
+  }
+
+  if (task && parseInt(task, 10) > 0) {
+    localStorage.setItem("unison-task-limit", task);
+  } else {
+    localStorage.removeItem("unison-task-limit");
+  }
+
+  // Re-render gauges with new limits
+  if (_prev) patchGauges(_prev);
+}
+
+// Restore token settings inputs from localStorage
+function restoreTokenSettings() {
+  var daily = localStorage.getItem("unison-daily-limit");
+  var task  = localStorage.getItem("unison-task-limit");
+  if (daily) document.getElementById("daily-limit-input").value = daily;
+  if (task)  document.getElementById("task-limit-input").value  = task;
+}
+
+
+// ======================================================================
+// 11. COLLAPSIBLE SECTIONS
+// ======================================================================
+
+function toggleSection(id) {
+  var content = document.getElementById(id);
+  if (!content) return;
+  var isHidden = content.classList.contains("u-hidden");
+  if (isHidden) {
+    content.classList.remove("u-hidden");
+  } else {
+    content.classList.add("u-hidden");
+  }
+  // Toggle open class on the associated heading
+  var headingId = id === "history-list" ? "history-heading-toggle" : "token-settings-heading-toggle";
+  var heading = document.getElementById(headingId);
+  if (heading) {
+    if (isHidden) {
+      heading.classList.add("open");
+      heading.setAttribute("aria-expanded", "true");
+    } else {
+      heading.classList.remove("open");
+      heading.setAttribute("aria-expanded", "false");
+    }
+  }
+  // Persist state
+  localStorage.setItem("unison-section-" + id, isHidden ? "open" : "closed");
+}
+
+function restoreSectionStates() {
+  var sections = ["history-list", "token-settings"];
+  for (var i = 0; i < sections.length; i++) {
+    var id = sections[i];
+    var state = localStorage.getItem("unison-section-" + id);
+    if (state === "open") {
+      var content = document.getElementById(id);
+      if (content) content.classList.remove("u-hidden");
+      var headingId = id === "history-list" ? "history-heading-toggle" : "token-settings-heading-toggle";
+      var heading = document.getElementById(headingId);
+      if (heading) {
+        heading.classList.add("open");
+        heading.setAttribute("aria-expanded", "true");
+      }
+    }
+  }
+}
+
+
+// ======================================================================
+// 12. QUICK EXPORT
+// ======================================================================
+
+function exportState() {
+  fetch("/api/state")
+    .then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      var blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "state.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    })
+    .catch(function (_) { /* silent fail */ });
+}
+
+
+// ======================================================================
+// 13. HISTORY TASKS  (localStorage-based completed run log)
+// ======================================================================
+
+function loadHistory() {
+  try {
+    var raw = localStorage.getItem("unison-history");
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) { return []; }
+}
+
+function saveHistoryEntry(s) {
+  var entry = {
+    title: s.mode || "code-dev",
+    date: new Date().toISOString(),
+    phaseCount: (s.transitions || []).length,
+    verdict: s.last_verdict || "done"
+  };
+  var history = loadHistory();
+  history.unshift(entry);
+  // Cap at 50 entries
+  if (history.length > 50) history = history.slice(0, 50);
+  localStorage.setItem("unison-history", JSON.stringify(history));
+  patchHistory();
+}
+
+function patchHistory() {
+  var el = document.getElementById("history-list");
+  if (!el) return;
+  var history = loadHistory();
+  if (!history.length) {
+    el.innerHTML = '<div class="history-item--empty" id="no-history-label">' + esc(t("noHistory")) + '</div>';
+    return;
+  }
+  // Show last 10 entries
+  var recent = history.slice(0, 10);
+  var html = "";
+  for (var i = 0; i < recent.length; i++) {
+    var h = recent[i];
+    html += '<div class="history-item">';
+    html += '<span class="history-item__dot" aria-hidden="true"></span>';
+    html += '<span class="history-item__title">' + esc(h.title) + '</span>';
+    html += '<span class="history-item__meta">' + esc(t("phasesCount", {n: h.phaseCount})) + '</span>';
+    html += '<span class="history-item__date">' + esc(fmtDate(h.date)) + '</span>';
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+
+// ======================================================================
+// 14. INITIALISATION
 // ======================================================================
 
 (function init() {
   applyTheme();
   applyLang();
+  restoreTokenSettings();
+  restoreSectionStates();
+  patchHistory();
   poll();
   _pollId = setInterval(poll, 3000);
 })();
