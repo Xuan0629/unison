@@ -1,0 +1,669 @@
+=== COMMAND ===
+codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 2: 1. Run tests: python3 -m pytest tests/test_orchestrator.py tests/test_pipeline.py tests/test_custom_roles.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-2.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Git Diff
+diff --git a/.unison/budget.json b/.unison/budget.json
+index 198c752..950d8b7 100644
+--- a/.unison/budget.json
++++ b/.unison/budget.json
+@@ -1,7 +1,7 @@
+ {
+... (truncated)
+@@ -14,6 +14,12 @@
+       "iter_n": 1,
+       "tokens_used": 2855,
+       "timestamp": "2026-06-21T12:09:35.281265+00:00"
++    },
++    {
++      "phase": "developer",
++      "iter_n": 2,
++      "tokens_used": 3221,
++      "timestamp": "2026-06-21T12:15:49.363530+00:00"
+     }
+   ]
+ }
+\ No newline at end of file
+
+
+diff --git a/observer/logs/developer_iter-2_20260621T120935Z.log b/observer/logs/developer_iter-2_20260621T120935Z.log
+index ea83c8c..0782870 100644
+--- a/observer/logs/developer_iter-2_20260621T120935Z.log
++++ b/observer/logs/developer_iter-2_20260621T120935Z.log
+@@ -321,3 +321,31 @@ own system prompt with different focus areas.
+ 
+ 
+ === OUTPUT ===
++All tasks complete. Here's a summary of what was implemented:
++
++## Pipeline B — Multi-Agent Parallel (all roles, dual-mode)
++
++### Changes made across 3 files:
++
++**`interfaces.py`**
++- Added `parallel_mode: Literal["homogeneous", "heterogeneous"]` field to `ReviewerConfig` (default: `"homogeneous"`)
++- Added `parallel_groups: dict[str, list[str]]` to `PipelineSpec` for tracking which agents share each `effective_role`
++
++**`src/unison/pipeline.py`**
++- Added `_build_parallel_groups(agents)` static method that groups agent names by `effective_role`, returning only groups with 2+ agents
++- Wire the computed groups into `PipelineSpec` during `load()`
++
++**`src/unison/orchestrator.py`** (the bulk of changes):
++- **`_resolve_agents(pipeline_role) → list[AgentSpec]`** — returns ALL agents matching an effective_role (replaces singular `_resolve_agent` for multi-agent discovery)
++- **`_detect_parallel_mode(agent_specs) → str`** — auto-detects homogeneous (all same runtime) vs heterogeneous (different runtimes) per role group
++- **`_invoke_agents_parallel(...)`** — dispatches via `ThreadPoolExecutor` for concurrent agent invocation, routing to `_invoke_multi_planner`, `_invoke_multi_developer`, or `_invoke_multi_reviewer` based on role
++- **`_invoke_multi_planner(...)`** — runs multiple planners concurrently, each writing to `prd/PRD-{name}.md` + `prd/tech-design-{name}.md`, symlinks first planner's output as canonical
++- **`_invoke_multi_developer(...)`** — runs developers in isolated git worktrees, merges all branches after completion
++- **`_invoke_multi_reviewer(...)`** — extended to accept optional `agent_specs` list for heterogeneous mode (each reviewer uses its own runner, spec, and system prompt)
++- **`_run_loop`** and **`_run_review_only`** — auto-detect multi-agent groups via `_resolve_agents` instead of config-only checks
++- **`_get_reviewer_count()`** — now derives from agent composition first, falls back to config/env
++- **`_build_prompt_for_agent(...)`** — builds a prompt for an explicit `AgentSpec` (needed when multiple agents share a pipeline_role)
++
++### Test results:
++- `tests/test_orchestrator.py tests/test_custom_roles.py -q`: **27 passed**
++- Full test suite: **510 passed**
+
+
+diff --git a/observer/logs/reviewer_iter-2_20260621T121549Z.log b/observer/logs/reviewer_iter-2_20260621T121549Z.log
+new file mode 100644
+index 0000000..051712b
+--- /dev/null
++++ b/observer/logs/reviewer_iter-2_20260621T121549Z.log
+@@ -0,0 +1,1540 @@
++=== COMMAND ===
++codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 2: 1. Run tests: python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-2.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
++
++# Reviewer — Unison code review fix
++
++Review the current iteration's output.
++
++Plan review: check PRD/tech-design for correctness, completeness, feasibility.
++Dev review: check code changes match the design, tests pass, no regressions.
++
++Output:
++```
++verdict: PASS | REQUEST_CHANGES
++summary: <1-line>
++findings:
++  - <specific issue if any>
++```
++
++
++## Git Diff
++
+
+diff --git a/observer/logs/developer_iter-2_20260621T121328Z.log b/observer/logs/developer_iter-2_20260621T121328Z.log
++new file mode 100644
++index 0000000..7a4864f
++--- /dev/null
+++++ b/observer/logs/developer_iter-2_20260621T121328Z.log
++@@ -0,0 +1,305 @@
+++=== COMMAND ===
+++claude -p --dangerously-skip-permissions Implement 6 named pipeline modes per prd/PRD.md. Changes: (1) interfaces.py: add PipelineMode Literal + mode field to PipelineSpec, (2) pipeline.py: auto-detect mode in load(), (3) orchestrator.py: replace binary _should_plan with mode dispatch table in _run_state_machine, add _run_planning_loop/_run_dev_loop/_run_review_only helpers, (4) cli.py: mode subcommand shows name. Keep ~500 tests green. git add -A && git commit.
+++
+++# Developer — Unison code review fix
+++
+++Implement the fix per the approved PRD and tech-design.
+++
+++1. Read prd/PRD.md and prd/tech-design.md
+++2. Modify only the files specified in the design
+++3. Keep tests green — run the test command first
+++4. git add -A && git commit with a descriptive message
+++
+++
++... (truncated)
++
++
+
+diff --git a/.unison/budget.json b/.unison/budget.json
+++new file mode 100644
+++index 0000000..198c752
+++--- /dev/null
++++++ b/.unison/budget.json
+++@@ -0,0 +1,19 @@
++++{
++++  "date": "2026-06-21",
++++  "daily_used": 5805,
++++  "task_used": 5805,
++++  "phases": [
++++    {
++++      "phase": "developer",
++++      "iter_n": 1,
++++      "tokens_used": 2950,
++++      "timestamp": "2026-06-21T12:07:33.250170+00:00"
++++    },
++++    {
++++      "phase": "reviewer",
++++      "iter_n": 1,
++++      "tokens_used": 2855,
+++... (truncated)
+++
+++
++
++
+
+diff --git a/interfaces.py b/interfaces.py
+++index c001b4e..bdb7e8c 100644
+++--- a/interfaces.py
++++++ b/interfaces.py
+++@@ -275,6 +275,7 @@ class PipelineSpec:
+++     dag: list[Stage] | None = None  # V2: DAG 多 phase 并行（None → V1 线性模式）
+++     parallel_dev: WorktreeConfig | None = None  # V2: 并行 Developer
+++     reviewer_config: ReviewerConfig | None = None  # V2: multi-reviewer
++++    parallel_groups: dict[str, list[str]] = field(default_factory=dict)  # Pipeline B: effective_role → agent names
+++     mode: PipelineMode | None = None  # Named pipeline mode (auto-detected if not set)
+++     max_iterations: int = 5
+++     per_agent_timeout: int = 600    # 秒。Codex 慢需 300s+
+++@@ -510,10 +511,14 @@ class ReviewerConfig:
+++         reconcile_strategy: verdict 合并策略。
+++             "majority" — 多数投票（2 of 3 → PASS）。
+++             "unanimous" — 全票通过（任意一个 REQUEST_CHANGES → REQUEST_CHANGES）。
++++        parallel_mode: 并行模式（Pipeline B — multi-agent parallel）。
++++            "homogeneous" — N 份相同 agent 副本。
++++            "heterogeneous" — 不同 agent 独立运行，各有自己的关注领域。
+++     """
+++     enabled: bool = False
+++     count: int = 3
+++     reconcile_strategy: Literal["majority", "unanimous"] = "majority"
++++    parallel_mode: Literal["homogeneous", "heterogeneous"] = "homogeneous"
+++ 
+++     def __post_init__(self):
+++         if self.count < 1:
+++
+++
+++
++
++
+
+diff --git a/observer/logs/developer_iter-1_20260621T120610Z.log b/observer/logs/developer_iter-1_20260621T120610Z.log
+++new file mode 100644
+++index 0000000..13ee79e
+++--- /dev/null
++++++ b/observer/logs/developer_iter-1_20260621T120610Z.log
+++@@ -0,0 +1,325 @@
++++=== COMMAND ===
++++claude -p --dangerously-skip-permissions Implement multi-agent parallel for all roles per prd/PRD.md (prd/PRD-parallel-system.md). Changes: (1) orchestrator.py: _resolve_agents(pipeline_role) returns list, _invoke_agents_parallel handles concurrent invocation, auto-detect homogeneous vs heterogeneous mode per role group; (2) interfaces.py: add parallel_mode field to ReviewerConfig (homogeneous/heterogeneous); (3) pipeline.py: build parallel agent groups in load(). Multi-planner writes to prd/PRD-{name}.md. Multi-developer uses worktrees. Multi-reviewer already partially implemented — extend for heterogeneous. pytest tests/test_orchestrator.py tests/test_custom_roles.py -q must pass. git add -A && git commit.
++++
++++# Developer — Unison code review fix
++++
++++Imp
+...[diff truncated]
+
+## Design
+# parallel
+
+
+## PRD
+# Pipeline B: Multi-Agent Parallel (all roles, dual-mode)
+
+## Problem
+Multi-reviewer only supports N copies of the same agent (homogeneous).
+Other roles (planner, developer) cannot run in parallel at all.
+No support for heterogeneous parallel (different agents reviewing from different angles).
+
+## Solution
+Extend parallel execution to ALL roles with two modes.
+
+## Configuration
+
+Agents with the same `pipeline_role` automatically form a parallel group:
+
+```yaml
+agents:
+  architect:     {pipeline_role: planner, runtime: claude}
+  pm:            {pipeline_role: planner, runtime: codex}  # parallel with architect
+  
+  dev_core:      {pipeline_role: developer, runtime: claude}
+  dev_tests:     {pipeline_role: developer, runtime: codex} # parallel with dev_core
+  
+  tech_reviewer: {pipeline_role: reviewer, runtime: codex}
+  arch_reviewer: {pipeline_role: reviewer, runtime: claude}  # parallel with tech_reviewer
+```
+
+Detection: if multiple agents share the same `pipeline_role` → parallel mode automatically.
+
+## Parallel Modes
+
+Auto-detected per role group:
+
+| Mode | Condition | Behavior |
+|------|-----------|----------|
+| homogeneous | All agents in group have same `runtime` | N× copies, majority vote for reviewer |
+| heterogeneous | Different `runtime` values | Each agent runs independently with its own focus |
+
+## Orchestrator Changes
+
+### _resolve_agents(pipeline_role) → list[AgentSpec]
+Replaces `_resolve_agent` (singular). Returns ALL agents with matching effective_role.
+Backward compat: existing code that expects single agent gets first result.
+
+### _invoke_agents_parallel(role_list, iteration)
+Replaces `_invoke_agent_for_role` when len(agents) > 1.
+Uses ThreadPoolExecutor to run all agents simultaneously.
+Collects results, handles failures per-agent.
+
+### Multi-Planner merge
+When multiple planners run, each writes to separate files:
+`prd/PRD-{role_name}.md`, `prd/tech-design-{role_name}.md`
+Then a "synthesizer" step combines them (or reviewers evaluate each).
+
+### Multi-Developer merge
+When multiple developers run, each works in its own git branch/worktree.
+After all complete, merge via git merge (already supported by worktree system).
+
+### Multi-Reviewer merge (existing, extended)
+Already implemented. Extend to support heterogeneous: each reviewer gets its
+own system prompt with different focus areas.
+
+## Acceptance
+- 500+ tests pass
+- Pipeline YAML with 2 planners, 2 reviewers loads and runs
+- Homogeneous parallel: N copies of same agent
+- Heterogeneous parallel: different agents with different focus
+- Existing single-agent pipelines unchanged
+
+
+=== OUTPUT ===
+Reading additional input from stdin...
+OpenAI Codex v0.141.0
+--------
+workdir: /home/sean/projects/unison
+model: gpt-5.5
+provider: openai-custom
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 019eea1f-cc6e-7432-9414-84cee87f837f
+--------
+user
+Review Iteration 2: 1. Run tests: python3 -m pytest tests/test_orchestrator.py tests/test_pipeline.py tests/test_custom_roles.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-2.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Git Diff
+diff --git a/.unison/budget.json b/.unison/budget.json
+index 198c752..950d8b7 100644
+--- a/.unison/budget.json
++++ b/.unison/budget.json
+@@ -1,7 +1,7 @@
+ {
+... (truncated)
+@@ -14,6 +14,12 @@
+       "iter_n": 1,
+       "tokens_used": 2855,
+       "timestamp": "2026-06-21T12:09:35.281265+00:00"
++    },
++    {
++      "phase": "developer",
++      "iter_n": 2,
++      "tokens_used": 3221,
++      "timestamp": "2026-06-21T12:15:49.363530+00:00"
+     }
+   ]
+ }
+\ No newline at end of file
+
+
+diff --git a/observer/logs/developer_iter-2_20260621T120935Z.log b/observer/logs/developer_iter-2_20260621T120935Z.log
+index ea83c8c..0782870 100644
+--- a/observer/logs/developer_iter-2_20260621T120935Z.log
++++ b/observer/logs/developer_iter-2_20260621T120935Z.log
+@@ -321,3 +321,31 @@ own system prompt with different focus areas.
+ 
+ 
+ === OUTPUT ===
++All tasks complete. Here's a summary of what was implemented:
++
++## Pipeline B — Multi-Agent Parallel (all roles, dual-mode)
++
++### Changes made across 3 files:
++
++**`interfaces.py`**
++- Added `parallel_mode: Literal["homogeneous", "heterogeneous"]` field to `ReviewerConfig` (default: `"homogeneous"`)
++- Added `parallel_groups: dict[str, list[str]]` to `PipelineSpec` for tracking which agents share each `effective_role`
++
++**`src/unison/pipeline.py`**
++- Added `_build_parallel_groups(agents)` static method that groups agent names by `effective_role`, returning only groups with 2+ agents
++- Wire the computed groups into `PipelineSpec` during `load()`
++
++**`src/unison/orchestrator.py`** (the bulk of changes):
++- **`_resolve_agents(pipeline_role) → list[AgentSpec]`** — returns ALL agents matching an effective_role (replaces singular `_resolve_agent` for multi-agent discovery)
++- **`_detect_parallel_mode(agent_specs) → str`** — auto-detects homogeneous (all same runtime) vs heterogeneous (different runtimes) per role group
++- **`_invoke_agents_parallel(...)`** — dispatches via `ThreadPoolExecutor` for concurrent agent invocation, routing to `_invoke_multi_planner`, `_invoke_multi_developer`, or `_invoke_multi_reviewer` based on role
++- **`_invoke_multi_planner(...)`** — runs multiple planners concurrently, each writing to `prd/PRD-{name}.md` + `prd/tech-design-{name}.md`, symlinks first planner's output as canonical
++- **`_invoke_multi_developer(...)`** — runs developers in isolated git worktrees, merges all branches after completion
++- **`_invoke_multi_reviewer(...)`** — extended to accept optional `agent_specs` list for heterogeneous mode (each reviewer uses its own runner, spec, and system prompt)
++- **`_run_loop`** and **`_run_review_only`** — auto-detect multi-agent groups via `_resolve_agents` instead of config-only checks
++- **`_get_reviewer_count()`** — now derives from agent composition first, falls back to config/env
++- **`_build_prompt_for_agent(...)`** — builds a prompt for an explicit `AgentSpec` (needed when multiple agents share a pipeline_role)
++
++### Test results:
++- `tests/test_orchestrator.py tests/test_custom_roles.py -q`: **27 passed**
++- Full test suite: **510 passed**
+
+
+diff --git a/observer/logs/reviewer_iter-2_20260621T121549Z.log b/observer/logs/reviewer_iter-2_20260621T121549Z.log
+new file mode 100644
+index 0000000..051712b
+--- /dev/null
++++ b/observer/logs/reviewer_iter-2_20260621T121549Z.log
+@@ -0,0 +1,1540 @@
++=== COMMAND ===
++codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 2: 1. Run tests: python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-2.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
++
++# Reviewer — Unison code review fix
++
++Review the current iteration's output.
++
++Plan review: check PRD/tech-design for correctness, completeness, feasibility.
++Dev review: check code changes match the design, tests pass, no regressions.
++
++Output:
++```
++verdict: PASS | REQUEST_CHANGES
++summary: <1-line>
++findings:
++  - <specific issue if any>
++```
++
++
++## Git Diff
++
+
+diff --git a/observer/logs/developer_iter-2_20260621T121328Z.log b/observer/logs/developer_iter-2_20260621T121328Z.log
++new file mode 100644
++index 0000000..7a4864f
++--- /dev/null
+++++ b/observer/logs/developer_iter-2_20260621T121328Z.log
++@@ -0,0 +1,305 @@
+++=== COMMAND ===
+++claude -p --dangerously-skip-permissions Implement 6 named pipeline modes per prd/PRD.md. Changes: (1) interfaces.py: add PipelineMode Literal + mode field to PipelineSpec, (2) pipeline.py: auto-detect mode in load(), (3) orchestrator.py: replace binary _should_plan with mode dispatch table in _run_state_machine, add _run_planning_loop/_run_dev_loop/_run_review_only helpers, (4) cli.py: mode subcommand shows name. Keep ~500 tests green. git add -A && git commit.
+++
+++# Developer — Unison code review fix
+++
+++Implement the fix per the approved PRD and tech-design.
+++
+++1. Read prd/PRD.md and prd/tech-design.md
+++2. Modify only the files specified in the design
+++3. Keep tests green — run the test command first
+++4. git add -A && git commit with a descriptive message
+++
+++
++... (truncated)
++
++
+
+diff --git a/.unison/budget.json b/.unison/budget.json
+++new file mode 100644
+++index 0000000..198c752
+++--- /dev/null
++++++ b/.unison/budget.json
+++@@ -0,0 +1,19 @@
++++{
++++  "date": "2026-06-21",
++++  "daily_used": 5805,
++++  "task_used": 5805,
++++  "phases": [
++++    {
++++      "phase": "developer",
++++      "iter_n": 1,
++++      "tokens_used": 2950,
++++      "timestamp": "2026-06-21T12:07:33.250170+00:00"
++++    },
++++    {
++++      "phase": "reviewer",
++++      "iter_n": 1,
++++      "tokens_used": 2855,
+++... (truncated)
+++
+++
++
++
+
+diff --git a/interfaces.py b/interfaces.py
+++index c001b4e..bdb7e8c 100644
+++--- a/interfaces.py
++++++ b/interfaces.py
+++@@ -275,6 +275,7 @@ class PipelineSpec:
+++     dag: list[Stage] | None = None  # V2: DAG 多 phase 并行（None → V1 线性模式）
+++     parallel_dev: WorktreeConfig | None = None  # V2: 并行 Developer
+++     reviewer_config: ReviewerConfig | None = None  # V2: multi-reviewer
++++    parallel_groups: dict[str, list[str]] = field(default_factory=dict)  # Pipeline B: effective_role → agent names
+++     mode: PipelineMode | None = None  # Named pipeline mode (auto-detected if not set)
+++     max_iterations: int = 5
+++     per_agent_timeout: int = 600    # 秒。Codex 慢需 300s+
+++@@ -510,10 +511,14 @@ class ReviewerConfig:
+++         reconcile_strategy: verdict 合并策略。
+++             "majority" — 多数投票（2 of 3 → PASS）。
+++             "unanimous" — 全票通过（任意一个 REQUEST_CHANGES → REQUEST_CHANGES）。
++++        parallel_mode: 并行模式（Pipeline B — multi-agent parallel）。
++++            "homogeneous" — N 份相同 agent 副本。
++++            "heterogeneous" — 不同 agent 独立运行，各有自己的关注领域。
+++     """
+++     enabled: bool = False
+++     count: int = 3
+++     reconcile_strategy: Literal["majority", "unanimous"] = "majority"
++++    parallel_mode: Literal["homogeneous", "heterogeneous"] = "homogeneous"
+++ 
+++     def __post_init__(self):
+++         if self.count < 1:
+++
+++
+++
++
++
+
+diff --git a/observer/logs/developer_iter-1_20260621T120610Z.log b/observer/logs/developer_iter-1_20260621T120610Z.log
+++new file mode 100644
+++index 0000000..13ee79e
+++--- /dev/null
++++++ b/observer/logs/developer_iter-1_20260621T120610Z.log
+++@@ -0,0 +1,325 @@
++++=== COMMAND ===
++++claude -p --dangerously-skip-permissions Implement multi-agent parallel for all roles per prd/PRD.md (prd/PRD-parallel-system.md). Changes: (1) orchestrator.py: _resolve_agents(pipeline_role) returns list, _invoke_agents_parallel handles concurrent invocation, auto-detect homogeneous vs heterogeneous mode per role group; (2) interfaces.py: add parallel_mode field to ReviewerConfig (homogeneous/heterogeneous); (3) pipeline.py: build parallel agent groups in load(). Multi-planner writes to prd/PRD-{name}.md. Multi-developer uses worktrees. Multi-reviewer already partially implemented — extend for heterogeneous. pytest tests/test_orchestrator.py tests/test_custom_roles.py -q must pass. git add -A && git commit.
++++
++++# Developer — Unison code review fix
++++
++++Imp
+...[diff truncated]
+
+## Design
+# parallel
+
+
+## PRD
+# Pipeline B: Multi-Agent Parallel (all roles, dual-mode)
+
+## Problem
+Multi-reviewer only supports N copies of the same agent (homogeneous).
+Other roles (planner, developer) cannot run in parallel at all.
+No support for heterogeneous parallel (different agents reviewing from different angles).
+
+## Solution
+Extend parallel execution to ALL roles with two modes.
+
+## Configuration
+
+Agents with the same `pipeline_role` automatically form a parallel group:
+
+```yaml
+agents:
+  architect:     {pipeline_role: planner, runtime: claude}
+  pm:            {pipeline_role: planner, runtime: codex}  # parallel with architect
+  
+  dev_core:      {pipeline_role: developer, runtime: claude}
+  dev_tests:     {pipeline_role: developer, runtime: codex} # parallel with dev_core
+  
+  tech_reviewer: {pipeline_role: reviewer, runtime: codex}
+  arch_reviewer: {pipeline_role: reviewer, runtime: claude}  # parallel with tech_reviewer
+```
+
+Detection: if multiple agents share the same `pipeline_role` → parallel mode automatically.
+
+## Parallel Modes
+
+Auto-detected per role group:
+
+| Mode | Condition | Behavior |
+|------|-----------|----------|
+| homogeneous | All agents in group have same `runtime` | N× copies, majority vote for reviewer |
+| heterogeneous | Different `runtime` values | Each agent runs independently with its own focus |
+
+## Orchestrator Changes
+
+### _resolve_agents(pipeline_role) → list[AgentSpec]
+Replaces `_resolve_agent` (singular). Returns ALL agents with matching effective_role.
+Backward compat: existing code that expects single agent gets first result.
+
+### _invoke_agents_parallel(role_list, iteration)
+Replaces `_invoke_agent_for_role` when len(agents) > 1.
+Uses ThreadPoolExecutor to run all agents simultaneously.
+Collects results, handles failures per-agent.
+
+### Multi-Planner merge
+When multiple planners run, each writes to separate files:
+`prd/PRD-{role_name}.md`, `prd/tech-design-{role_name}.md`
+Then a "synthesizer" step combines them (or reviewers evaluate each).
+
+### Multi-Developer merge
+When multiple developers run, each works in its own git branch/worktree.
+After all complete, merge via git merge (already supported by worktree system).
+
+### Multi-Reviewer merge (existing, extended)
+Already implemented. Extend to support heterogeneous: each reviewer gets its
+own system prompt with different focus areas.
+
+## Acceptance
+- 500+ tests pass
+- Pipeline YAML with 2 planners, 2 reviewers loads and runs
+- Homogeneous parallel: N copies of same agent
+- Heterogeneous parallel: different agents with different focus
+- Existing single-agent pipelines unchanged
+
+codex
+I’ll run the requested focused tests first, then inspect the current diff and relevant design/code paths without touching `src/`. After that I’ll write the YAML-frontmatter review file under `reviews/iter-2.md`.
+exec
+/bin/bash -lc 'python3 -m pytest tests/test_orchestrator.py tests/test_pipeline.py tests/test_custom_roles.py -q' in /home/sean/projects/unison
+ succeeded in 61584ms:
+........................................................................ [ 72%]
+...........................                                              [100%]
+99 passed in 5.45s
+
+codex
+The requested test set passed: `99 passed in 5.45s`. I’m checking the actual repository diff now, since the prompt diff is truncated and the review needs to catch behavioral regressions, not just test results.
+exec
+/bin/bash -lc 'git status --short' in /home/sean/projects/unison
+ succeeded in 0ms:
+ M .unison/budget.json
+ M observer/logs/developer_iter-2_20260621T121328Z.log
+?? observer/logs/reviewer_iter-2_20260621T122012Z.log
+
+exec
+/bin/bash -lc "sed -n '1,220p' prd/PRD.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+# Pipeline B: Multi-Agent Parallel (all roles, dual-mode)
+
+## Problem
+Multi-reviewer only supports N copies of the same agent (homogeneous).
+Other roles (planner, developer) cannot run in parallel at all.
+No support for heterogeneous parallel (different agents reviewing from different angles).
+
+## Solution
+Extend parallel execution to ALL roles with two modes.
+
+## Configuration
+
+Agents with the same `pipeline_role` automatically form a parallel group:
+
+```yaml
+agents:
+  architect:     {pipeline_role: planner, runtime: claude}
+  pm:            {pipeline_role: planner, runtime: codex}  # parallel with architect
+  
+  dev_core:      {pipeline_role: developer, runtime: claude}
+  dev_tests:     {pipeline_role: developer, runtime: codex} # parallel with dev_core
+  
+  tech_reviewer: {pipeline_role: reviewer, runtime: codex}
+  arch_reviewer: {pipeline_role: reviewer, runtime: claude}  # parallel with tech_reviewer
+```
+
+Detection: if multiple agents share the same `pipeline_role` → parallel mode automatically.
+
+## Parallel Modes
+
+Auto-detected per role group:
+
+| Mode | Condition | Behavior |
+|------|-----------|----------|
+| homogeneous | All agents in group have same `runtime` | N× copies, majority vote for reviewer |
+| heterogeneous | Different `runtime` values | Each agent runs independently with its own focus |
+
+## Orchestrator Changes
+
+### _resolve_agents(pipeline_role) → list[AgentSpec]
+Replaces `_resolve_agent` (singular). Returns ALL agents with matching effective_role.
+Backward compat: existing code that expects single agent gets first result.
+
+### _invoke_agents_parallel(role_list, iteration)
+Replaces `_invoke_agent_for_role` when len(agents) > 1.
+Uses ThreadPoolExecutor to run all agents simultaneously.
+Collects results, handles failures per-agent.
+
+### Multi-Planner merge
+When multiple planners run, each writes to separate files:
+`prd/PRD-{role_name}.md`, `prd/tech-design-{role_name}.md`
+Then a "synthesizer" step combines them (or reviewers evaluate each).
+
+### Multi-Developer merge
+When multiple developers run, each works in its own git branch/worktree.
+After all complete, merge via git merge (already supported by worktree system).
+
+### Multi-Reviewer merge (existing, extended)
+Already implemented. Extend to support heterogeneous: each reviewer gets its
+own system prompt with different focus areas.
+
+## Acceptance
+- 500+ tests pass
+- Pipeline YAML with 2 planners, 2 reviewers loads and runs
+- Homogeneous parallel: N copies of same agent
+- Heterogeneous parallel: different agents with different focus
+- Existing single-agent pipelines unchanged
+
+exec
+/bin/bash -lc 'git diff -- interfaces.py src/unison/pipeline.py src/unison/orchestrator.py src/unison/cli.py prd/PRD.md prd/tech-design.md tests/test_orchestrator.py tests/test_pipeline.py tests/test_custom_roles.py' in /home/sean/projects/unison
+ succeeded in 0ms:
+exec
+/bin/bash -lc "sed -n '1,260p' prd/tech-design.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+# parallel
+

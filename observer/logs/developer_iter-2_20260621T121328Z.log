@@ -303,3 +303,15 @@ own system prompt with different focus areas.
 
 
 === OUTPUT ===
+The commit contains exactly the two expected changes to `orchestrator.py`. The other files are the auto-generated budget.json and observer logs (pre-existing tracking files).
+
+**Summary of the fix:**
+
+- **`src/unison/orchestrator.py:308`** (`_run_review_only`): Now passes `agent_specs=reviewer_agents` to `_invoke_multi_reviewer`
+- **`src/unison/orchestrator.py:429`** (`_run_loop`): Now passes `agent_specs=reviewer_agents` to `_invoke_multi_reviewer`
+
+**What this fixes:** Previously, when multiple agents shared `pipeline_role: reviewer` (e.g. `tech_reviewer` and `arch_reviewer`), the orchestrator detected them correctly but then called `_invoke_multi_reviewer` without passing the resolved agent specs. The method fell back to the backward-compat path: resolve ONE agent spec, check `reviewer_config`/`UNISON_REVIEWER_COUNT` for count, and reuse that one spec for all N copies. This meant heterogeneous reviewers with distinct runtimes, system prompts, and focus areas couldn't execute.
+
+Now the resolved agent specs list is passed through, so each reviewer gets its own `AgentSpec` (with its own runtime, system prompt, and `task_instruction` focus area), enabling true heterogeneous parallel review.
+
+**All 510 tests pass.** ✅
