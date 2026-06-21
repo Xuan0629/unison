@@ -1,50 +1,67 @@
-# Pipeline A: Named Pipeline Modes
+# Pipeline B: Multi-Agent Parallel (all roles, dual-mode)
 
 ## Problem
-Pipeline mode is determined by a binary check (`_should_plan()` returns True/False
-based on whether a planner agent exists). This gives only 2 modes: "4-agent" or "2-agent".
-No way to express design-debate, inspect-only, agent-fix, or migrate patterns
-without custom YAML + task_instruction hacks.
+Multi-reviewer only supports N copies of the same agent (homogeneous).
+Other roles (planner, developer) cannot run in parallel at all.
+No support for heterogeneous parallel (different agents reviewing from different angles).
 
 ## Solution
-Add a `mode` field to PipelineSpec with 6 named values. The orchestrator dispatches
-to different state-machine paths based on mode instead of the binary `_should_plan()`.
+Extend parallel execution to ALL roles with two modes.
 
-## PipelineMode values
+## Configuration
 
-```python
-PipelineMode = Literal[
-    "code-dev",       # Developer ↔ Reviewer (no planner)
-    "full-dev",       # Planner ↔ Reviewer → Developer ↔ Reviewer
-    "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no dev)
-    "inspect-only",   # Reviewer(s) → report (no planner, no dev)
-    "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
-    "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer (same as full-dev, named for clarity)
-]
+Agents with the same `pipeline_role` automatically form a parallel group:
+
+```yaml
+agents:
+  architect:     {pipeline_role: planner, runtime: claude}
+  pm:            {pipeline_role: planner, runtime: codex}  # parallel with architect
+  
+  dev_core:      {pipeline_role: developer, runtime: claude}
+  dev_tests:     {pipeline_role: developer, runtime: codex} # parallel with dev_core
+  
+  tech_reviewer: {pipeline_role: reviewer, runtime: codex}
+  arch_reviewer: {pipeline_role: reviewer, runtime: claude}  # parallel with tech_reviewer
 ```
 
-## Auto-detection
-If `mode` is not set in YAML, auto-detect:
-- planner present + developer present → "full-dev"
-- no planner, developer present → "code-dev"
-- only reviewer(s) → "inspect-only"
+Detection: if multiple agents share the same `pipeline_role` → parallel mode automatically.
 
-## Orchestrator changes
-Replace `_run_state_machine`'s hardcoded two-phase flow with a dispatch table:
+## Parallel Modes
 
-```python
-_DISPATCH = {
-    "code-dev":      lambda self: self._run_dev_loop(),
-    "full-dev":      lambda self: (self._run_planning_loop(), self._run_dev_loop()),
-    "design-debate": lambda self: self._run_planning_loop(),
-    "inspect-only":  lambda self: self._run_review_only(),
-    "agent-fix":     lambda self: self._run_dev_loop(),
-    "migrate":       lambda self: (self._run_planning_loop(), self._run_dev_loop()),
-}
-```
+Auto-detected per role group:
+
+| Mode | Condition | Behavior |
+|------|-----------|----------|
+| homogeneous | All agents in group have same `runtime` | N× copies, majority vote for reviewer |
+| heterogeneous | Different `runtime` values | Each agent runs independently with its own focus |
+
+## Orchestrator Changes
+
+### _resolve_agents(pipeline_role) → list[AgentSpec]
+Replaces `_resolve_agent` (singular). Returns ALL agents with matching effective_role.
+Backward compat: existing code that expects single agent gets first result.
+
+### _invoke_agents_parallel(role_list, iteration)
+Replaces `_invoke_agent_for_role` when len(agents) > 1.
+Uses ThreadPoolExecutor to run all agents simultaneously.
+Collects results, handles failures per-agent.
+
+### Multi-Planner merge
+When multiple planners run, each writes to separate files:
+`prd/PRD-{role_name}.md`, `prd/tech-design-{role_name}.md`
+Then a "synthesizer" step combines them (or reviewers evaluate each).
+
+### Multi-Developer merge
+When multiple developers run, each works in its own git branch/worktree.
+After all complete, merge via git merge (already supported by worktree system).
+
+### Multi-Reviewer merge (existing, extended)
+Already implemented. Extend to support heterogeneous: each reviewer gets its
+own system prompt with different focus areas.
 
 ## Acceptance
-- All existing pipeline YAMLs load without mode field (auto-detected)
-- `unison mode --pipeline <yaml>` prints named mode
-- 6 modes can be explicitly set in YAML
 - 500+ tests pass
+- Pipeline YAML with 2 planners, 2 reviewers loads and runs
+- Homogeneous parallel: N copies of same agent
+- Heterogeneous parallel: different agents with different focus
+- Existing single-agent pipelines unchanged

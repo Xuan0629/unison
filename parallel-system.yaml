@@ -1,0 +1,17 @@
+version: "2.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/fix-developer.md"
+    task_instruction: "Implement multi-agent parallel for all roles per prd/PRD.md (prd/PRD-parallel-system.md). Changes: (1) orchestrator.py: _resolve_agents(pipeline_role) returns list, _invoke_agents_parallel handles concurrent invocation, auto-detect homogeneous vs heterogeneous mode per role group; (2) interfaces.py: add parallel_mode field to ReviewerConfig (homogeneous/heterogeneous); (3) pipeline.py: build parallel agent groups in load(). Multi-planner writes to prd/PRD-{name}.md. Multi-developer uses worktrees. Multi-reviewer already partially implemented — extend for heterogeneous. pytest tests/test_orchestrator.py tests/test_custom_roles.py -q must pass. git add -A && git commit."
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/fix-reviewer.md"
+project:
+  test_command: "python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q"
+  max_iterations: 3
