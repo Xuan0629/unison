@@ -163,54 +163,79 @@ class BaseRunner:
         timeout: int,
         log_path: Path,
     ) -> AgentResult:
-        """Execute the agent via subprocess.run with capture + timeout detection."""
+        """Execute the agent via subprocess, streaming output to log_path."""
         cmd = self._build_command(spec, prompt)
         effective_timeout = self._effective_timeout(timeout)
 
         start = time.monotonic()
         try:
-            proc = subprocess.run(
-                cmd,
-                cwd=str(workdir),
-                capture_output=True,
-                text=True,
-                timeout=effective_timeout,
-            )
-            duration = time.monotonic() - start
-            exit_code = proc.returncode
-            stdout = proc.stdout
-            stderr = proc.stderr
-            success = exit_code == 0
-            error = None if success else f"Command exited with code {exit_code}"
-
-        except subprocess.TimeoutExpired as e:
-            duration = time.monotonic() - start
-            exit_code = -1
-            success = False
-            stdout = e.stdout.decode("utf-8", errors="replace") if e.stdout else ""
-            stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
-            error = self._timeout_error_message(timeout, effective_timeout)
-
+            result = self._run_subprocess(cmd, workdir, effective_timeout, log_path)
+            result.duration = round(time.monotonic() - start, 3)
+            return result
         except FileNotFoundError:
             duration = time.monotonic() - start
-            exit_code = -1
-            success = False
-            stdout = ""
-            stderr = ""
-            error = self._not_found_error_message()
+            self._write_log(log_path, cmd, "", self._not_found_error_message())
+            return AgentResult(
+                success=False, exit_code=-1, duration=round(duration, 3),
+                stdout_tail="", stderr_tail="", log_path=log_path,
+                error=self._not_found_error_message(),
+            )
 
-        # Write log
-        self._write_log(log_path, cmd, stdout, stderr)
+    def _run_subprocess(
+        self, cmd: list[str], workdir: Path, timeout: int, log_path: Path
+    ) -> AgentResult:
+        """Run *cmd* via Popen, streaming stdout/stderr directly to *log_path*.
 
+        Unlike ``subprocess.run(capture_output=True)``, this uses constant
+        memory regardless of output size. Full logs are written to disk
+        and the last 500 chars are captured for AgentResult.
+        """
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        start = time.monotonic()
+        proc = None
+
+        with open(log_path, "w", encoding="utf-8") as log_fh:
+            log_fh.write(f"=== COMMAND ===\n{mask_secrets(' '.join(cmd))}\n\n=== OUTPUT ===\n")
+            log_fh.flush()
+            try:
+                proc = subprocess.Popen(
+                    cmd, cwd=str(workdir),
+                    stdout=log_fh, stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                duration = time.monotonic() - start
+                tail = self._read_log_tail(log_path, 500)
+                return AgentResult(
+                    success=False, exit_code=-1, duration=round(duration, 3),
+                    stdout_tail=tail, stderr_tail="", log_path=log_path,
+                    error=self._timeout_error_message(timeout, timeout),
+                )
+
+        duration = time.monotonic() - start
+        tail = self._read_log_tail(log_path, 500)
+        success = proc.returncode == 0
         return AgentResult(
-            success=success,
-            exit_code=exit_code,
+            success=success, exit_code=proc.returncode,
             duration=round(duration, 3),
-            stdout_tail=stdout[-500:] if stdout else "",
-            stderr_tail=stderr[-500:] if stderr else "",
+            stdout_tail=tail, stderr_tail="",
             log_path=log_path,
-            error=error,
+            error=None if success else f"Command exited with code {proc.returncode}",
         )
+
+    @staticmethod
+    def _read_log_tail(log_path: Path, n: int) -> str:
+        """Read the last *n* chars from *log_path*."""
+        try:
+            size = log_path.stat().st_size
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                f.seek(max(0, size - n))
+                return f.read()[-n:]
+        except OSError:
+            return ""
 
 
 # ------------------------------------------------------------------
