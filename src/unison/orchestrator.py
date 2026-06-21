@@ -303,6 +303,15 @@ class Orchestrator:
             if stage.agents:
                 for _role_name, agent_spec in stage.agents.items():
                     pr = agent_spec.effective_role
+                    # L1 fix #6: DAG stages only support developer agents
+                    if pr != "developer":
+                        _log = __import__("logging").getLogger(__name__)
+                        _log.warning(
+                            "DAG stage agent '%s' has role '%s', expected "
+                            "'developer' — skipping",
+                            _role_name, pr,
+                        )
+                        continue
                     self._invoke_agent_for_role(pr, 1)
                     break  # one agent per stage for now
             else:
@@ -375,7 +384,7 @@ class Orchestrator:
                 iter_n=iteration,
                 note=f"{active_phase} iter {iteration}/{max_iter}",
             )
-            self._save_checkpoint()
+            self._save_checkpoint(iteration)
 
             self._invoke_agent_for_role(agent_role, iteration)
 
@@ -388,7 +397,7 @@ class Orchestrator:
                 iter_n=iteration,
                 note=f"{review_phase} iter {iteration}/{max_iter}",
             )
-            self._save_checkpoint()
+            self._save_checkpoint(iteration)
 
             reviewer_count = self._get_reviewer_count()
             if reviewer_count > 1:

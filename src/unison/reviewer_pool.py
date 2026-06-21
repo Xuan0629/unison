@@ -61,7 +61,15 @@ class ReviewerPool:
                 for _ in range(self.config.count)
             ]
             for future in as_completed(futures):
-                verdicts.append(future.result())
+                try:
+                    verdicts.append(future.result())
+                except Exception as exc:
+                    verdicts.append(ReviewVerdict(
+                        iter_n=0,
+                        verdict="REQUEST_CHANGES",
+                        summary=f"Reviewer crashed: {exc}",
+                        findings=[],
+                    ))
         return verdicts
 
     # ------------------------------------------------------------------
