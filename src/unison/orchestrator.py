@@ -299,6 +299,7 @@ class Orchestrator:
             # don't start file-system mutations.
             if cancel_event.is_set():
                 return False
+            invoked = False  # L1 fix #6: track if we actually ran a developer
             # Use stage.agents when available, fall back to default developer
             if stage.agents:
                 for _role_name, agent_spec in stage.agents.items():
@@ -313,10 +314,15 @@ class Orchestrator:
                         )
                         continue
                     self._invoke_agent_for_role(pr, 1)
+                    invoked = True
                     break  # one agent per stage for now
             else:
                 self._invoke_agent_for_role("developer", 1)
-            return self._state.last_dev_commit is not None
+                invoked = True
+            # Return False when no developer was invoked (all agents were
+            # non-developer), rather than leaking a stale last_dev_commit
+            # from a previous stage.
+            return invoked and self._state.last_dev_commit is not None
 
         scheduler.execute_parallel(executor=exec_stage, max_workers=4)
 

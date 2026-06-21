@@ -1,0 +1,1541 @@
+=== COMMAND ===
+codex exec --dangerously-bypass-approvals-and-sandbox Review Iteration 1: 1. Run tests: python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Git Diff
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 0579bf3..a6f4ee7 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -303,6 +303,15 @@ class Orchestrator:
+             if stage.agents:
+                 for _role_name, agent_spec in stage.agents.items():
+                     pr = agent_spec.effective_role
++                    # L1 fix #6: DAG stages only support developer agents
++                    if pr != "developer":
++                        _log = __import__("logging").getLogger(__name__)
++                        _log.warning(
++                            "DAG stage agent '%s' has role '%s', expected "
++                            "'developer' — skipping",
++                            _role_name, pr,
++                        )
++                        continue
+... (truncated)
+@@ -375,7 +384,7 @@ class Orchestrator:
+                 iter_n=iteration,
+                 note=f"{active_phase} iter {iteration}/{max_iter}",
+             )
+-            self._save_checkpoint()
++            self._save_checkpoint(iteration)
+ 
+             self._invoke_agent_for_role(agent_role, iteration)
+ 
+@@ -388,7 +397,7 @@ class Orchestrator:
+                 iter_n=iteration,
+                 note=f"{review_phase} iter {iteration}/{max_iter}",
+             )
+-            self._save_checkpoint()
++            self._save_checkpoint(iteration)
+ 
+             reviewer_count = self._get_reviewer_count()
+             if reviewer_count > 1:
+
+
+diff --git a/src/unison/reviewer_pool.py b/src/unison/reviewer_pool.py
+index 7afc13e..e94cf6d 100644
+--- a/src/unison/reviewer_pool.py
++++ b/src/unison/reviewer_pool.py
+@@ -61,7 +61,15 @@ class ReviewerPool:
+                 for _ in range(self.config.count)
+             ]
+             for future in as_completed(futures):
+-                verdicts.append(future.result())
++                try:
++                    verdicts.append(future.result())
++                except Exception as exc:
++                    verdicts.append(ReviewVerdict(
++                        iter_n=0,
++                        verdict="REQUEST_CHANGES",
++                        summary=f"Reviewer crashed: {exc}",
++                        findings=[],
++                    ))
+         return verdicts
+ 
+     # ------------------------------------------------------------------
+
+
+## Design
+# L1 batch
+
+
+## PRD
+# Fix: Orchestrator L1 batch (6 items)
+
+## 1. Parallel dev halt check between agents
+in `_invoke_parallel_developers`, after `runner.run()` at line ~559,
+add `if self._state.halt_signal: break` so agent B doesn't run if A triggered halt.
+
+## 2. Parallel dev budget check
+in `_invoke_parallel_developers`, before `runner.run()`, add:
+```python
+if not tracker.check_budget():
+    self.halt(f"budget overflow: developer")
+    return
+```
+
+## 3. Remove pre_invoke_cleanup from multi-reviewer
+in `_invoke_multi_reviewer`, delete `self.pre_invoke_cleanup()` call.
+Reviewers don't need clean workspace — they only read and write reviews.
+
+## 4. Budget tracker preserve history
+in `_get_budget_tracker`, when per_task_limit changes, update the existing
+tracker's limit instead of creating a new one (which loses all history):
+```python
+self._budget_tracker.per_task_limit = per_task_limit
+```
+Only create new tracker if `self._budget_tracker is None`.
+
+## 5. _save_checkpoint explicit iter_n
+Pass the loop's `iteration` variable instead of `self._state.iteration`.
+Requires adding `iteration` parameter to save checkpoint calls in `_run_loop`.
+
+## 6. DAG exec_stage validate pipeline_role
+in `_run_dag_development`, after getting `pr = agent_spec.effective_role`,
+validate it's "developer" — if not, log warning and skip.
+
+## Acceptance
+- orchestrator tests pass (14+)
+- custom_roles tests pass (11+)
+- No functional change in normal pipeline flow
+
+
+=== STDOUT ===
+Wrote the review to [reviews/iter-1.md](/home/sean/projects/unison/reviews/iter-1.md).
+
+Tests passed: `27 passed in 0.27s` for:
+
+```bash
+python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q
+```
+
+Verdict: `REQUEST_CHANGES`
+
+Main finding: skipped invalid DAG stages can still be reported successful if `last_dev_commit` was set by an earlier stage, which can incorrectly unblock downstream DAG stages.
+
+
+=== STDERR ===
+Reading additional input from stdin...
+OpenAI Codex v0.141.0
+--------
+workdir: /home/sean/projects/unison
+model: gpt-5.5
+provider: openai-custom
+approval: never
+sandbox: danger-full-access
+reasoning effort: high
+reasoning summaries: none
+session id: 019ee9d5-220f-73a0-be03-ab7e6cfefe2f
+--------
+user
+Review Iteration 1: 1. Run tests: python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q 2. Write review to /home/sean/projects/unison/reviews/iter-1.md 3. Use YAML frontmatter: verdict, summary, findings. 4. Do NOT modify src/
+
+# Reviewer — Unison code review fix
+
+Review the current iteration's output.
+
+Plan review: check PRD/tech-design for correctness, completeness, feasibility.
+Dev review: check code changes match the design, tests pass, no regressions.
+
+Output:
+```
+verdict: PASS | REQUEST_CHANGES
+summary: <1-line>
+findings:
+  - <specific issue if any>
+```
+
+
+## Git Diff
+diff --git a/src/unison/orchestrator.py b/src/unison/orchestrator.py
+index 0579bf3..a6f4ee7 100644
+--- a/src/unison/orchestrator.py
++++ b/src/unison/orchestrator.py
+@@ -303,6 +303,15 @@ class Orchestrator:
+             if stage.agents:
+                 for _role_name, agent_spec in stage.agents.items():
+                     pr = agent_spec.effective_role
++                    # L1 fix #6: DAG stages only support developer agents
++                    if pr != "developer":
++                        _log = __import__("logging").getLogger(__name__)
++                        _log.warning(
++                            "DAG stage agent '%s' has role '%s', expected "
++                            "'developer' — skipping",
++                            _role_name, pr,
++                        )
++                        continue
+... (truncated)
+@@ -375,7 +384,7 @@ class Orchestrator:
+                 iter_n=iteration,
+                 note=f"{active_phase} iter {iteration}/{max_iter}",
+             )
+-            self._save_checkpoint()
++            self._save_checkpoint(iteration)
+ 
+             self._invoke_agent_for_role(agent_role, iteration)
+ 
+@@ -388,7 +397,7 @@ class Orchestrator:
+                 iter_n=iteration,
+                 note=f"{review_phase} iter {iteration}/{max_iter}",
+             )
+-            self._save_checkpoint()
++            self._save_checkpoint(iteration)
+ 
+             reviewer_count = self._get_reviewer_count()
+             if reviewer_count > 1:
+
+
+diff --git a/src/unison/reviewer_pool.py b/src/unison/reviewer_pool.py
+index 7afc13e..e94cf6d 100644
+--- a/src/unison/reviewer_pool.py
++++ b/src/unison/reviewer_pool.py
+@@ -61,7 +61,15 @@ class ReviewerPool:
+                 for _ in range(self.config.count)
+             ]
+             for future in as_completed(futures):
+-                verdicts.append(future.result())
++                try:
++                    verdicts.append(future.result())
++                except Exception as exc:
++                    verdicts.append(ReviewVerdict(
++                        iter_n=0,
++                        verdict="REQUEST_CHANGES",
++                        summary=f"Reviewer crashed: {exc}",
++                        findings=[],
++                    ))
+         return verdicts
+ 
+     # ------------------------------------------------------------------
+
+
+## Design
+# L1 batch
+
+
+## PRD
+# Fix: Orchestrator L1 batch (6 items)
+
+## 1. Parallel dev halt check between agents
+in `_invoke_parallel_developers`, after `runner.run()` at line ~559,
+add `if self._state.halt_signal: break` so agent B doesn't run if A triggered halt.
+
+## 2. Parallel dev budget check
+in `_invoke_parallel_developers`, before `runner.run()`, add:
+```python
+if not tracker.check_budget():
+    self.halt(f"budget overflow: developer")
+    return
+```
+
+## 3. Remove pre_invoke_cleanup from multi-reviewer
+in `_invoke_multi_reviewer`, delete `self.pre_invoke_cleanup()` call.
+Reviewers don't need clean workspace — they only read and write reviews.
+
+## 4. Budget tracker preserve history
+in `_get_budget_tracker`, when per_task_limit changes, update the existing
+tracker's limit instead of creating a new one (which loses all history):
+```python
+self._budget_tracker.per_task_limit = per_task_limit
+```
+Only create new tracker if `self._budget_tracker is None`.
+
+## 5. _save_checkpoint explicit iter_n
+Pass the loop's `iteration` variable instead of `self._state.iteration`.
+Requires adding `iteration` parameter to save checkpoint calls in `_run_loop`.
+
+## 6. DAG exec_stage validate pipeline_role
+in `_run_dag_development`, after getting `pr = agent_spec.effective_role`,
+validate it's "developer" — if not, log warning and skip.
+
+## Acceptance
+- orchestrator tests pass (14+)
+- custom_roles tests pass (11+)
+- No functional change in normal pipeline flow
+
+codex
+I’ll run the specified tests first, then inspect the relevant code paths against the PRD/design and write the review file. I’ll avoid modifying `src/` as requested.
+exec
+/bin/bash -lc 'git diff -- src/unison/orchestrator.py src/unison/reviewer_pool.py' in /home/sean/projects/unison
+ succeeded in 0ms:
+diff --git a/src/unison/reviewer_pool.py b/src/unison/reviewer_pool.py
+index e94cf6d..ef13190 100644
+--- a/src/unison/reviewer_pool.py
++++ b/src/unison/reviewer_pool.py
+@@ -69,6 +69,7 @@ class ReviewerPool:
+                         verdict="REQUEST_CHANGES",
+                         summary=f"Reviewer crashed: {exc}",
+                         findings=[],
++                        raw_path=Path("."),
+                     ))
+         return verdicts
+ 
+
+exec
+/bin/bash -lc "rg -n \"def _save_checkpoint|_save_checkpoint\\(|_invoke_parallel_developers|_invoke_multi_reviewer|_get_budget_tracker|_run_dag_development|class ReviewerPool|def run\" src/unison tests" in /home/sean/projects/unison
+ succeeded in 0ms:
+tests/test_checkpoint.py:19:    def test_save_checkpoint(self, tmp_path):
+src/unison/orchestrator.py:184:    def run(self) -> State:
+src/unison/orchestrator.py:262:            self._save_checkpoint()
+src/unison/orchestrator.py:276:            self._run_dag_development()
+src/unison/orchestrator.py:283:            self._save_checkpoint()
+src/unison/orchestrator.py:285:    def _run_dag_development(self) -> None:
+src/unison/orchestrator.py:291:        self._save_checkpoint()
+src/unison/orchestrator.py:327:        self._save_checkpoint()
+src/unison/orchestrator.py:338:            self._save_checkpoint()
+src/unison/orchestrator.py:387:            self._save_checkpoint(iteration)
+src/unison/orchestrator.py:400:            self._save_checkpoint(iteration)
+src/unison/orchestrator.py:404:                self._invoke_multi_reviewer(iteration, review_phase)
+src/unison/orchestrator.py:461:                    self._invoke_parallel_developers(iteration, pd, feature_list)
+src/unison/orchestrator.py:474:        tracker = self._get_budget_tracker(role)
+src/unison/orchestrator.py:536:    def _invoke_parallel_developers(
+src/unison/orchestrator.py:587:            tracker = self._get_budget_tracker("developer")
+src/unison/orchestrator.py:648:    def _invoke_multi_reviewer(
+src/unison/orchestrator.py:835:        tracker = self._get_budget_tracker(role)
+src/unison/orchestrator.py:945:    def _get_budget_tracker(self, role: str = "") -> BudgetTracker:
+src/unison/orchestrator.py:1107:        tracker = self._get_budget_tracker(role)
+src/unison/orchestrator.py:1202:    def _save_checkpoint(self, iteration: int | None = None) -> None:
+tests/test_orchestrator.py:458:        tracker = orch._get_budget_tracker("developer")
+tests/test_orchestrator.py:498:        tracker = orch._get_budget_tracker("developer")
+tests/test_orchestrator.py:540:        tracker = orch._get_budget_tracker("developer")
+tests/test_orchestrator.py:593:        tracker = orch._get_budget_tracker("reviewer")
+tests/test_orchestrator.py:646:        tracker = orch._get_budget_tracker("reviewer")
+tests/test_orchestrator.py:704:        monkeypatch.setattr(orch, "_run_dag_development",
+tests/test_orchestrator.py:756:        monkeypatch.setattr(orch, "_run_dag_development",
+tests/test_observer.py:424:        def run_observer():
+tests/test_observer.py:473:        def run_observer():
+tests/test_observer.py:518:        def run_observer():
+tests/test_observer.py:567:        def run_observer():
+tests/test_observer.py:796:        def run_observer():
+tests/test_observer.py:846:        def run_observer():
+tests/test_pipeline.py:1071:        # pipeline.py `_run_dag_development` 注释），所以 3 个
+src/unison/runners/base.py:158:    def run(
+src/unison/runners/base.py:253:    def run(
+src/unison/runners/openclaw.py:40:    def run(
+src/unison/reviewer_pool.py:11:class ReviewerPool:
+src/unison/observer.py:587:    def run(self) -> None:
+
+exec
+/bin/bash -lc 'python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q' in /home/sean/projects/unison
+ succeeded in 633ms:
+...........................                                              [100%]
+27 passed in 0.27s
+
+codex
+The requested test command passed: `27 passed in 0.27s`. I’m now checking the implemented behavior around the six L1 items and the reviewer crash handling shown in the diff, since the current working diff includes a small extra `raw_path` change in `reviewer_pool.py`.
+exec
+/bin/bash -lc "sed -n '536,675p' src/unison/orchestrator.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+    def _invoke_parallel_developers(
+        self, iteration: int, pd, feature_list: list[str]
+    ) -> None:
+        """Dispatch one Developer agent per feature via worktree isolation.
+
+        Creates a git worktree for each feature name, runs the developer
+        agent in that worktree, then merges all feature branches back
+        via ``WorktreeManager.merge_reconciliation``.
+
+        Args:
+            iteration: Current iteration number.
+            pd: ``WorktreeConfig`` from ``spec.parallel_dev``.
+            feature_list: Feature names to parallelize over.
+        """
+        from unison.worktree import WorktreeManager, WorktreeInfo
+
+        world = self.spec.world
+
+        # Pre-invoke cleanup once (not per-feature)
+        self.pre_invoke_cleanup()
+        if self._state.halt_signal:
+            return
+
+        mgr = WorktreeManager(config=pd, project_root=world.root)
+        worktree_infos: list[WorktreeInfo | None] = []
+
+        # Create worktrees for each feature
+        for feature_name in feature_list:
+            info = mgr.create_worktree(feature_name)
+            worktree_infos.append(info)
+            if info is None:
+                self._state.transition(
+                    "dev_active", "orchestrator",
+                    iter_n=iteration,
+                    note=f"Worktree creation failed for {feature_name}",
+                )
+
+        # Dispatch one Developer to each created worktree
+        for feature_name, info in zip(feature_list, worktree_infos):
+            if info is None:
+                continue
+
+            if self._state.halt_signal:
+                break
+
+            # Get runner for developer
+            runner, effective_spec = self._select_runner("developer")
+            if runner is None or effective_spec is None:
+                continue
+
+            # Check budget overflow BEFORE invoking agent (L1 fix #2)
+            tracker = self._get_budget_tracker("developer")
+            if not tracker.check_budget():
+                self.halt("budget overflow: developer")
+                return
+
+            # Build feature-specific prompt
+            prompt = (
+                f"=== Parallel Developer: {feature_name} ===\n"
+                f"Iteration {iteration}\n"
+                f"Feature: {feature_name}\n"
+                f"Worktree: {info.path}\n"
+                f"1. Read prd/PRD.md and prd/tech-design.md\n"
+                f"2. Implement {feature_name} in src/\n"
+                f"3. Write tests in tests/\n"
+                f"4. Run: {self.spec.project.test_command}\n"
+                f"5. Commit with: git add -A && git commit -m '{feature_name}: ...'"
+            )
+
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            log_path = world.agent_log("developer", iteration, f"{timestamp}_{feature_name}")  # type: ignore[arg-type]
+
+            runner.run(
+                spec=effective_spec,
+                prompt=prompt,
+                workdir=info.path,
+                timeout=self.spec.per_agent_timeout,
+                log_path=log_path,
+            )
+
+            # L1 fix #1: halt check after runner.run() so agent B doesn't
+            # run if agent A triggered halt (e.g. budget overflow / SIGINT).
+            if self._state.halt_signal:
+                break
+
+            # Track token usage
+            estimated_tokens = max(1, len(prompt) // 4)
+            tracker.add_usage(estimated_tokens, phase=f"developer_{feature_name}", iter_n=iteration)
+
+            # Completion detection
+            detected = self._detector.detect(
+                workspace=info.path,
+                expected_iter=iteration,
+                role="developer",
+                log_path=log_path,
+            )
+            if detected.commit:
+                self._state.last_dev_commit = detected.commit
+
+        # Merge all feature branches
+        branch_names = [
+            info.branch for info in worktree_infos
+            if info is not None
+        ]
+        if branch_names:
+            merge_result = mgr.merge_reconciliation(branch_names, strategy="ff")
+            if not merge_result.success:
+                logger = __import__("logging").getLogger(__name__)
+                logger.warning(
+                    "merge_reconciliation conflicts: %s", merge_result.conflicts
+                )
+
+    def _invoke_multi_reviewer(
+        self, iteration: int, review_phase: str = "dev_review"
+    ) -> None:
+        """Invoke multiple reviewers in parallel via ReviewerPool.
+
+        Each reviewer writes to a unique path ``reviews/iter-{N}-R{i}.md``.
+        After all reviewers complete, verdicts are reconciled
+        (majority or unanimous) and the final verdict is written to
+        ``reviews/iter-{N}.md`` for the standard verdict routing path.
+
+        Individual reviewer verdicts are stored in
+        ``self._state.reviewer_verdicts`` for V2 multi-reviewer tracking.
+
+        Args:
+            iteration: Current iteration number.
+        """
+        from interfaces import ReviewerConfig
+        from unison.reviewer_pool import ReviewerPool
+
+        world = self.spec.world
+        agent_spec = self._resolve_agent("reviewer")
+        if agent_spec is None:
+            self.halt("No agent spec for role: reviewer")
+            return
+
+        reviewer_count = self._get_reviewer_count()
+        if reviewer_count < 2:
+            return  # Safety: shouldn't be called for single reviewer
+
+exec
+/bin/bash -lc "sed -n '1,95p' src/unison/reviewer_pool.py" in /home/sean/projects/unison
+ succeeded in 4ms:
+"""reviewer_pool.py — ReviewerPool: 多 Reviewer 并行审查 + verdict reconcile."""
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Callable
+
+from interfaces import ReviewerConfig, ReviewVerdict, Verdict
+
+
+class ReviewerPool:
+    """多 Reviewer 并行审查池。
+
+    支持两种模式：
+    - 单 Reviewer（config.enabled=False）：退化为顺序执行
+    - 多 Reviewer（config.enabled=True）：ThreadPoolExecutor 并行执行
+
+    Usage::
+
+        config = ReviewerConfig(enabled=True, count=3, reconcile_strategy="majority")
+        pool = ReviewerPool(config)
+
+        def review_one(path: Path) -> ReviewVerdict:
+            ...  # 调用单个 Reviewer
+
+        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+        final = pool.reconcile_verdicts(verdicts, iter_n=1)
+    """
+
+    def __init__(self, config: ReviewerConfig) -> None:
+        self.config = config
+
+    # ------------------------------------------------------------------
+    # execute_parallel
+    # ------------------------------------------------------------------
+
+    def execute_parallel(
+        self,
+        code_path: Path,
+        review_fn: Callable[[Path], ReviewVerdict],
+    ) -> list[ReviewVerdict]:
+        """并行执行多个 Reviewer。
+
+        Args:
+            code_path: 待审查代码路径。
+            review_fn: 单个 Reviewer 的执行函数，签名为 ``(Path) -> ReviewVerdict``。
+                内部负责读取代码、调用 LLM、写入 review 文件、解析 verdict。
+
+        Returns:
+            ReviewVerdict 列表，长度 = ``config.count``（或 1 当 ``enabled=False``）。
+        """
+        # 单 Reviewer 模式：直接调用一次
+        if not self.config.enabled:
+            return [review_fn(code_path)]
+
+        # 多 Reviewer 模式：ThreadPoolExecutor 并行
+        verdicts: list[ReviewVerdict] = []
+        with ThreadPoolExecutor(max_workers=self.config.count) as executor:
+            futures = [
+                executor.submit(review_fn, code_path)
+                for _ in range(self.config.count)
+            ]
+            for future in as_completed(futures):
+                try:
+                    verdicts.append(future.result())
+                except Exception as exc:
+                    verdicts.append(ReviewVerdict(
+                        iter_n=0,
+                        verdict="REQUEST_CHANGES",
+                        summary=f"Reviewer crashed: {exc}",
+                        findings=[],
+                        raw_path=Path("."),
+                    ))
+        return verdicts
+
+    # ------------------------------------------------------------------
+    # reconcile_verdicts
+    # ------------------------------------------------------------------
+
+    def reconcile_verdicts(
+        self,
+        verdicts: list[ReviewVerdict],
+        iter_n: int = 0,
+    ) -> ReviewVerdict:
+        """合并多个 verdict 为最终裁决。
+
+        **majority 策略**（默认）：
+            - 多数 PASS → 最终 PASS
+            - 多数 REQUEST_CHANGES → 最终 REQUEST_CHANGES
+            - 要求 count 为奇数以避免平票（已在 ReviewerConfig.__post_init__ 校验）
+
+        **unanimous 策略**：
+            - 全部 PASS → 最终 PASS
+            - 任意 REQUEST_CHANGES → 最终 REQUEST_CHANGES
+
+
+exec
+/bin/bash -lc "sed -n '930,970p' src/unison/orchestrator.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+        ``effective_role`` matches *pipeline_role*.
+
+        Returns:
+            The matching ``AgentSpec``, or ``None`` if no agent maps
+            to *pipeline_role*.
+        """
+        from interfaces import AgentSpec
+
+        if pipeline_role in self.spec.agents:
+            return self.spec.agents[pipeline_role]
+        for agent in self.spec.agents.values():
+            if agent.effective_role == pipeline_role:
+                return agent
+        return None
+
+    def _get_budget_tracker(self, role: str = "") -> BudgetTracker:
+        """Return the shared BudgetTracker, creating it lazily.
+
+        Per-agent ``context_budget`` overrides the global
+        ``BudgetConfig.per_task_limit`` when set on the agent's spec.
+
+        If the tracker already exists but the requested role has a
+        different per-task limit (e.g. planner ran first with the
+        global 200K, then developer with context_budget=50K is
+        invoked), the old tracker is discarded and a new one is
+        created so the tighter cap takes effect.
+
+        Args:
+            role: Agent role for per-agent context_budget lookup.
+        """
+        # Determine per_task_limit: per-agent override takes precedence
+        per_task_limit = self.spec.budget.per_task_limit
+        if role:
+            agent_spec = self._resolve_agent(role)
+            if agent_spec is not None and agent_spec.context_budget is not None:
+                per_task_limit = agent_spec.context_budget
+
+        # L1 fix #4: when per_task_limit changes, update the existing
+        # tracker's limit instead of discarding it (which loses all
+        # accumulated usage history).
+        if (self._budget_tracker is not None
+
+exec
+/bin/bash -lc 'git diff --stat && git diff -- tests/test_orchestrator.py tests/test_custom_roles.py tests/test_checkpoint.py src/unison/orchestrator.py src/unison/reviewer_pool.py' in /home/sean/projects/unison
+ succeeded in 0ms:
+exec
+/bin/bash -lc "sed -n '1190,1215p' src/unison/orchestrator.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+        review_path = self._review_file_for_phase(review_phase, iteration)
+        if not review_path.exists():
+            return None
+
+        try:
+            parsed = self._verdict_parser.parse(review_path, iteration)
+            self._state.last_review_verdict = parsed.verdict
+            self._state.last_review_path = review_path
+            return parsed.verdict
+        except (VerdictParseError, yaml.YAMLError):
+            return None
+
+    def _save_checkpoint(self, iteration: int | None = None) -> None:
+        """Save a checkpoint after each phase transition (§19).
+
+        Checkpoints are stored under ~/.unison/checkpoints/<project>/
+        with the naming convention ckpt-<iter>-<phase>-<timestamp>.json.
+
+        Args:
+            iteration: Explicit iter_n from the loop (L1 fix #5).
+                When ``None``, falls back to ``self._state.iteration``.
+        """
+        iter_n = iteration if iteration is not None else self._state.iteration
+        self._checkpoint_mgr.save(
+            project=self.spec.world.root.name,
+            state=self._state,
+
+exec
+/bin/bash -lc "sed -n '285,415p' src/unison/orchestrator.py" in /home/sean/projects/unison
+ succeeded in 0ms:
+    def _run_dag_development(self) -> None:
+        """Run development via DAGScheduler when spec.dag is configured."""
+        from unison.pipeline import DAGScheduler
+
+        self._state.transition("dev_active", "orchestrator",
+                               iter_n=1, note="starting DAG development")
+        self._save_checkpoint()
+
+        scheduler = DAGScheduler(self.spec.dag)
+        cancel_event = scheduler.cancel_event
+        self._dag_cancel_event = cancel_event
+
+        def exec_stage(stage):
+            # Cooperative cancellation: if another stage timed out,
+            # don't start file-system mutations.
+            if cancel_event.is_set():
+                return False
+            # Use stage.agents when available, fall back to default developer
+            if stage.agents:
+                for _role_name, agent_spec in stage.agents.items():
+                    pr = agent_spec.effective_role
+                    # L1 fix #6: DAG stages only support developer agents
+                    if pr != "developer":
+                        _log = __import__("logging").getLogger(__name__)
+                        _log.warning(
+                            "DAG stage agent '%s' has role '%s', expected "
+                            "'developer' — skipping",
+                            _role_name, pr,
+                        )
+                        continue
+                    self._invoke_agent_for_role(pr, 1)
+                    break  # one agent per stage for now
+            else:
+                self._invoke_agent_for_role("developer", 1)
+            return self._state.last_dev_commit is not None
+
+        scheduler.execute_parallel(executor=exec_stage, max_workers=4)
+
+    def _run_linear_development(self) -> None:
+        """Run the standard linear dev_active ↔ dev_review loop (V1 mode)."""
+        self._state.transition("dev_active", "orchestrator",
+                               iter_n=1, note="starting development loop")
+        self._save_checkpoint()
+
+        self._run_loop(
+            active_phase="dev_active",
+            review_phase="dev_review",
+            review_of="code + tests",
+        )
+
+        if not self._state.halt_signal:
+            self._state.transition("done", "orchestrator",
+                                   note="pipeline complete")
+            self._save_checkpoint()
+
+    def _should_plan(self) -> bool:
+        """Return True if the planning phase should run.
+
+        Planning runs when a ``planner`` agent is configured in the spec.
+        If no planner is defined, we skip straight to development
+        (PRD was authored externally — ARCHITECTURE.md §21).
+        """
+        return any(a.effective_role == "planner" for a in self.spec.agents.values())
+
+    def _run_loop(
+        self,
+        active_phase: str,
+        review_phase: str,
+        review_of: str,
+    ) -> None:
+        """Run a single active→review loop.
+
+        Generic shared by planning and development.  The only differences
+        are the phase names and the reviewer's evaluation focus.
+
+        Args:
+            active_phase: Phase name for active work
+                          ("planning_active" or "dev_active").
+            review_phase: Phase name for review
+                          ("planning_review" or "dev_review").
+            review_of: Human-readable description of what is being reviewed
+                       (used in verdict routing messages).
+        """
+        max_iter = self.spec.max_iterations
+
+        # Map phase → agent role
+        role_for_phase = {
+            "planning_active": "planner",
+            "dev_active": "developer",
+        }
+        agent_role = role_for_phase[active_phase]
+
+        for iteration in range(1, max_iter + 1):
+            if self._state.halt_signal:
+                return
+
+            # ---- Active phase -----------------------------------------------
+            self._state.transition(
+                active_phase, "orchestrator",
+                iter_n=iteration,
+                note=f"{active_phase} iter {iteration}/{max_iter}",
+            )
+            self._save_checkpoint(iteration)
+
+            self._invoke_agent_for_role(agent_role, iteration)
+
+            if self._state.halt_signal:
+                return
+
+            # ---- Review phase -----------------------------------------------
+            self._state.transition(
+                review_phase, "orchestrator",
+                iter_n=iteration,
+                note=f"{review_phase} iter {iteration}/{max_iter}",
+            )
+            self._save_checkpoint(iteration)
+
+            reviewer_count = self._get_reviewer_count()
+            if reviewer_count > 1:
+                self._invoke_multi_reviewer(iteration, review_phase)
+            else:
+                self._invoke_agent_for_role("reviewer", iteration, review_phase=review_phase)
+
+            if self._state.halt_signal:
+                return
+
+            # ---- Verdict routing --------------------------------------------
+            verdict = self._parse_verdict(iteration, review_phase)
+
+            if verdict == "PASS":
+                # Exit loop — review approved
+
+codex
+The implementation covers the obvious requested edits at a glance, so I’m drilling into edge cases: whether skipped DAG stages report success correctly, whether budget history is actually preserved, and whether the synthetic reviewer verdict has enough metadata for reconciliation/reporting.
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '645,735p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   645	                    "merge_reconciliation conflicts: %s", merge_result.conflicts
+   646	                )
+   647	
+   648	    def _invoke_multi_reviewer(
+   649	        self, iteration: int, review_phase: str = "dev_review"
+   650	    ) -> None:
+   651	        """Invoke multiple reviewers in parallel via ReviewerPool.
+   652	
+   653	        Each reviewer writes to a unique path ``reviews/iter-{N}-R{i}.md``.
+   654	        After all reviewers complete, verdicts are reconciled
+   655	        (majority or unanimous) and the final verdict is written to
+   656	        ``reviews/iter-{N}.md`` for the standard verdict routing path.
+   657	
+   658	        Individual reviewer verdicts are stored in
+   659	        ``self._state.reviewer_verdicts`` for V2 multi-reviewer tracking.
+   660	
+   661	        Args:
+   662	            iteration: Current iteration number.
+   663	        """
+   664	        from interfaces import ReviewerConfig
+   665	        from unison.reviewer_pool import ReviewerPool
+   666	
+   667	        world = self.spec.world
+   668	        agent_spec = self._resolve_agent("reviewer")
+   669	        if agent_spec is None:
+   670	            self.halt("No agent spec for role: reviewer")
+   671	            return
+   672	
+   673	        reviewer_count = self._get_reviewer_count()
+   674	        if reviewer_count < 2:
+   675	            return  # Safety: shouldn't be called for single reviewer
+   676	
+   677	        # L1 fix #3: reviewers only read and write reviews — they don't
+   678	        # need a clean workspace, so skip pre_invoke_cleanup here.
+   679	        if self._state.halt_signal:
+   680	            return
+   681	
+   682	        runner = self._runners.get(agent_spec.runtime)
+   683	        if runner is None:
+   684	            self.halt(f"No runner for runtime: {agent_spec.runtime}")
+   685	            return
+   686	
+   687	        # Thread-safe index counter for reviewer identity
+   688	        reviewer_idx = itertools.count()
+   689	
+   690	        def review_one(code_path: Path) -> ReviewVerdict:
+   691	            """Run a single reviewer agent and return its parsed verdict."""
+   692	            idx = next(reviewer_idx)
+   693	            review_path = world.reviews_dir / f"iter-{iteration}-R{idx}.md"
+   694	
+   695	            # Build reviewer-specific prompt
+   696	            prompt = (
+   697	                f"=== Review Iteration {iteration} "
+   698	                f"(Reviewer {idx + 1} of {reviewer_count}) ===\n"
+   699	                f"1. Run tests: {self.spec.project.test_command}\n"
+   700	                f"2. Write review to reviews/iter-{iteration}-R{idx}.md\n"
+   701	                f"3. Use YAML frontmatter format:\n"
+   702	                f"   ---\n"
+   703	                f"   verdict: PASS | REQUEST_CHANGES\n"
+   704	                f"   summary: ...\n"
+   705	                f"   findings:\n"
+   706	                f"     - [severity] description\n"
+   707	                f"   ---\n"
+   708	                f"4. Do NOT modify src/"
+   709	            )
+   710	
+   711	            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+   712	            log_path = world.agent_log(
+   713	                "reviewer", iteration,  # type: ignore[arg-type]
+   714	                f"{timestamp}_R{idx}",
+   715	            )
+   716	
+   717	            # Run the agent subprocess
+   718	            runner.run(
+   719	                spec=agent_spec,
+   720	                prompt=prompt,
+   721	                workdir=world.root,
+   722	                timeout=self.spec.per_agent_timeout,
+   723	                log_path=log_path,
+   724	            )
+   725	
+   726	            # Post-invoke completion detection
+   727	            self._detector.detect(
+   728	                workspace=world.root,
+   729	                expected_iter=iteration,
+   730	                role="reviewer",
+   731	                log_path=log_path,
+   732	            )
+   733	
+   734	            # Parse verdict from individual reviewer output file
+   735	            if review_path.exists():
+
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '945,975p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   945	    def _get_budget_tracker(self, role: str = "") -> BudgetTracker:
+   946	        """Return the shared BudgetTracker, creating it lazily.
+   947	
+   948	        Per-agent ``context_budget`` overrides the global
+   949	        ``BudgetConfig.per_task_limit`` when set on the agent's spec.
+   950	
+   951	        If the tracker already exists but the requested role has a
+   952	        different per-task limit (e.g. planner ran first with the
+   953	        global 200K, then developer with context_budget=50K is
+   954	        invoked), the old tracker is discarded and a new one is
+   955	        created so the tighter cap takes effect.
+   956	
+   957	        Args:
+   958	            role: Agent role for per-agent context_budget lookup.
+   959	        """
+   960	        # Determine per_task_limit: per-agent override takes precedence
+   961	        per_task_limit = self.spec.budget.per_task_limit
+   962	        if role:
+   963	            agent_spec = self._resolve_agent(role)
+   964	            if agent_spec is not None and agent_spec.context_budget is not None:
+   965	                per_task_limit = agent_spec.context_budget
+   966	
+   967	        # L1 fix #4: when per_task_limit changes, update the existing
+   968	        # tracker's limit instead of discarding it (which loses all
+   969	        # accumulated usage history).
+   970	        if (self._budget_tracker is not None
+   971	                and self._budget_tracker.per_task_limit != per_task_limit):
+   972	            self._budget_tracker.per_task_limit = per_task_limit
+   973	
+   974	        if self._budget_tracker is not None:
+   975	            return self._budget_tracker
+
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '300,335p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   300	            if cancel_event.is_set():
+   301	                return False
+   302	            # Use stage.agents when available, fall back to default developer
+   303	            if stage.agents:
+   304	                for _role_name, agent_spec in stage.agents.items():
+   305	                    pr = agent_spec.effective_role
+   306	                    # L1 fix #6: DAG stages only support developer agents
+   307	                    if pr != "developer":
+   308	                        _log = __import__("logging").getLogger(__name__)
+   309	                        _log.warning(
+   310	                            "DAG stage agent '%s' has role '%s', expected "
+   311	                            "'developer' — skipping",
+   312	                            _role_name, pr,
+   313	                        )
+   314	                        continue
+   315	                    self._invoke_agent_for_role(pr, 1)
+   316	                    break  # one agent per stage for now
+   317	            else:
+   318	                self._invoke_agent_for_role("developer", 1)
+   319	            return self._state.last_dev_commit is not None
+   320	
+   321	        scheduler.execute_parallel(executor=exec_stage, max_workers=4)
+   322	
+   323	    def _run_linear_development(self) -> None:
+   324	        """Run the standard linear dev_active ↔ dev_review loop (V1 mode)."""
+   325	        self._state.transition("dev_active", "orchestrator",
+   326	                               iter_n=1, note="starting development loop")
+   327	        self._save_checkpoint()
+   328	
+   329	        self._run_loop(
+   330	            active_phase="dev_active",
+   331	            review_phase="dev_review",
+   332	            review_of="code + tests",
+   333	        )
+   334	
+   335	        if not self._state.halt_signal:
+
+exec
+/bin/bash -lc "nl -ba src/unison/reviewer_pool.py | sed -n '55,75p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+    55	
+    56	        # 多 Reviewer 模式：ThreadPoolExecutor 并行
+    57	        verdicts: list[ReviewVerdict] = []
+    58	        with ThreadPoolExecutor(max_workers=self.config.count) as executor:
+    59	            futures = [
+    60	                executor.submit(review_fn, code_path)
+    61	                for _ in range(self.config.count)
+    62	            ]
+    63	            for future in as_completed(futures):
+    64	                try:
+    65	                    verdicts.append(future.result())
+    66	                except Exception as exc:
+    67	                    verdicts.append(ReviewVerdict(
+    68	                        iter_n=0,
+    69	                        verdict="REQUEST_CHANGES",
+    70	                        summary=f"Reviewer crashed: {exc}",
+    71	                        findings=[],
+    72	                        raw_path=Path("."),
+    73	                    ))
+    74	        return verdicts
+    75	
+
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '1200,1212p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+  1200	            return None
+  1201	
+  1202	    def _save_checkpoint(self, iteration: int | None = None) -> None:
+  1203	        """Save a checkpoint after each phase transition (§19).
+  1204	
+  1205	        Checkpoints are stored under ~/.unison/checkpoints/<project>/
+  1206	        with the naming convention ckpt-<iter>-<phase>-<timestamp>.json.
+  1207	
+  1208	        Args:
+  1209	            iteration: Explicit iter_n from the loop (L1 fix #5).
+  1210	                When ``None``, falls back to ``self._state.iteration``.
+  1211	        """
+  1212	        iter_n = iteration if iteration is not None else self._state.iteration
+
+exec
+/bin/bash -lc "rg -n \"class ReviewVerdict|ReviewVerdict\\(\" -S ." in /home/sean/projects/unison
+ succeeded in 0ms:
+./interfaces.py:465:class ReviewVerdict:
+./tests/test_verdict.py:197:        verdict = ReviewVerdict(
+./tests/test_reviewer_pool.py:25:    return ReviewVerdict(
+./src/unison/orchestrator.py:739:                    return ReviewVerdict(
+./src/unison/orchestrator.py:747:                return ReviewVerdict(
+./src/unison/verdict.py:109:        result = ReviewVerdict(
+./src/unison/reviewer_pool.py:67:                    verdicts.append(ReviewVerdict(
+./src/unison/reviewer_pool.py:115:            return ReviewVerdict(
+./src/unison/reviewer_pool.py:146:        return ReviewVerdict(
+./observer/logs/reviewer_iter-1_20260620T075440Z.log:2213:                    return ReviewVerdict(
+./observer/logs/reviewer_iter-1_20260620T075440Z.log:2221:                return ReviewVerdict(
+./observer/logs/reviewer_iter-1_20260620T070649Z.log:1862:   689	                    return ReviewVerdict(
+./observer/logs/reviewer_iter-2_20260619T173514Z.log:3624:   461	class ReviewVerdict:
+
+exec
+/bin/bash -lc "nl -ba src/unison/reviewer_pool.py | sed -n '95,160p'" in /home/sean/projects/unison
+exec
+/bin/bash -lc "nl -ba interfaces.py | sed -n '455,480p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   455	    def run(self, spec: AgentSpec, prompt: str, workdir: Path,
+   456	            timeout: int, log_path: Path) -> AgentResult:
+   457	        """HTTP POST to gateway API + session poll。"""
+   458	        ...
+   459	
+   460	# ============================================================================
+   461	# Verdict Parser — reviews/iter-N.md 解析
+   462	# ============================================================================
+   463	
+   464	@dataclass
+   465	class ReviewVerdict:
+   466	    """reviews/iter-N.md 的解析结果。"""
+   467	    iter_n: int
+   468	    verdict: Verdict
+   469	    summary: str
+   470	    findings: list[str]  # 原始 finding 行
+   471	    raw_path: Path
+   472	    suspicious: bool = False  # PASS with 0 findings → 标记
+   473	
+   474	class VerdictParser(Protocol):
+   475	    def parse(self, review_path: Path, expected_iter: int) -> ReviewVerdict: ...
+   476	
+   477	@dataclass
+   478	class YamlFrontmatterParser:
+   479	    """YAML frontmatter 解析（reviews/iter-N.md 格式）。"""
+   480	    def parse(self, review_path: Path, expected_iter: int) -> ReviewVerdict:
+
+ succeeded in 0ms:
+    95	
+    96	        Args:
+    97	            verdicts: 待合并的 verdict 列表。
+    98	            iter_n: 迭代编号（用于构建结果）。
+    99	
+   100	        Returns:
+   101	            合并后的 ``ReviewVerdict``；所有 findings 都会保留，
+   102	            每个 finding 前添加 ``[RN]`` 标记以追溯来源 Reviewer。
+   103	
+   104	        Raises:
+   105	            ValueError: ``verdicts`` 为空。
+   106	        """
+   107	        if not verdicts:
+   108	            raise ValueError("verdicts must not be empty")
+   109	
+   110	        # 单 verdict — 直接返回（但更新 iter_n）
+   111	        if len(verdicts) == 1:
+   112	            v = verdicts[0]
+   113	            if v.iter_n == iter_n:
+   114	                return v
+   115	            return ReviewVerdict(
+   116	                iter_n=iter_n,
+   117	                verdict=v.verdict,
+   118	                summary=v.summary,
+   119	                findings=list(v.findings),
+   120	                raw_path=v.raw_path,
+   121	                suspicious=v.suspicious,
+   122	            )
+   123	
+   124	        strategy = self.config.reconcile_strategy
+   125	
+   126	        pass_count = sum(1 for v in verdicts if v.verdict == "PASS")
+   127	        request_changes_count = len(verdicts) - pass_count
+   128	
+   129	        if strategy == "unanimous":
+   130	            final_verdict: Verdict = (
+   131	                "PASS" if request_changes_count == 0 else "REQUEST_CHANGES"
+   132	            )
+   133	        else:  # majority
+   134	            final_verdict = (
+   135	                "PASS" if pass_count > request_changes_count else "REQUEST_CHANGES"
+   136	            )
+   137	
+   138	        # 合并所有 findings + summary，标记来源 Reviewer
+   139	        merged_summaries: list[str] = []
+   140	        merged_findings: list[str] = []
+   141	        for i, v in enumerate(verdicts):
+   142	            merged_summaries.append(f"[R{i}] {v.summary}")
+   143	            for finding in v.findings:
+   144	                merged_findings.append(f"[R{i}] {finding}")
+   145	
+   146	        return ReviewVerdict(
+   147	            iter_n=iter_n,
+   148	            verdict=final_verdict,
+   149	            summary=" | ".join(merged_summaries),
+   150	            findings=merged_findings,
+   151	            raw_path=verdicts[0].raw_path,
+   152	            suspicious=(final_verdict == "PASS" and len(merged_findings) == 0),
+   153	        )
+
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '735,785p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   735	            if review_path.exists():
+   736	                try:
+   737	                    return self._verdict_parser.parse(review_path, iteration)
+   738	                except Exception:
+   739	                    return ReviewVerdict(
+   740	                        iter_n=iteration,
+   741	                        verdict="REQUEST_CHANGES",
+   742	                        summary=f"Parse error for reviewer {idx}",
+   743	                        findings=[],
+   744	                        raw_path=review_path,
+   745	                    )
+   746	            else:
+   747	                return ReviewVerdict(
+   748	                    iter_n=iteration,
+   749	                    verdict="REQUEST_CHANGES",
+   750	                    summary=f"Reviewer {idx} produced no output",
+   751	                    findings=[],
+   752	                    raw_path=review_path,
+   753	                )
+   754	
+   755	        # Build ReviewerConfig — prefer spec.reviewer_config, fall back to env
+   756	        if self.spec.reviewer_config is not None and self.spec.reviewer_config.enabled:
+   757	            config = self.spec.reviewer_config
+   758	        else:
+   759	            reconcile_strategy = os.environ.get(
+   760	                "UNISON_REVIEWER_STRATEGY", "majority"
+   761	            )
+   762	            if reconcile_strategy not in ("majority", "unanimous"):
+   763	                reconcile_strategy = "majority"
+   764	
+   765	            try:
+   766	                config = ReviewerConfig(
+   767	                    enabled=True,
+   768	                    count=reviewer_count,
+   769	                    reconcile_strategy=reconcile_strategy,  # type: ignore[arg-type]
+   770	                )
+   771	            except ValueError:
+   772	                # Even count + majority → fall back to unanimous
+   773	                config = ReviewerConfig(
+   774	                    enabled=True,
+   775	                    count=reviewer_count,
+   776	                    reconcile_strategy="unanimous",
+   777	                )
+   778	
+   779	        pool = ReviewerPool(config)
+   780	
+   781	        verdicts = pool.execute_parallel(world.root, review_fn=review_one)
+   782	
+   783	        # Store individual verdicts in state for V2 tracking
+   784	        self._state.reviewer_verdicts = [
+   785	            {
+
+exec
+/bin/bash -lc 'rg -n "ReviewerPool|execute_parallel|reconcile|raw_path|Reviewer crashed" tests src/unison' in /home/sean/projects/unison
+ succeeded in 0ms:
+tests/test_verdict.py:39:        assert result.raw_path == review_file
+tests/test_verdict.py:202:            raw_path=Path("/tmp/review.md"),
+tests/test_reviewer_pool.py:1:"""Tests for reviewer_pool.py — ReviewerPool + ReviewerConfig."""
+tests/test_reviewer_pool.py:10:from unison.reviewer_pool import ReviewerPool
+tests/test_reviewer_pool.py:21:    raw_path: Path | None = None,
+tests/test_reviewer_pool.py:30:        raw_path=raw_path or Path("/tmp/review.md"),
+tests/test_reviewer_pool.py:59:        assert c.reconcile_strategy == "majority"
+tests/test_reviewer_pool.py:66:            reconcile_strategy="unanimous",
+tests/test_reviewer_pool.py:70:        assert c.reconcile_strategy == "unanimous"
+tests/test_reviewer_pool.py:80:            ReviewerConfig(count=4, reconcile_strategy="majority")
+tests/test_reviewer_pool.py:84:        c = ReviewerConfig(count=4, reconcile_strategy="unanimous")
+tests/test_reviewer_pool.py:95:# ReviewerPool tests
+tests/test_reviewer_pool.py:99:class TestReviewerPoolInit:
+tests/test_reviewer_pool.py:100:    """ReviewerPool initialization tests."""
+tests/test_reviewer_pool.py:105:        pool = ReviewerPool(config)
+tests/test_reviewer_pool.py:112:        pool = ReviewerPool(config)
+tests/test_reviewer_pool.py:118:# execute_parallel tests
+tests/test_reviewer_pool.py:123:    """ReviewerPool.execute_parallel tests."""
+tests/test_reviewer_pool.py:128:        pool = ReviewerPool(config)
+tests/test_reviewer_pool.py:140:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:149:        pool = ReviewerPool(config)
+tests/test_reviewer_pool.py:161:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:170:        pool = ReviewerPool(config)
+tests/test_reviewer_pool.py:176:        verdicts = pool.execute_parallel(code_path, review_fn=_slow_pass)
+tests/test_reviewer_pool.py:185:# reconcile_verdicts tests
+tests/test_reviewer_pool.py:190:    """ReviewerPool.reconcile_verdicts tests."""
+tests/test_reviewer_pool.py:195:    def _pool(strategy: str = "majority") -> ReviewerPool:
+tests/test_reviewer_pool.py:196:        return ReviewerPool(
+tests/test_reviewer_pool.py:197:            ReviewerConfig(enabled=True, count=3, reconcile_strategy=strategy)  # type: ignore[arg-type]
+tests/test_reviewer_pool.py:206:        result = pool.reconcile_verdicts([v])
+tests/test_reviewer_pool.py:214:            pool.reconcile_verdicts([])
+tests/test_reviewer_pool.py:226:        result = pool.reconcile_verdicts(verdicts)
+tests/test_reviewer_pool.py:237:        result = pool.reconcile_verdicts(verdicts)
+tests/test_reviewer_pool.py:248:        result = pool.reconcile_verdicts(verdicts)
+tests/test_reviewer_pool.py:259:        result = pool.reconcile_verdicts(verdicts)
+tests/test_reviewer_pool.py:264:        config = ReviewerConfig(enabled=True, count=5, reconcile_strategy="majority")
+tests/test_reviewer_pool.py:265:        pool = ReviewerPool(config)
+tests/test_reviewer_pool.py:273:        result = pool.reconcile_verdicts(verdicts)
+tests/test_reviewer_pool.py:286:        result = pool.reconcile_verdicts(verdicts)
+tests/test_reviewer_pool.py:297:        result = pool.reconcile_verdicts(verdicts)
+tests/test_reviewer_pool.py:308:        result = pool.reconcile_verdicts(verdicts)
+tests/test_reviewer_pool.py:321:        result = pool.reconcile_verdicts(verdicts)
+tests/test_reviewer_pool.py:338:        result = pool.reconcile_verdicts(verdicts)
+tests/test_reviewer_pool.py:353:        result = pool.reconcile_verdicts(verdicts)
+tests/test_reviewer_pool.py:365:        result = pool.reconcile_verdicts(verdicts)
+tests/test_reviewer_pool.py:378:        result = pool.reconcile_verdicts(verdicts, iter_n=5)
+tests/test_reviewer_pool.py:391:        """Single reviewer: execute → reconcile → PASS."""
+tests/test_reviewer_pool.py:393:        pool = ReviewerPool(config)
+tests/test_reviewer_pool.py:401:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:402:        final = pool.reconcile_verdicts(verdicts, iter_n=1)
+tests/test_reviewer_pool.py:409:        """Single reviewer: execute → reconcile → REQUEST_CHANGES."""
+tests/test_reviewer_pool.py:411:        pool = ReviewerPool(config)
+tests/test_reviewer_pool.py:421:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+tests/test_reviewer_pool.py:422:        final = pool.reconcile_verdicts(verdicts, iter_n=1)
+tests/test_pipeline.py:922:    """DAGScheduler execute_parallel 测试。"""
+tests/test_pipeline.py:946:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:962:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:983:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1006:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1025:        results = scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1041:        results = scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1045:    def test_execute_parallel_execution(self):
+tests/test_pipeline.py:1064:        results = scheduler.execute_parallel(executor, max_workers=3)
+tests/test_pipeline.py:1106:        results = scheduler.execute_parallel(
+tests/test_pipeline.py:1132:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1159:        results = scheduler.execute_parallel(
+tests/test_pipeline.py:1197:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1225:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1244:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1251:        """cancel_event is cleared each time execute_parallel is called."""
+tests/test_pipeline.py:1259:        scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1267:        scheduler.execute_parallel(executor, max_workers=1)
+tests/test_pipeline.py:1269:            "cancel_event must be cleared at the start of each execute_parallel call"
+tests/test_pipeline.py:1292:        results = scheduler.execute_parallel(executor, max_workers=2)
+tests/test_pipeline.py:1361:  reconcile_strategy: unanimous
+tests/test_pipeline.py:1368:        assert spec.reviewer_config.reconcile_strategy == "unanimous"
+tests/test_pipeline.py:1500:  reconcile_strategy: majority
+src/unison/orchestrator.py:321:        scheduler.execute_parallel(executor=exec_stage, max_workers=4)
+src/unison/orchestrator.py:651:        """Invoke multiple reviewers in parallel via ReviewerPool.
+src/unison/orchestrator.py:654:        After all reviewers complete, verdicts are reconciled
+src/unison/orchestrator.py:665:        from unison.reviewer_pool import ReviewerPool
+src/unison/orchestrator.py:744:                        raw_path=review_path,
+src/unison/orchestrator.py:752:                    raw_path=review_path,
+src/unison/orchestrator.py:759:            reconcile_strategy = os.environ.get(
+src/unison/orchestrator.py:762:            if reconcile_strategy not in ("majority", "unanimous"):
+src/unison/orchestrator.py:763:                reconcile_strategy = "majority"
+src/unison/orchestrator.py:769:                    reconcile_strategy=reconcile_strategy,  # type: ignore[arg-type]
+src/unison/orchestrator.py:776:                    reconcile_strategy="unanimous",
+src/unison/orchestrator.py:779:        pool = ReviewerPool(config)
+src/unison/orchestrator.py:781:        verdicts = pool.execute_parallel(world.root, review_fn=review_one)
+src/unison/orchestrator.py:790:                "raw_path": str(v.raw_path),
+src/unison/orchestrator.py:796:        final = pool.reconcile_verdicts(verdicts, iter_n=iteration)
+src/unison/orchestrator.py:798:        # Write reconciled verdict to the review-path helper location
+src/unison/pipeline.py:25:    ``DAGScheduler.execute_parallel``'s finally block — not from
+src/unison/pipeline.py:411:        for key in ("enabled", "count", "reconcile_strategy"):
+src/unison/pipeline.py:454:        results = scheduler.execute_parallel(executor=my_executor, max_workers=4)
+src/unison/pipeline.py:615:    def execute_parallel(
+src/unison/pipeline.py:653:            # hung stage would cause `execute_parallel` to block
+src/unison/verdict.py:114:            raw_path=review_path,
+src/unison/reviewer_pool.py:1:"""reviewer_pool.py — ReviewerPool: 多 Reviewer 并行审查 + verdict reconcile."""
+src/unison/reviewer_pool.py:11:class ReviewerPool:
+src/unison/reviewer_pool.py:20:        config = ReviewerConfig(enabled=True, count=3, reconcile_strategy="majority")
+src/unison/reviewer_pool.py:21:        pool = ReviewerPool(config)
+src/unison/reviewer_pool.py:26:        verdicts = pool.execute_parallel(code_path, review_fn=review_one)
+src/unison/reviewer_pool.py:27:        final = pool.reconcile_verdicts(verdicts, iter_n=1)
+src/unison/reviewer_pool.py:34:    # execute_parallel
+src/unison/reviewer_pool.py:37:    def execute_parallel(
+src/unison/reviewer_pool.py:70:                        summary=f"Reviewer crashed: {exc}",
+src/unison/reviewer_pool.py:72:                        raw_path=Path("."),
+src/unison/reviewer_pool.py:77:    # reconcile_verdicts
+src/unison/reviewer_pool.py:80:    def reconcile_verdicts(
+src/unison/reviewer_pool.py:120:                raw_path=v.raw_path,
+src/unison/reviewer_pool.py:124:        strategy = self.config.reconcile_strategy
+src/unison/reviewer_pool.py:151:            raw_path=verdicts[0].raw_path,
+
+exec
+/bin/bash -lc 'git status --short' in /home/sean/projects/unison
+ succeeded in 0ms:
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '780,830p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   780	
+   781	        verdicts = pool.execute_parallel(world.root, review_fn=review_one)
+   782	
+   783	        # Store individual verdicts in state for V2 tracking
+   784	        self._state.reviewer_verdicts = [
+   785	            {
+   786	                "iter_n": v.iter_n,
+   787	                "verdict": v.verdict,
+   788	                "summary": v.summary,
+   789	                "findings": v.findings,
+   790	                "raw_path": str(v.raw_path),
+   791	                "suspicious": v.suspicious,
+   792	            }
+   793	            for v in verdicts
+   794	        ]
+   795	
+   796	        final = pool.reconcile_verdicts(verdicts, iter_n=iteration)
+   797	
+   798	        # Write reconciled verdict to the review-path helper location
+   799	        review_path = self._review_file_for_phase(review_phase, iteration)
+   800	        review_path.parent.mkdir(parents=True, exist_ok=True)
+   801	
+   802	        # Use yaml.safe_dump for reliable special-character handling
+   803	        frontmatter = {
+   804	            "verdict": final.verdict,
+   805	            "summary": final.summary,
+   806	            "findings": final.findings,
+   807	        }
+   808	        yaml_text = yaml.safe_dump(
+   809	            frontmatter,
+   810	            default_flow_style=False,
+   811	            allow_unicode=True,
+   812	        )
+   813	        review_path.write_text(
+   814	            f"---\n{yaml_text}---\n",
+   815	            encoding="utf-8",
+   816	        )
+   817	
+   818	        # Update state so verdict routing can proceed
+   819	        self._state.last_review_verdict = final.verdict
+   820	        self._state.last_review_path = review_path
+   821	
+   822	    def _build_prompt(self, role: str, iteration: int, review_phase: str = "dev_review") -> str:
+   823	        """Build the agent prompt for *role* at *iteration*.
+   824	
+   825	        V2: uses :func:`assemble_context` for token-budgeted prompt assembly
+   826	        with smart diff truncation and top-findings extraction.
+   827	
+   828	        Args:
+   829	            role: Agent role.
+   830	            iteration: Current iteration.
+
+exec
+/bin/bash -lc "nl -ba src/unison/pipeline.py | sed -n '615,720p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   615	    def execute_parallel(
+   616	        self,
+   617	        executor: callable,
+   618	        max_workers: int = 4,
+   619	        pool_factory: callable = None,
+   620	    ) -> dict[str, bool]:
+   621	        """并行执行 DAG。
+   622	
+   623	        无依赖的 Stage 同时提交到线程池。每完成一个 Stage 即检查是否有
+   624	        新的 Stage 变得可执行。依赖失败 Stage 的后续 Stage 自动标记失败。
+   625	
+   626	        Uses a deadline-aware loop with ``wait(FIRST_COMPLETED)`` so
+   627	        overdue stages are marked failed without blocking on their
+   628	        underlying thread.
+   629	
+   630	        Sets ``self.cancel_event`` when any stage exceeds its
+   631	        deadline.  Executor callables should check
+   632	        ``cancel_event.is_set()`` before file-system mutations so
+   633	        orphan threads stop modifying files after the scheduler has
+   634	        abandoned the stage (cooperative cancellation — Python
+   635	        cannot kill threads).
+   636	
+   637	        Args:
+   638	            executor: 执行单个 Stage 的可调用对象
+   639	                ``(stage: Stage) -> bool``。
+   640	            max_workers: 最大并行数。
+   641	            pool_factory: Thread pool factory callable (injectable for tests).
+   642	                Defaults to ``ThreadPoolExecutor``.
+   643	
+   644	        Returns:
+   645	            ``{stage_name: success}`` 的映射。
+   646	        """
+   647	        from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+   648	
+   649	        if pool_factory is None:
+   650	            # Default to a non-blocking pool: on shutdown the executor
+   651	            # does NOT wait for running workers (we already marked
+   652	            # overdue stages failed in the loop). Without this, a
+   653	            # hung stage would cause `execute_parallel` to block
+   654	            # until the worker finishes, even though the scheduler
+   655	            # has already given up on it.
+   656	            pool_factory = _NonWaitingThreadPoolExecutor
+   657	
+   658	        completed: set[str] = set()
+   659	        failed: set[str] = set()
+   660	        results: dict[str, bool] = {}
+   661	
+   662	        self.cancel_event.clear()
+   663	
+   664	        pool = pool_factory(max_workers=max_workers)
+   665	        try:
+   666	            # Map: future -> (stage, deadline)
+   667	            futures: dict = {}
+   668	            in_flight: set[str] = set()
+   669	            for stage in self._ready(completed, failed, in_flight):
+   670	                fut = pool.submit(executor, stage)
+   671	                futures[fut] = (stage, time.monotonic() + stage.timeout)
+   672	                in_flight.add(stage.name)
+   673	
+   674	            while futures:
+   675	                # Poll interval: 10ms (was 50ms) to keep latency low
+   676	                # for normal completion. Hung stages are still detected
+   677	                # by the deadline check below; the only cost is
+   678	                # ~100 wakeups/sec when stages are running.
+   679	                done, _ = wait(futures, timeout=0.01,
+   680	                               return_when=FIRST_COMPLETED)
+   681	                now = time.monotonic()
+   682	
+   683	                # Process completions
+   684	                for f in done:
+   685	                    stage, _ = futures.pop(f)
+   686	                    try:
+   687	                        success = f.result()
+   688	                        results[stage.name] = success
+   689	                        (completed if success else failed).add(stage.name)
+   690	                    except Exception:
+   691	                        results[stage.name] = False
+   692	                        failed.add(stage.name)
+   693	                    in_flight.discard(stage.name)
+   694	
+   695	                # Detect overdue running stages
+   696	                overdue = [
+   697	                    (f, s) for f, (s, d) in futures.items()
+   698	                    if now >= d
+   699	                ]
+   700	                if overdue:
+   701	                    self.cancel_event.set()
+   702	                for f, stage in overdue:
+   703	                    futures.pop(f)
+   704	                    results[stage.name] = False
+   705	                    failed.add(stage.name)
+   706	                    in_flight.discard(stage.name)
+   707	
+   708	                # Submit newly-ready stages (excluding in_flight to
+   709	                # avoid re-dispatching a stage whose future we haven't
+   710	                # processed yet — the `_ready` race fix).
+   711	                new_ready = self._ready(completed, failed, in_flight)
+   712	                for stage in new_ready:
+   713	                    fut = pool.submit(executor, stage)
+   714	                    futures[fut] = (stage, time.monotonic() + stage.timeout)
+   715	                    in_flight.add(stage.name)
+   716	
+   717	            # Propagate failure to descendants
+   718	            for stage in self.stages:
+   719	                if stage.name in results:
+   720	                    continue
+
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '970,990p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+   970	        if (self._budget_tracker is not None
+   971	                and self._budget_tracker.per_task_limit != per_task_limit):
+   972	            self._budget_tracker.per_task_limit = per_task_limit
+   973	
+   974	        if self._budget_tracker is not None:
+   975	            return self._budget_tracker
+   976	
+   977	        self._budget_tracker = BudgetTracker(
+   978	            daily_limit=self.spec.budget.daily_token_limit,
+   979	            per_task_limit=per_task_limit,
+   980	            persist_path=self.spec.world.unison_dir / "budget.json",
+   981	        )
+   982	        return self._budget_tracker
+   983	
+   984	    def _recent_diff(self, max_chars: int = 8192) -> str:
+   985	        """Return ``git diff HEAD~1 HEAD`` output (truncated), or ``""`` on failure."""
+   986	        try:
+   987	            # Check if parent commit exists (fails on initial commit)
+   988	            parent_check = subprocess.run(
+   989	                ["git", "rev-parse", "HEAD~1"],
+   990	                cwd=str(self.spec.world.root),
+
+exec
+/bin/bash -lc "nl -ba src/unison/orchestrator.py | sed -n '1212,1225p'" in /home/sean/projects/unison
+ succeeded in 0ms:
+  1212	        iter_n = iteration if iteration is not None else self._state.iteration
+  1213	        self._checkpoint_mgr.save(
+  1214	            project=self.spec.world.root.name,
+  1215	            state=self._state,
+  1216	            iter_n=iter_n,
+  1217	            commit=self._state.last_dev_commit,
+  1218	        )
+
+codex
+I found one behavior worth flagging rather than treating this as a clean pass: an invalid DAG stage is “skipped” operationally, but the stage result can still inherit a previous global commit and be marked successful. I’m going to record that as a requested change because it affects downstream DAG scheduling.
+exec
+/bin/bash -lc "mkdir -p reviews && printf '%s
+' '---' 'verdict: REQUEST_CHANGES' 'summary: DAG invalid-agent stages can be marked successful after being skipped.' 'findings:' '  - \"src/unison/orchestrator.py:303: When a DAG stage has only non-developer agents, exec_stage logs and continues but then returns self._state.last_dev_commit is not None. If an earlier stage already set last_dev_commit, this skipped stage is reported successful to DAGScheduler, allowing dependent stages to run even though the invalid stage did no work. Track whether this stage actually invoked a developer and return false for skipped invalid stages.\"' '---' > reviews/iter-1.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+exec
+/bin/bash -lc "sed -n '1,20p' reviews/iter-1.md" in /home/sean/projects/unison
+ succeeded in 0ms:
+---
+verdict: REQUEST_CHANGES
+summary: DAG invalid-agent stages can be marked successful after being skipped.
+findings:
+  - "src/unison/orchestrator.py:303: When a DAG stage has only non-developer agents, exec_stage logs and continues but then returns self._state.last_dev_commit is not None. If an earlier stage already set last_dev_commit, this skipped stage is reported successful to DAGScheduler, allowing dependent stages to run even though the invalid stage did no work. Track whether this stage actually invoked a developer and return false for skipped invalid stages."
+---
+
+exec
+/bin/bash -lc 'git status --short reviews/iter-1.md src/unison/orchestrator.py src/unison/reviewer_pool.py' in /home/sean/projects/unison
+ succeeded in 0ms:
+?? reviews/iter-1.md
+
+codex
+Wrote the review to [reviews/iter-1.md](/home/sean/projects/unison/reviews/iter-1.md).
+
+Tests passed: `27 passed in 0.27s` for:
+
+```bash
+python3 -m pytest tests/test_orchestrator.py tests/test_custom_roles.py -q
+```
+
+Verdict: `REQUEST_CHANGES`
+
+Main finding: skipped invalid DAG stages can still be reported successful if `last_dev_commit` was set by an earlier stage, which can incorrectly unblock downstream DAG stages.
+tokens used
+47,368
+
