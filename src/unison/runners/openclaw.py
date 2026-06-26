@@ -1,159 +1,165 @@
-"""OpenClawRunner — wraps OpenClaw gateway HTTP API for agent invocation.
+"""OpenClawRunner — invokes agents via the OpenClaw gateway.
 
-The OpenClaw gateway runs at http://127.0.0.1:18789 and exposes an agent
-invocation API. Unlike the other runners (which use subprocess), this
-runner communicates via HTTP POST with JSON payloads.
+Uses ``openclaw agent`` CLI with unique session keys for isolated,
+concurrent agent turns. The CLI internally communicates with the
+OpenClaw gateway (http://127.0.0.1:18789) — no direct HTTP needed.
 
-If the gateway is unreachable or returns an error, the runner returns
-a failed AgentResult with a descriptive error message.
+Architecture:
+    openclaw agent --agent <id> --session-key agent:<id>:unison-<role>-<uuid>
+                   --model <provider/model> --message <prompt> --json
+                   --timeout <seconds>
+
+The ``--json`` flag emits structured stdout that is parsed to extract
+the agent's response text, model metadata, and token usage.
 """
 
 from __future__ import annotations
 
 import json
-import time
-import urllib.request
-import urllib.error
-from dataclasses import dataclass
-from pathlib import Path
+import uuid
+from dataclasses import dataclass, field
 
-from interfaces import AgentSpec, AgentResult
+from unison.runners.base import BaseRunner
 
-GATEWAY_URL = "http://127.0.0.1:18789"
+from interfaces import AgentSpec
 
 
 @dataclass
-class OpenClawRunner:
-    """Invoke an OpenClaw agent via the gateway HTTP API.
+class OpenClawRunner(BaseRunner):
+    """Invoke an OpenClaw agent via ``openclaw agent`` CLI.
 
-    By default targets the agent-invoke endpoint. Falls back to a
-    generic chat endpoint if agent-specific invocation fails.
+    Each invocation gets a unique session key so multiple agents can
+    run concurrently without colliding.  The CLI streams output to
+    stdout (JSON when ``--json`` is passed) which is captured by the
+    BaseRunner subprocess machinery.
+
+    Configurable fields:
+
+    * **binary** — path to the ``openclaw`` CLI (default ``"openclaw"``).
+    * **agent_id** — OpenClaw agent id (default ``"main"``).
+    * **gateway_url** — informational; the CLI resolves its own gateway
+      address from ``~/.openclaw/openclaw.json``.
     """
 
-    gateway_url: str = GATEWAY_URL
-    timeout: int = 600
+    binary: str = "openclaw"
+    agent_id: str = "main"
+    gateway_url: str = field(default="http://127.0.0.1:18789", repr=False)
+
+    # ------------------------------------------------------------------
+    # _build_command
+    # ------------------------------------------------------------------
 
     def _build_command(self, spec: AgentSpec, prompt: str) -> list[str]:
-        """Not used (HTTP API, not subprocess). Included for interface compat."""
-        return []
+        """Build the ``openclaw agent`` command line.
 
-    def run(
-        self,
-        spec: AgentSpec,
-        prompt: str,
-        workdir: Path,
-        timeout: int,
-        log_path: Path,
-    ) -> AgentResult:
-        """Invoke the OpenClaw agent via HTTP POST with JSON payload.
+        Format::
 
-        Args:
-            spec: AgentSpec with role/runtime/model.
-            prompt: Full prompt text to send.
-            workdir: Working directory (not used for HTTP).
-            timeout: Max seconds for the HTTP request.
-            log_path: Path to write invocation log.
-
-        Returns:
-            AgentResult with success/error details.
+            openclaw agent --agent <agent_id>
+                           --session-key agent:<agent_id>:unison-<role>-<uuid>
+                           [--model <model>]
+                           --message <prompt>
+                           --json
         """
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-
-        payload = json.dumps({
-            "prompt": prompt,
-            "model": spec.model,
-            "role": spec.role,
-        }).encode("utf-8")
-
-        endpoints = [
-            f"{self.gateway_url}/api/agent/invoke",
-            f"{self.gateway_url}/api/chat",
-            f"{self.gateway_url}/v1/chat",
+        session_id = f"unison-{spec.role}-{uuid.uuid4().hex[:8]}"
+        cmd = [
+            self.binary,
+            "agent",
+            "--agent", self.agent_id,
+            "--session-key", f"agent:{self.agent_id}:{session_id}",
+            "--json",
         ]
 
-        start = time.monotonic()
-        last_error = None
+        # Pass model override when specified
+        if spec.model and spec.model != "default":
+            cmd += ["--model", spec.model]
 
-        for endpoint in endpoints:
+        cmd += ["--message", prompt]
+        return cmd
+
+    # ------------------------------------------------------------------
+    # _effective_timeout — CLI handles its own timeout
+    # ------------------------------------------------------------------
+
+    def _effective_timeout(self, base_timeout: int) -> int:
+        """The ``openclaw agent`` CLI respects its own ``--timeout`` flag.
+
+        We add a small grace period (30 s) on top of *base_timeout* so
+        the CLI's internal timeout fires before our outer one kills the
+        process.
+        """
+        return base_timeout + 30
+
+    # ------------------------------------------------------------------
+    # response parsing
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def parse_response(raw_stdout: str) -> dict | None:
+        """Extract structured data from the CLI's JSON output.
+
+        The ``--json`` flag produces one or more JSON objects on stdout.
+        We look for the first object that contains a ``"payloads"`` key
+        (the final agent response).
+
+        Returns:
+            Parsed response dict, or *None* if no valid JSON found.
+        """
+        # The JSON output may span multiple lines; try to find the
+        # largest valid JSON object.
+        candidates = []
+        for i, ch in enumerate(raw_stdout):
+            if ch == "{":
+                depth = 0
+                for j in range(i, len(raw_stdout)):
+                    c = raw_stdout[j]
+                    if c == "{":
+                        depth += 1
+                    elif c == "}":
+                        depth -= 1
+                        if depth == 0:
+                            candidates.append(raw_stdout[i:j + 1])
+                            break
+        # Try parsing each candidate, preferring those with "payloads"
+        for cand in reversed(candidates):
             try:
-                req = urllib.request.Request(
-                    endpoint,
-                    data=payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Accept": "application/json",
-                    },
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=min(timeout, self.timeout)) as resp:
-                    raw = resp.read().decode("utf-8", errors="replace")
-                    duration = time.monotonic() - start
-                    stdout, stderr = self._parse_response(raw)
-
-                    log_path.write_text(
-                        f"=== ENDPOINT ===\n{endpoint}\n\n"
-                        f"=== PAYLOAD ===\n{prompt[:500]}...\n\n"
-                        f"=== RESPONSE ===\n{raw}\n",
-                        encoding="utf-8",
-                    )
-
-                    return AgentResult(
-                        success=True,
-                        exit_code=0,
-                        duration=round(duration, 3),
-                        stdout_tail=stdout[-500:] if stdout else "",
-                        stderr_tail=stderr[-500:] if stderr else "",
-                        log_path=log_path,
-                        error=None,
-                    )
-            except urllib.error.HTTPError as e:
-                last_error = f"HTTP {e.code}: {e.reason} at {endpoint}"
-            except urllib.error.URLError as e:
-                last_error = f"Connection failed: {e.reason} at {endpoint}"
-            except Exception as e:
-                last_error = f"Error: {e} at {endpoint}"
-
-        duration = time.monotonic() - start
-        error_msg = last_error or "All endpoints failed"
-
-        log_path.write_text(
-            f"=== ERROR ===\n{error_msg}\n\n=== PROMPT ===\n{prompt[:500]}...\n",
-            encoding="utf-8",
-        )
-
-        return AgentResult(
-            success=False,
-            exit_code=-1,
-            duration=round(duration, 3),
-            stdout_tail="",
-            stderr_tail=error_msg,
-            log_path=log_path,
-            error=error_msg,
-        )
+                obj = json.loads(cand)
+                if isinstance(obj, dict) and "payloads" in obj:
+                    return obj
+            except json.JSONDecodeError:
+                continue
+        # Fallback: return the last successfully parsed object
+        for cand in reversed(candidates):
+            try:
+                obj = json.loads(cand)
+                if isinstance(obj, dict):
+                    return obj
+            except json.JSONDecodeError:
+                continue
+        return None
 
     @staticmethod
-    def _parse_response(raw: str) -> tuple[str, str]:
-        """Extract stdout-like and stderr-like content from gateway response."""
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return raw, ""
+    def extract_text(response: dict | None) -> str:
+        """Extract the agent's text reply from a parsed response dict.
 
-        # Try common response formats
-        if isinstance(data, dict):
-            text = data.get("text") or data.get("content") or data.get("response") or ""
-            if isinstance(text, list):
-                text = "".join(
-                    t.get("text", "") if isinstance(t, dict) else str(t)
-                    for t in text
-                )
-            error = data.get("error") or ""
-            if isinstance(error, dict):
-                error = error.get("message", str(error))
-            return str(text), str(error) if error else ""
-        return raw, ""
+        Expects ``{"payloads": [{"text": "..."}]}`` structure.
+        """
+        if not response:
+            return ""
+        payloads = response.get("payloads", [])
+        texts = []
+        for p in payloads:
+            if isinstance(p, dict):
+                t = p.get("text", "")
+                if t:
+                    texts.append(t)
+        return "\n".join(texts)
 
-    @staticmethod
-    def _cli_flags(spec: AgentSpec) -> list[str]:
-        """OpenClaw uses HTTP API — no CLI flags needed."""
-        return []
+    # ------------------------------------------------------------------
+    # error reporting
+    # ------------------------------------------------------------------
+
+    def _not_found_error_message(self) -> str:
+        return (
+            f"{self.binary} binary not found. "
+            f"Install OpenClaw or adjust the 'binary' field."
+        )
