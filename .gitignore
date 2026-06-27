@@ -11,7 +11,13 @@ fix-*.yaml
 mode-system.yaml
 parallel-system.yaml
 
+# Internal docs & roadmap
+ARCHITECTURE.md
+ROADMAP.md
+docs/
+
 # Internal PRDs & working files
+prd/
 prd/prd-fix*.md
 prd/PRD-phase*.md
 prd/PRD-v2-fix.bak.md
@@ -59,3 +65,9 @@ state.json
 .idea/
 webui-v2-*.yaml
 v2-fix-pipeline.yaml
+
+# Python build artifacts
+src/unison.egg-info/
+
+# Internal scripts
+scripts/
