@@ -488,9 +488,11 @@ If PASS, findings can be empty []. If REJECT, each finding MUST have a severity 
         if not isinstance(parsed, dict):
             result["summary"] = "YAML was not a mapping"
             return result
-        # Extract verdict
-        verdict = str(parsed.get("verdict", "")).upper()
-        result["passed"] = "PASS" in verdict
+        # Extract verdict — strict equality only.
+        # Substring match ("PASS" in verdict) would accept BYPASS / NOT PASS /
+        # PASS_WITH_WARNINGS as valid, violating the multi-agent review boundary.
+        verdict = str(parsed.get("verdict", "")).strip().upper()
+        result["passed"] = verdict == "PASS"
         # Extract summary
         result["summary"] = str(parsed.get("summary", ""))
         # Extract findings (may be a list or absent)

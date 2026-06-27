@@ -447,6 +447,53 @@ findings: []
         result = FixOrchestrator._parse_review_output(output)
         assert result["passed"] is True
 
+    def test_verdict_bypass_is_not_pass(self):
+        """BYPASS must NOT be treated as PASS — substring match bug guard."""
+        output = """---
+verdict: BYPASS
+summary: skipping review
+findings: []
+---"""
+        result = FixOrchestrator._parse_review_output(output)
+        assert result["passed"] is False, \
+            "BYPASS was incorrectly accepted as PASS (substring match bug)"
+
+    def test_verdict_not_pass_is_not_pass(self):
+        """NOT PASS must NOT be treated as PASS."""
+        output = """---
+verdict: NOT PASS
+summary: definitely not passing
+findings:
+  - "[BUG] critical error"
+---"""
+        result = FixOrchestrator._parse_review_output(output)
+        assert result["passed"] is False, \
+            "NOT PASS was incorrectly accepted as PASS (substring match bug)"
+
+    def test_verdict_pass_with_warnings_is_not_pass(self):
+        """PASS_WITH_WARNINGS must NOT be treated as PASS."""
+        output = """---
+verdict: PASS_WITH_WARNINGS
+summary: ok but with caveats
+findings:
+  - "[WARN] minor style issue"
+---"""
+        result = FixOrchestrator._parse_review_output(output)
+        assert result["passed"] is False, \
+            "PASS_WITH_WARNINGS was incorrectly accepted as PASS"
+
+    def test_verdict_unknown_value_is_not_pass(self):
+        """Any non-PASS, non-REJECT verdict must be treated as failure."""
+        for bad_verdict in ("MAYBE", "PENDING", "SKIP", ""):
+            output = f"""---
+verdict: {bad_verdict}
+summary: unclear
+findings: []
+---"""
+            result = FixOrchestrator._parse_review_output(output)
+            assert result["passed"] is False, \
+                f"verdict={bad_verdict!r} was incorrectly accepted as PASS"
+
 
 # ---------------------------------------------------------------------------
 # FixOrchestrator — attempt_fix edge cases
