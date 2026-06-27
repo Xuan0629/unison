@@ -5,13 +5,12 @@ Architecture reference: prd/SELF_HEAL_PRD.md, prd/tech-design-self-heal.md
 
 from __future__ import annotations
 
-import json
-import os
 import subprocess
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+import yaml
 
 from interfaces import AgentResult, PipelineSpec, SelfHealConfig, World
 
@@ -128,6 +127,10 @@ class FixOrchestrator:
             return SelfHealResult(success=False, error_type=error_type,
                                   diagnosis="auto_fix_consumer is disabled")
 
+        if self._config.max_fix_rounds < 1:
+            return SelfHealResult(success=False, error_type=error_type,
+                                  diagnosis="max_fix_rounds must be >= 1")
+
         # 1. Fixer diagnoses and produces a patch
         fix_proposal = self._run_fixer(result)
         if not fix_proposal:
@@ -135,7 +138,8 @@ class FixOrchestrator:
                                   diagnosis="fixer failed to produce a diagnosis")
 
         # 2. Multi-agent review (up to max_fix_rounds)
-        reviews = []
+        reviews: list[dict] = []
+        passed: list[dict] = []
         for round_n in range(1, self._config.max_fix_rounds + 1):
             reviews = self._run_reviewers(fix_proposal, result)
             passed = [r for r in reviews if r.get("passed")]
@@ -161,7 +165,7 @@ class FixOrchestrator:
             success=True, error_type=error_type,
             diagnosis=fix_proposal.get("diagnosis", ""),
             fix_applied=True, fix_commit=commit_hash, pr_url=pr_url,
-            log_path=log_path, reviewers_passed=len(passed) if all_passed else 0,
+            log_path=log_path, reviewers_passed=len(passed),
         )
 
     # ------------------------------------------------------------------
@@ -282,33 +286,39 @@ class FixOrchestrator:
     def _write_fix_log(self, fix_proposal: dict, error_type: str,
                        commit_hash: str, pr_url: str,
                        reviews: list[dict]) -> str:
-        """Write structured fix log to fixes/ directory."""
+        """Write structured fix log to fixes/ directory using yaml.dump."""
         fixes_dir = self._world.root / "fixes"
         fixes_dir.mkdir(exist_ok=True)
 
         ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         log_path = fixes_dir / f"{ts}-{commit_hash[:8]}.yaml"
 
-        # Simple YAML-like output (no pyyaml dependency)
-        lines = [
-            f"timestamp: \"{datetime.now(timezone.utc).isoformat()}\"",
-            f"error_type: {error_type}",
-            f"diagnosis: \"{fix_proposal.get('diagnosis', 'N/A')}\"",
-            f"fix_commit: {commit_hash}",
-            f"pr_url: {pr_url}",
-            f"test_result: {fix_proposal.get('test_result', 'N/A')}",
-            "files_changed:",
-        ]
-        for f in fix_proposal.get("files_changed", []):
-            lines.append(f"  - {f}")
-        lines.append("reviews:")
-        for i, r in enumerate(reviews):
-            lines.append(f"  - reviewer: review-{i+1}")
-            lines.append(f"    passed: {r.get('passed', False)}")
-            lines.append(f"    summary: \"{r.get('summary', '')}\"")
-        lines.append("")
+        # Normalize files_changed to a list (may be a string from old parser)
+        files = fix_proposal.get("files_changed", [])
+        if isinstance(files, str):
+            files = [files]
 
-        log_path.write_text("\n".join(lines), encoding="utf-8")
+        record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "error_type": error_type,
+            "diagnosis": fix_proposal.get("diagnosis", "N/A"),
+            "fix_commit": commit_hash,
+            "pr_url": pr_url,
+            "test_result": fix_proposal.get("test_result", "N/A"),
+            "files_changed": files,
+            "reviews": [
+                {
+                    "reviewer": f"review-{i+1}",
+                    "passed": r.get("passed", False),
+                    "summary": r.get("summary", ""),
+                    "findings": r.get("findings", []),
+                }
+                for i, r in enumerate(reviews)
+            ],
+        }
+
+        log_path.write_text(yaml.dump(record, default_flow_style=False, allow_unicode=True),
+                            encoding="utf-8")
         return str(log_path)
 
     # ------------------------------------------------------------------
@@ -436,7 +446,7 @@ If PASS, findings can be empty []. If REJECT, each finding MUST have a severity 
 
     @staticmethod
     def _parse_fixer_output(output: str) -> dict | None:
-        """Parse fixer output, extracting YAML frontmatter."""
+        """Parse fixer output, extracting YAML frontmatter via yaml.safe_load."""
         if not output:
             return None
         # Extract YAML between --- markers
@@ -444,33 +454,47 @@ If PASS, findings can be empty []. If REJECT, each finding MUST have a severity 
         if len(parts) < 3:
             return None
         yaml_text = parts[1].strip()
-        result = {}
-        for line in yaml_text.split("\n"):
-            line = line.strip()
-            if ":" in line:
-                key, _, val = line.partition(":")
-                key = key.strip()
-                val = val.strip().strip('"').strip("'")
-                result[key] = val
+        if not yaml_text:
+            return None
+        try:
+            result = yaml.safe_load(yaml_text)
+        except yaml.YAMLError:
+            return None
+        if not isinstance(result, dict):
+            return None
         if "diagnosis" not in result:
             return None
         return result
 
     @staticmethod
     def _parse_review_output(output: str) -> dict:
-        """Parse reviewer output, extracting verdict."""
+        """Parse reviewer output, extracting verdict + findings via yaml.safe_load."""
+        result = {"passed": False, "summary": "no output", "findings": []}
         if not output:
-            return {"passed": False, "summary": "no output", "findings": []}
+            return result
         parts = output.split("---")
         if len(parts) < 3:
-            return {"passed": False, "summary": "unparseable output", "findings": []}
+            result["summary"] = "unparseable output"
+            return result
         yaml_text = parts[1].strip()
-        result = {"passed": False, "summary": "", "findings": []}
-        for line in yaml_text.split("\n"):
-            line = line.strip()
-            if line.startswith("verdict:"):
-                verdict = line.split(":", 1)[1].strip().upper()
-                result["passed"] = "PASS" in verdict
-            elif line.startswith("summary:"):
-                result["summary"] = line.split(":", 1)[1].strip().strip('"')
+        if not yaml_text:
+            result["summary"] = "empty YAML block"
+            return result
+        try:
+            parsed = yaml.safe_load(yaml_text)
+        except yaml.YAMLError:
+            result["summary"] = "YAML parse error"
+            return result
+        if not isinstance(parsed, dict):
+            result["summary"] = "YAML was not a mapping"
+            return result
+        # Extract verdict
+        verdict = str(parsed.get("verdict", "")).upper()
+        result["passed"] = "PASS" in verdict
+        # Extract summary
+        result["summary"] = str(parsed.get("summary", ""))
+        # Extract findings (may be a list or absent)
+        findings = parsed.get("findings", [])
+        if isinstance(findings, list):
+            result["findings"] = [str(f) for f in findings]
         return result
