@@ -19,7 +19,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from interfaces import PipelineSpec, ReviewVerdict, VerdictParseError
+from interfaces import AgentResult, PipelineSpec, ReviewVerdict, VerdictParseError
 from unison.pipeline import PipelineValidationError
 from unison.state import State
 from unison.lock import FileLockManager
@@ -556,6 +556,32 @@ class Orchestrator:
             # In v1, single non-zero exit does not halt — the agent
             # may have produced useful output before crashing.
             # Consecutive failure tracking is a V2 feature.
+            pass
+
+        # 9. Self-heal: auto-fix framework bugs (V2)
+        if not result.success and not detected.success:
+            self._attempt_self_heal(role, iteration, review_phase, result)
+            return  # self-heal handles retry internally
+
+    def _attempt_self_heal(self, role: str, iteration: int,
+                           review_phase: str, result: AgentResult) -> None:
+        """Attempt self-heal: classify error → fix → review → retry if successful."""
+        from unison.self_heal import ErrorClassifier, FixOrchestrator
+
+        error_type = ErrorClassifier.classify(result, self.spec)
+        if error_type not in ("UNISON_BUG", "CONSUMER_BUG"):
+            return  # not a code bug, let existing logic handle it
+
+        fixer = FixOrchestrator(self.spec, self.spec.world)
+        heal_result = fixer.attempt_fix(error_type, result)
+
+        if heal_result.success and heal_result.fix_applied:
+            self._state.halt_reason = None  # clear any partial halt
+            self._state.halt_signal = False
+            # Retry the failed step
+            self._invoke_agent_for_role(role, iteration, review_phase)
+        else:
+            # Fix failed — record but don't halt (preserve existing behavior)
             pass
 
     # ------------------------------------------------------------------

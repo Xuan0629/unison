@@ -261,6 +261,22 @@ class WorktreeConfig:
     features: list[str] | None = None  # V2: feature list to parallelize over
 
 
+@dataclass
+class SelfHealConfig:
+    """Self-heal auto-fix configuration.
+
+    Attributes:
+        auto_fix_unison: Auto-fix Unison framework bugs (default True).
+        auto_fix_consumer: Auto-fix consumer project bugs (default False, opt-in).
+        max_fix_rounds: Max rounds for fixer to revise patches.
+        fix_timeout: Fixer diagnosis timeout in seconds.
+    """
+    auto_fix_unison: bool = True
+    auto_fix_consumer: bool = False
+    max_fix_rounds: int = 2
+    fix_timeout: int = 300
+
+
 @dataclass(frozen=True)
 class PipelineSpec:
     """一次 pipeline 运行的全部配置（不可变）。"""
@@ -283,6 +299,7 @@ class PipelineSpec:
     observer_poll_interval: int = 60  # 秒
     agent_log_retention_hours: int = 168  # 7d
     who_can_run: list[str] = field(default_factory=lambda: ["cli"])  # "cli", "discord:channel_id", "hermes:session_id"
+    self_heal: SelfHealConfig = field(default_factory=lambda: SelfHealConfig())  # self-heal auto-fix
 
     def get(self, role: AgentRole) -> AgentSpec:
         if role not in self.agents:

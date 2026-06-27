@@ -47,6 +47,7 @@ from interfaces import (
     ProjectConfig,
     ReviewerConfig,
     RiskMatrixConfig,
+    SelfHealConfig,
     SnapshotConfig,
     Stage,
     WorktreeConfig,
@@ -198,6 +199,7 @@ class PipelineLoader:
             context_deflation_limit=raw.get("context_deflation_limit", 5),
             observer_poll_interval=raw.get("observer_poll_interval", 60),
             agent_log_retention_hours=raw.get("agent_log_retention_hours", 168),
+            self_heal=self._build_self_heal(raw.get("self_heal")),
         )
 
     # ------------------------------------------------------------------
@@ -501,6 +503,24 @@ class PipelineLoader:
             val = raw["worktree_root"]
             kwargs["worktree_root"] = Path(val) if isinstance(val, str) else val
         return WorktreeConfig(**kwargs)
+
+    @staticmethod
+    def _build_self_heal(raw: dict[str, Any] | None) -> SelfHealConfig:
+        """Build SelfHealConfig from raw YAML, falling back to defaults.
+
+        Args:
+            raw: Raw YAML mapping for self_heal, or None.
+
+        Returns:
+            A SelfHealConfig instance.
+        """
+        if not raw:
+            return SelfHealConfig()
+        kwargs: dict[str, Any] = {}
+        for key in ("auto_fix_unison", "auto_fix_consumer", "max_fix_rounds", "fix_timeout"):
+            if key in raw:
+                kwargs[key] = raw[key]
+        return SelfHealConfig(**kwargs)
 
 
 # ============================================================================
