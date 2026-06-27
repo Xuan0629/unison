@@ -10,9 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-import yaml
-
-from unison.verdict import _quote_bracketed_findings
+from unison.verdict import _parse_frontmatter_regex
 
 
 # ============================================================================
@@ -64,10 +62,9 @@ def parse_findings(review_content: str) -> list[Finding]:
 
     1. Split on ``---`` to extract YAML frontmatter (same convention as
        :class:`~unison.verdict.YamlFrontmatterParser`).
-    2. Use :func:`~unison.verdict._quote_bracketed_findings` to pre-process
-       bracket-tagged values so pyyaml treats them as scalars.
-    3. Parse with ``yaml.safe_load`` and extract the ``findings`` list.
-    4. Each finding string is matched with
+    2. Use :func:`~unison.verdict._parse_frontmatter_regex` to robustly
+       extract the ``findings`` list without pyyaml.
+    3. Each finding string is matched with
        ``re.match(r'^\\[(\\w+)\\]\\s*(.*)', text)`` to extract a severity
        tag and the body text.  When the pattern does not match the finding
        defaults to ``severity="INFO"`` and the full string as *text*.
@@ -94,12 +91,10 @@ def parse_findings(review_content: str) -> list[Finding]:
 
     yaml_text = parts[1]
 
-    # Pre-process: quote bracket-tagged values so pyyaml handles them
-    yaml_text = _quote_bracketed_findings(yaml_text)
-
+    # Use regex-based parser (same as verdict.py) — no pyyaml fragility
     try:
-        data = yaml.safe_load(yaml_text)
-    except yaml.YAMLError:
+        data = _parse_frontmatter_regex(yaml_text)
+    except Exception:
         return []
 
     if not isinstance(data, dict):

@@ -95,12 +95,11 @@ No frontmatter here.
             parser.parse(review_file, expected_iter=1)
 
     def test_parse_invalid_yaml(self, tmp_path):
-        """Parse file with invalid YAML raises error."""
+        """Parse file with missing closing --- raises error."""
         review_file = tmp_path / "iter-1.md"
         review_file.write_text("""---
 verdict: PASS
-summary: [invalid yaml
----
+summary: some text but no closing delimiter
 
 # Review
 """)

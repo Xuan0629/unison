@@ -94,9 +94,15 @@ class BaseRunner:
 
     Subclasses set *binary* and optionally override
     :meth:`_effective_timeout` and :meth:`_build_command`.
+
+    When *use_stdin* is ``True``, the prompt is passed to the subprocess
+    via ``stdin`` (``subprocess.PIPE``) instead of being appended as a
+    CLI argument.  This avoids shell ``ARG_MAX`` limits and CLI-injection
+    edge cases for very large prompts.
     """
 
     binary: str
+    use_stdin: bool = False
 
     # ------------------------------------------------------------------
     # extension points
@@ -107,8 +113,15 @@ class BaseRunner:
 
         Uses ``spec.cli_flags`` for runtime-specific safety flags.
         Override for custom flag handling.
+
+        When ``self.use_stdin`` is ``True`` the *prompt* is **not**
+        appended to the command; it is fed through ``subprocess.PIPE``
+        instead (see :meth:`_run_subprocess`).
         """
-        return [self.binary, *spec.cli_flags, prompt]
+        cmd = [self.binary, *spec.cli_flags]
+        if not self.use_stdin:
+            cmd.append(prompt)
+        return cmd
 
     def _effective_timeout(self, base_timeout: int) -> int:
         """Return the effective timeout in seconds.
@@ -169,7 +182,7 @@ class BaseRunner:
 
         start = time.monotonic()
         try:
-            result = self._run_subprocess(cmd, workdir, effective_timeout, log_path)
+            result = self._run_subprocess(cmd, prompt, workdir, effective_timeout, log_path)
             result.duration = round(time.monotonic() - start, 3)
             return result
         except FileNotFoundError:
@@ -182,27 +195,43 @@ class BaseRunner:
             )
 
     def _run_subprocess(
-        self, cmd: list[str], workdir: Path, timeout: int, log_path: Path
+        self, cmd: list[str], prompt: str, workdir: Path, timeout: int, log_path: Path
     ) -> AgentResult:
         """Run *cmd* via Popen, streaming stdout/stderr directly to *log_path*.
 
         Unlike ``subprocess.run(capture_output=True)``, this uses constant
         memory regardless of output size. Full logs are written to disk
         and the last 500 chars are captured for AgentResult.
+
+        When ``self.use_stdin`` is ``True``, the prompt (which was excluded
+        from *cmd* by :meth:`_build_command`) is written to the subprocess
+        stdin via ``subprocess.PIPE``.
         """
         log_path.parent.mkdir(parents=True, exist_ok=True)
         start = time.monotonic()
         proc = None
 
+        # Build Popen kwargs
+        popen_kwargs: dict = {
+            "cwd": str(workdir),
+            "stdout": None,  # filled below
+            "stderr": subprocess.STDOUT,
+            "text": True,
+        }
+        if self.use_stdin:
+            popen_kwargs["stdin"] = subprocess.PIPE
+
         with open(log_path, "w", encoding="utf-8") as log_fh:
             log_fh.write(f"=== COMMAND ===\n{mask_secrets(' '.join(cmd))}\n\n=== OUTPUT ===\n")
             log_fh.flush()
+            popen_kwargs["stdout"] = log_fh
             try:
-                proc = subprocess.Popen(
-                    cmd, cwd=str(workdir),
-                    stdout=log_fh, stderr=subprocess.STDOUT,
-                    text=True,
-                )
+                proc = subprocess.Popen(cmd, **popen_kwargs)
+                if self.use_stdin:
+                    # Feed the prompt via stdin, then close so the subprocess
+                    # sees EOF and knows input is complete.
+                    proc.stdin.write(prompt)
+                    proc.stdin.close()
                 proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()

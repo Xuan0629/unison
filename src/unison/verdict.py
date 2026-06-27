@@ -1,4 +1,9 @@
-"""verdict.py — YamlFrontmatterParser + VerdictParseError."""
+"""verdict.py — YamlFrontmatterParser + VerdictParseError.
+
+Uses regex-based YAML frontmatter parsing instead of pyyaml to avoid
+fragile YAML parsing when LLM output contains characters like ``#``,
+``url(#id)``, or unbalanced ``---`` delimiters.
+"""
 
 from __future__ import annotations
 
@@ -6,17 +11,15 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
 from interfaces import ReviewVerdict, VerdictParseError, Verdict
 
 
 def _quote_bracketed_findings(yaml_text: str) -> str:
     """Quote YAML list values starting with [...] so pyyaml treats them as scalars.
 
-    pyyaml interprets ``[轻微] Minor style issue`` as a flow sequence followed
-    by stray text, which is a parse error.  Wrapping the whole value in double
-    quotes fixes this.
+    Kept for backward compatibility with context_deflate.py and other
+    callers that may still use pyyaml.  New code should use
+    :func:`_parse_frontmatter_regex` instead.
     """
     return re.sub(
         r'^(\s*-\s+)\[(.+?)\](.*)',
@@ -24,6 +27,50 @@ def _quote_bracketed_findings(yaml_text: str) -> str:
         yaml_text,
         flags=re.MULTILINE,
     )
+
+
+def _parse_frontmatter_regex(yaml_text: str) -> dict:
+    """Parse simple YAML frontmatter with regex (no pyyaml dependency).
+
+    Extracts ``verdict``, ``summary``, and ``findings`` fields from
+    YAML-like text.  Handles:
+
+    * Quoted and unquoted scalar values
+    * Block-style ``findings:`` list (``- item`` lines)
+    * Inline empty list ``findings: []``
+    * Missing ``findings`` key (defaults to empty list)
+
+    Returns a dict with keys ``verdict``, ``summary``, ``findings``.
+    Missing keys are absent from the dict.
+    """
+    data: dict = {}
+
+    # --- verdict (top-level scalar) ---
+    m = re.search(r'^verdict:\s*(.+?)\s*$', yaml_text, re.MULTILINE)
+    if m:
+        data["verdict"] = m.group(1).strip().strip("\"'")
+
+    # --- summary (top-level scalar, may be quoted) ---
+    m = re.search(r'^summary:\s*(.+?)\s*$', yaml_text, re.MULTILINE)
+    if m:
+        data["summary"] = m.group(1).strip().strip("\"'")
+
+    # --- findings (block list or inline empty) ---
+    findings: list[str] = []
+    if re.search(r'^findings:\s*\[\s*\]\s*$', yaml_text, re.MULTILINE):
+        # Inline empty list: findings: []
+        findings = []
+    else:
+        # Block-style list: findings:\n  - item1\n  - item2
+        findings_match = re.search(r'^findings:\s*$', yaml_text, re.MULTILINE)
+        if findings_match:
+            section = yaml_text[findings_match.end():]
+            for item in re.finditer(r'^\s*-\s+(.+?)\s*$', section, re.MULTILINE):
+                value = item.group(1).strip().strip("\"'")
+                findings.append(value)
+    data["findings"] = findings
+
+    return data
 
 
 @dataclass
@@ -57,16 +104,8 @@ class YamlFrontmatterParser:
 
         yaml_text = parts[1]
 
-        # 预处理：引用 [tag] text 格式的 finding 行，避免 pyyaml 将其误解为 flow sequence
-        yaml_text = _quote_bracketed_findings(yaml_text)
-
-        # 解析 YAML
-        try:
-            data = yaml.safe_load(yaml_text)
-        except yaml.YAMLError as exc:
-            raise VerdictParseError(
-                f"Invalid YAML in {review_path}: {exc}"
-            ) from exc
+        # 使用 regex 解析，替代 yaml.safe_load（避免 LLM 输出中 #、url(#id) 等字符导致 YAML 解析崩溃）
+        data = _parse_frontmatter_regex(yaml_text)
 
         if not isinstance(data, dict):
             raise VerdictParseError(
