@@ -198,7 +198,25 @@ agents:
 | Git Worktree | 并行 Developer 隔离分支开发 |
 | Schema 迁移 | V1 pipeline.yaml 自动升级到 V2 |
 
----
+### Self-Heal — Bug 自动修复
+
+当 pipeline 遇到框架级 bug（traceback 命中 `src/unison/`）时，Unison
+可自动诊断并修复，无需人工介入：
+
+```yaml
+# pipeline.yaml
+self_heal:
+  auto_fix_unison: true      # 自动修复 Unison 框架 bug（默认开启）
+  auto_fix_consumer: false   # 自动修复 consumer 项目 bug（手动开启）
+  max_fix_rounds: 2          # 最多修复-修改轮次
+  fix_timeout: 300           # Fixer 诊断超时（秒）
+```
+
+**流程**：报错 → 分类器 → Fixer (Hermes) 诊断 + 出补丁 → Codex + Claude 并行审查
+→ 按需修改（≤2 轮）→ commit → PR 到 Unison 仓库。
+
+**安全**：多 agent 会审后才落地。判定逻辑用严格相等（`==` 非子串匹配），
+异常 reviewer 输出不会自动通过。---
 
 ## 架构
 
@@ -281,7 +299,8 @@ agents:
 | "ContextBudgetError" | `rm -f .unison/budget.json`（重置当日预算） |
 | Review 文件污染 | 在 pipeline 间执行 `rm -f reviews/iter-*.md reviews/plan-iter-*.md` |
 | Codex "Missing OPENAI_API_KEY" | 确保 `~/.hermes/.env` 存在并包含 API key |
-| Planner 只写占位符 | 使用更强的 `task_instruction`，加 "WRITE NOW" 指令 |
+| Self-heal fixer 修复失败 | 查看 `fixes/*.yaml` 诊断日志；reviewer 可能拒绝了修复方案 |
+302|| Planner 只写占位符 | 使用更强的 `task_instruction`，加 "WRITE NOW" 指令 |
 
 ---
 

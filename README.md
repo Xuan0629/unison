@@ -196,9 +196,29 @@ Works for all roles (Planner, Developer, Reviewer), not just Reviewer.
 | Checkpoint / Resume | State saved after each phase transition |
 | DAG Scheduler | Stage dependency graph, parallel execution with deadlines |
 | Git Worktrees | Isolated parallel development branches |
-| Schema Migration | V1 pipeline.yaml auto-upgraded to V2 |
+|| Schema Migration | V1 pipeline.yaml auto-upgraded to V2 |
 
----
+### Self-Heal — Automatic Bug Fix
+
+When a pipeline hits a framework bug (traceback in `src/unison/`), Unison can
+auto-diagnose and fix it without manual intervention:
+
+```yaml
+# pipeline.yaml
+self_heal:
+  auto_fix_unison: true      # Auto-fix Unison framework bugs (default: true)
+  auto_fix_consumer: false   # Auto-fix consumer project bugs (default: false, opt-in)
+  max_fix_rounds: 2          # Max fix-revise rounds
+  fix_timeout: 300           # Fixer diagnosis timeout (seconds)
+```
+
+**Flow**: Error → classifier → Fixer (Hermes) diagnoses + patches → Codex + Claude parallel review
+→ revise if needed (≤2 rounds) → commit → PR to Unison repo.
+
+**Safety**: Multi-agent review before any fix lands. Strict verdict parsing (`==`, not substring).
+Malformed outputs from broken reviewers will never auto-pass.
+
+
 
 ## Architecture
 
@@ -281,7 +301,8 @@ agents:
 | "ContextBudgetError" | `rm -f .unison/budget.json` (resets daily budget) |
 | Review file pollution | `rm -f reviews/iter-*.md reviews/plan-iter-*.md` between runs |
 | Codex "Missing OPENAI_API_KEY" | Ensure `~/.hermes/.env` exists with your API keys |
-| Planner writes placeholders | Use stronger `task_instruction` with explicit "WRITE NOW" directives |
+| Self-heal fixer fails | Check `fixes/*.yaml` for diagnosis; reviewers may have rejected the fix |
+304|| Planner writes placeholders | Use stronger `task_instruction` with explicit "WRITE NOW" directives |
 
 ---
 
