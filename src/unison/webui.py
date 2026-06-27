@@ -1638,8 +1638,8 @@ function diffPatch(prev, next) {
   if (!arraysEqual(prev.agents,      next.agents))      { patchAgents(next); patchPipelineConfig(next); patchEmptyState(next); patchGauges(next); }
   if (!arraysEqual(prev.transitions, next.transitions)) { patchTimeline(next); patchTasks(next); patchLog(next); patchEmptyState(next); }
 
-  // Detect phase transition to "done" for history save
-  if (prev.phase !== "done" && next.phase === "done") {
+  // Detect phase transition to "done" or "halt" for history save
+  if (prev.phase !== "done" && prev.phase !== "halt" && (next.phase === "done" || next.phase === "halt")) {
     saveHistoryEntry(next);
   }
 }
@@ -1655,7 +1655,9 @@ function patchTitle(s) {
   var mode = s.mode || "code-dev";
   var prefix = t("titlePrefix");
   var modeLabel = t("modes." + mode);
+  var pfile = s.pipeline_file || "";
   var title = prefix + " · " + modeLabel;
+  if (pfile) title += " · " + pfile.replace('.yaml','');
   document.title = title;
   document.getElementById("topbar-title").textContent = title;
 }
@@ -2143,7 +2145,7 @@ function loadHistory() {
 
 function saveHistoryEntry(s) {
   var entry = {
-    title: s.mode || "code-dev",
+    title: s.pipeline_file || s.mode || "code-dev",
     date: new Date().toISOString(),
     phaseCount: (s.transitions || []).length,
     verdict: s.last_verdict || "done"
@@ -2219,9 +2221,16 @@ class UnisonHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
 
     def _load_state(self) -> dict:
-        """Read state.json, enrich with budget, agents, tasks, and mode."""
-        state_path = self.project_root / ".unison" / "state.json"
-        state = State.atomic_read(state_path)
+        """Read latest checkpoint, enrich with budget, agents, tasks, and mode."""
+        # Load from ~/.unison/checkpoints/<project>/ (where orchestrator writes)
+        import glob
+        checkpoint_dir = Path.home() / ".unison" / "checkpoints" / self.project_root.name
+        state = State()  # default empty
+        if checkpoint_dir.exists():
+            files = sorted(glob.glob(str(checkpoint_dir / "ckpt-*.json")),
+                           key=lambda p: Path(p).stat().st_mtime, reverse=True)
+            if files:
+                state = State.atomic_read(Path(files[0]))
         data = state.to_dict()
 
         # Rename for JS clarity
@@ -2239,6 +2248,15 @@ class UnisonHandler(BaseHTTPRequestHandler):
         data["active_agent"] = _derive_active_agent(state.phase)
         data["tasks"] = _derive_tasks(state.history)
         data["mode"] = self._derive_mode(data.get("agents", []))
+
+        # Derive pipeline name from the active YAML symlink
+        pipeline_link = self.project_root / "pipeline.yaml"
+        if pipeline_link.is_symlink():
+            data["pipeline_file"] = Path(os.readlink(str(pipeline_link))).name
+        elif pipeline_link.exists():
+            data["pipeline_file"] = "pipeline.yaml"
+        else:
+            data["pipeline_file"] = None
 
         return data
 

@@ -193,6 +193,11 @@ class PipelineLoader:
             parallel_dev=parallel_dev_cfg,
             parallel_groups=parallel_groups,
             mode=mode,
+            max_iterations=raw.get("max_iterations") or (raw.get("project") or {}).get("max_iterations", 5),
+            per_agent_timeout=raw.get("per_agent_timeout", 600),
+            context_deflation_limit=raw.get("context_deflation_limit", 5),
+            observer_poll_interval=raw.get("observer_poll_interval", 60),
+            agent_log_retention_hours=raw.get("agent_log_retention_hours", 168),
         )
 
     # ------------------------------------------------------------------

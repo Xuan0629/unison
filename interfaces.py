@@ -169,7 +169,7 @@ class AgentSpec:
         _map: dict[Runtime, list[str]] = {
             "claude":   ["-p", "--dangerously-skip-permissions"],
             "codex":    ["exec", "--dangerously-bypass-approvals-and-sandbox"],
-            "hermes":   ["chat", "-q", "--yolo"],
+            "hermes":   ["chat", "--yolo", "-q"],
             "openclaw": [],  # v1.1: HTTP API, not subprocess
         }
         return _map[self.runtime]
