@@ -170,6 +170,7 @@ agents:
 | 快照安全网 | Agent 修改文件前自动备份 |
 | API Key 脱敏 | 日志自动替换 `sk-...`、`Bearer`、`_API_KEY=***` 为 `***` |
 | 流式日志 | 子进程输出直接写磁盘（OOM 安全） |
+| Stdin 模式 | 大 prompt 经 stdin 传入非命令行参数——避免 OS `ARG_MAX` 限制 |
 
 ### 可观测性
 
@@ -197,14 +198,24 @@ agents:
 | DAG 调度 | Stage 依赖图，并行执行，deadline 超时处理 |
 | Git Worktree | 并行 Developer 隔离分支开发 |
 | Schema 迁移 | V1 pipeline.yaml 自动升级到 V2 |
+| **Self-Heal** | **pipeline 运行中自动诊断并修复 Unison 自身 bug（→ §Self-Heal）** |
 
-### Self-Heal — Bug 自动修复
-
-当 pipeline 遇到框架级 bug（traceback 命中 `src/unison/`）时，Unison
-可自动诊断并修复，无需人工介入：
+可配置的超时与保留策略（YAML 顶层）：
 
 ```yaml
-# pipeline.yaml
+per_agent_timeout: 600          # 单个 agent 调用最长秒数
+context_deflation_limit: 5      # 每次迭代最多注入 findings 数
+observer_poll_interval: 60      # Observer 轮询间隔（秒）
+agent_log_retention_hours: 168  # Agent 日志保留时长（7 天）
+```
+
+### Self-Heal — Bug 自动恢复
+
+当 Unison 自身在 pipeline 运行中遇到 bug 时，可自动诊断并修复——
+让 pipeline 继续运行而不是 halt：
+
+```yaml
+# pipeline.yaml（顶层）
 self_heal:
   auto_fix_unison: true      # 自动修复 Unison 框架 bug（默认开启）
   auto_fix_consumer: false   # 自动修复 consumer 项目 bug（手动开启）
@@ -212,11 +223,11 @@ self_heal:
   fix_timeout: 300           # Fixer 诊断超时（秒）
 ```
 
-**流程**：报错 → 分类器 → Fixer (Hermes) 诊断 + 出补丁 → Codex + Claude 并行审查
-→ 按需修改（≤2 轮）→ commit → PR 到 Unison 仓库。
+**工作原理**：检测到错误 → 分类器判定为框架 bug → fixer agent 诊断并出补丁 →
+Codex + Claude 并行审查 → 迭代修改（≤2 轮）→ 提交修复 → 创建 PR 到 Unison 仓库。
 
-**安全**：多 agent 会审后才落地。判定逻辑用严格相等（`==` 非子串匹配），
-异常 reviewer 输出不会自动通过。---
+修复记录保存在 `fixes/` 目录，可审计追溯。判定逻辑使用严格相等（非子串匹配），
+异常 reviewer 不会导致错误修复自动通过。
 
 ## 架构
 
@@ -250,7 +261,7 @@ World（共享文件系统）
 |-------|-----------|---------|
 | Claude Code | `claude` | `claude -p --dangerously-skip-permissions` |
 | Codex CLI | `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox` |
-| Hermes | `hermes` | `hermes chat -q --yolo` |
+| Hermes | `hermes` | `hermes chat -q --yolo`（自动加载 model + 工程技能） |
 | OpenClaw | `openclaw` | HTTP API (gateway:18789) |
 
 ---

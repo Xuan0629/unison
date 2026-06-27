@@ -170,6 +170,7 @@ Works for all roles (Planner, Developer, Reviewer), not just Reviewer.
 | Snapshot Safety Net | Auto-backup before agent modifications |
 | API Key Masking | Logs auto-redact `sk-...`, `Bearer`, `_API_KEY=` |
 | Streaming Logs | Subprocess output written directly to disk (OOM-safe) |
+| Stdin Mode | Large prompts piped via stdin instead of CLI args — avoids OS `ARG_MAX` limit |
 
 ### Observability
 
@@ -196,15 +197,25 @@ Works for all roles (Planner, Developer, Reviewer), not just Reviewer.
 | Checkpoint / Resume | State saved after each phase transition |
 | DAG Scheduler | Stage dependency graph, parallel execution with deadlines |
 | Git Worktrees | Isolated parallel development branches |
-|| Schema Migration | V1 pipeline.yaml auto-upgraded to V2 |
+| Schema Migration | V1 pipeline.yaml auto-upgraded to V2 |
+| **Self-Heal** | **Auto-diagnose and fix Unison bugs while pipeline runs (→ §Self-Heal)** |
 
-### Self-Heal — Automatic Bug Fix
-
-When a pipeline hits a framework bug (traceback in `src/unison/`), Unison can
-auto-diagnose and fix it without manual intervention:
+Configurable timeouts and retention (YAML top-level):
 
 ```yaml
-# pipeline.yaml
+per_agent_timeout: 600          # Max seconds per agent invocation
+context_deflation_limit: 5      # Max findings injected per iteration
+observer_poll_interval: 60      # Observer poll interval (seconds)
+agent_log_retention_hours: 168  # Agent log retention (7 days)
+```
+
+### Self-Heal — Automatic Bug Recovery
+
+When Unison itself hits a bug during a pipeline run, it can auto-diagnose and fix
+the issue — so your pipeline keeps running instead of halting:
+
+```yaml
+# pipeline.yaml (top-level)
 self_heal:
   auto_fix_unison: true      # Auto-fix Unison framework bugs (default: true)
   auto_fix_consumer: false   # Auto-fix consumer project bugs (default: false, opt-in)
@@ -212,11 +223,12 @@ self_heal:
   fix_timeout: 300           # Fixer diagnosis timeout (seconds)
 ```
 
-**Flow**: Error → classifier → Fixer (Hermes) diagnoses + patches → Codex + Claude parallel review
-→ revise if needed (≤2 rounds) → commit → PR to Unison repo.
+**How it works**: Error detected → classifier determines it's a framework bug → a
+fixer agent diagnoses and patches → Codex + Claude review the fix in parallel →
+revision loop (≤2 rounds) → commits the fix → creates a PR to the Unison repo.
 
-**Safety**: Multi-agent review before any fix lands. Strict verdict parsing (`==`, not substring).
-Malformed outputs from broken reviewers will never auto-pass.
+Fix attempts are logged to `fixes/` for auditability. Reviewers use strict verdict
+parsing — a broken reviewer cannot auto-pass a bad fix.
 
 
 
@@ -252,7 +264,7 @@ World (shared filesystem)
 |-------|-------------|------------|
 | Claude Code | `claude` | `claude -p --dangerously-skip-permissions` |
 | Codex CLI | `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox` |
-| Hermes | `hermes` | `hermes chat -q --yolo` |
+| Hermes | `hermes` | `hermes chat -q --yolo` (model + engineering skills auto-loaded) |
 | OpenClaw | `openclaw` | HTTP API (gateway:18789) |
 
 ---
