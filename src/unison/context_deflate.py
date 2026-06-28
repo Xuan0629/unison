@@ -341,6 +341,7 @@ def assemble_context(
     design_content: str = "",
     last_review_findings: str = "",
     git_diff: str = "",
+    phase_summary: str = "",  # P1-1: optional phase status injection
     token_budget: int,
     chars_per_token: float = 4.0,
 ) -> AssembledContext:
@@ -476,6 +477,8 @@ def assemble_context(
 
     # --- Assemble (budget headers into the token count) ---
     sections = [system_prompt]
+    if phase_summary:
+        sections.append("\n## Phase Status\n" + phase_summary)
     if findings_text:
         sections.append("\n## Last Review Findings\n" + findings_text)
     if diff_text:

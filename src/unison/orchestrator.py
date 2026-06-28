@@ -271,6 +271,7 @@ class Orchestrator:
         if not self._state.halt_signal:
             self._state.transition("done", "orchestrator",
                                    note="pipeline complete")
+            self._archive_reviews()
             self._save_checkpoint()
 
     def _run_planning_loop(self) -> None:
@@ -1322,7 +1323,7 @@ class Orchestrator:
                 f"Review Iteration {iteration}: "
                 f"1. Run tests: {self.spec.project.test_command} "
                 f"2. Write review to {review_file} "
-                f"3. Use YAML frontmatter: verdict, summary, findings. "
+                f"3. Use YAML frontmatter: verdict, summary, findings, metrics "
                 f"4. Do NOT modify src/"
             )
         else:
@@ -1419,7 +1420,7 @@ class Orchestrator:
                 f"Review Iteration {iteration}: "
                 f"1. Run tests: {self.spec.project.test_command} "
                 f"2. Write review to {review_file} "
-                f"3. Use YAML frontmatter: verdict, summary, findings. "
+                f"3. Use YAML frontmatter: verdict, summary, findings, metrics "
                 f"4. Do NOT modify src/"
             )
         else:
@@ -1428,12 +1429,22 @@ class Orchestrator:
         # Prepend the task to system_prompt so the LLM sees it first
         full_system = f"{task}\n\n{system_prompt}"
 
+        # P1-1: Build phase summary for agent situational awareness
+        prev_verdict = self._state.last_review_verdict or "N/A"
+        phase = self._state.phase
+        phase_label = "planning" if "planning" in phase else ("dev" if "dev" in phase else phase)
+        psum = (f"mode: {self.spec.mode or 'auto'}, phase: {phase_label}, "
+                f"iteration: {iteration}/{self.spec.max_iterations}, "
+                f"prev_verdict: {prev_verdict}, "
+                f"budget_remaining: {remaining} tokens")
+
         assembled = assemble_context(
             system_prompt=full_system,
             prd_content=prd_content,
             design_content=design_content,
             last_review_findings=top_findings,
             git_diff=diff,
+            phase_summary=psum,
             token_budget=remaining,
         )
         return assembled.prompt
@@ -1740,6 +1751,27 @@ class Orchestrator:
             return parsed.verdict
         except (VerdictParseError, yaml.YAMLError):
             return None
+
+    def _archive_reviews(self) -> None:
+        """P0-1: Archive old review files to reviews/archive/YYYY-MM-DD/ at pipeline done.
+
+        Prevents stale review clutter from confusing future agent invocations.
+        Archives only when phase transitions to done (not during active loops).
+        """
+        import shutil
+        from datetime import datetime
+        
+        reviews_dir = self.spec.world.root / "reviews"
+        if not reviews_dir.exists():
+            return
+        
+        archive_dir = reviews_dir / "archive" / datetime.now().strftime("%Y-%m-%d")
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        
+        for f in reviews_dir.glob("iter-*.md"):
+            shutil.move(str(f), str(archive_dir / f.name))
+        for f in reviews_dir.glob("plan-iter-*.md"):
+            shutil.move(str(f), str(archive_dir / f.name))
 
     def _save_checkpoint(self, iteration: int | None = None) -> None:
         """Save a checkpoint after each phase transition (§19).
