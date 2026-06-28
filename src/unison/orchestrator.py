@@ -437,6 +437,15 @@ class Orchestrator:
             # ---- Verdict routing --------------------------------------------
             verdict = self._parse_verdict(iteration, review_phase)
 
+            # P0-2: Convergence detection — stall on same findings → force exit
+            if verdict == "REQUEST_CHANGES" and iteration >= 2:
+                if self._check_convergence(iteration, review_phase):
+                    self.halt(
+                        f"review converged — same findings persist across "
+                        f"iterations {iteration-1}→{iteration} ({review_of} loop)"
+                    )
+                    return
+
             if verdict == "PASS":
                 # Exit loop — review approved
                 return
@@ -1751,6 +1760,35 @@ class Orchestrator:
             return parsed.verdict
         except (VerdictParseError, yaml.YAMLError):
             return None
+
+    def _check_convergence(self, iteration: int, review_phase: str) -> bool:
+        """P0-2: Check if reviewer findings have converged (stalled on same issues).
+
+        Compares findings from current and previous review files.
+        Returns True if >=80% of current findings are similar to previous ones.
+        """
+        import yaml
+        from unison.convergence import has_converged
+
+        try:
+            curr = self._review_file_for_phase(review_phase, iteration)
+            prev = self._review_file_for_phase(review_phase, iteration - 1)
+        except Exception:
+            return False
+
+        if not curr.exists() or not prev.exists():
+            return False
+
+        try:
+            curr_data = yaml.safe_load(curr.read_text())
+            prev_data = yaml.safe_load(prev.read_text())
+        except yaml.YAMLError:
+            return False
+
+        curr_findings = curr_data.get("findings", []) if isinstance(curr_data, dict) else []
+        prev_findings = prev_data.get("findings", []) if isinstance(prev_data, dict) else []
+
+        return has_converged(prev_findings, curr_findings)
 
     def _archive_reviews(self) -> None:
         """P0-1: Archive old review files to reviews/archive/YYYY-MM-DD/ at pipeline done.
