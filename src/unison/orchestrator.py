@@ -1415,6 +1415,16 @@ class Orchestrator:
         if cumulative_diff:
             diff = diff + "\n\n## Cumulative Changes (since loop start)\n" + cumulative_diff
 
+        # ADD-2: Hash-based content dedup — summarize unchanged PRD/design sections
+        prd_content, design_content = self._dedup_context_content(
+            prd_content, design_content, iteration
+        )
+
+        # ADD-1: Finding carry-forward status for developer context
+        carry_forward = ""
+        if role == "developer" and iteration > 1:
+            carry_forward = self._build_carry_forward(iteration, review_phase)
+
         # Compute remaining budget (clamp to >= 1 to avoid ContextBudgetError
         # when the tracker is already over the daily limit).
         # Per-task cap takes precedence over daily cap — a per-agent
@@ -1476,7 +1486,10 @@ class Orchestrator:
             phase_summary=psum,
             token_budget=remaining,
         )
-        return assembled.prompt
+        prompt = assembled.prompt
+        if carry_forward:
+            prompt += "\n\n" + carry_forward
+        return prompt
 
     # ==================================================================
     # Internal: helpers
@@ -1850,6 +1863,71 @@ class Orchestrator:
         prev_findings = prev_data.get("findings", []) if isinstance(prev_data, dict) else []
 
         return has_converged(prev_findings, curr_findings)
+
+    def _build_carry_forward(self, iteration: int, review_phase: str) -> str:
+        """ADD-1: Build finding carry-forward block showing FIXED/REPEATED/NEW status.
+
+        Compares findings from review iterations (iteration-1) and (iteration)
+        to show the developer what was fixed and what persists.
+        """
+        import yaml
+        from unison.finding_tracker import carry_forward_block, parse_findings_from_yaml
+
+        try:
+            prev_file = self._review_file_for_phase(review_phase, iteration - 1)
+            curr_file = self._review_file_for_phase(review_phase, iteration)
+        except Exception:
+            return ""
+
+        if not prev_file.exists():
+            return ""
+
+        try:
+            prev_text = prev_file.read_text()
+            curr_text = curr_file.read_text() if curr_file.exists() else ""
+        except Exception:
+            return ""
+
+        prev_findings = parse_findings_from_yaml(prev_text)
+        curr_findings = parse_findings_from_yaml(curr_text) if curr_text else []
+
+        return carry_forward_block(prev_findings, curr_findings)
+
+    def _dedup_context_content(
+        self, prd: str, design: str, iteration: int
+    ) -> tuple[str, str]:
+        """ADD-2: Replace unchanged PRD/design with compact hash summaries.
+
+        On iteration 1: store content hash → inject full content.
+        On iteration N: if hash unchanged → inject summary line instead of full content.
+        Saves significant tokens when PRD/design hasn't changed.
+        """
+        import hashlib
+
+        if not hasattr(self, "_content_hashes"):
+            self._content_hashes: dict[str, str] = {}
+
+        result_prd, result_design = prd, design
+
+        # PRD dedup
+        if prd:
+            h = hashlib.sha256(prd.encode()).hexdigest()[:12]
+            prev = self._content_hashes.get("prd")
+            if prev == h and iteration > 1:
+                result_prd = f"(PRD unchanged since iter {iteration-1}, sha256:{h})"
+            else:
+                self._content_hashes["prd"] = h
+
+        # Design dedup
+        if design:
+            h = hashlib.sha256(design.encode()).hexdigest()[:12]
+            prev = self._content_hashes.get("design")
+            if prev == h and iteration > 1:
+                result_design = f"(Design unchanged since iter {iteration-1}, sha256:{h})"
+            else:
+                self._content_hashes["design"] = h
+
+        return result_prd, result_design
 
     def _record_reviewer_stats(self, iteration: int, review_phase: str, verdict: str) -> None:
         """A2: Append reviewer stats to ~/.unison/reviewer_stats.jsonl for sycophancy tracking."""
