@@ -342,6 +342,7 @@ def assemble_context(
     last_review_findings: str = "",
     git_diff: str = "",
     phase_summary: str = "",  # P1-1: optional phase status injection
+    phase: str = "dev",       # P2-1: phase-aware priority ("planning" or "dev")
     token_budget: int,
     chars_per_token: float = 4.0,
 ) -> AssembledContext:
@@ -414,66 +415,60 @@ def assemble_context(
                 findings_text = ""
                 truncated_sections.append("last_review_findings")
 
-    # --- git_diff (priority 3) ---
-    diff_text = ""
-    if git_diff:
-        # Determine how many lines we can allocate (rough estimate)
-        max_diff_chars = int(remaining * chars_per_token)
-        if max_diff_chars > 0:
-            # Count lines in git_diff to estimate max_lines for truncate_diff
-            diff_lines = git_diff.count("\n") + (1 if git_diff else 0)
-            # Allocate proportionally, but at least 10 lines for context
-            budget_share = max(10, int(diff_lines * (remaining / max(1, token_budget))))
-            # Clamp: we estimate each diff line ≈ 40 chars avg
-            line_budget = max(10, int(max_diff_chars / 40))
-            diff_text = truncate_diff(git_diff, max_lines=min(budget_share, line_budget, 2000))
-            d_est = _estimate_tokens(diff_text, chars_per_token)
-            if d_est <= remaining:
-                remaining -= d_est
-            else:
-                # The diff is still too large — truncate harder
-                diff_text = truncate_diff(git_diff, max_lines=line_budget // 2)
-                d_est = _estimate_tokens(diff_text, chars_per_token)
-                if d_est <= remaining:
-                    remaining -= d_est
-                else:
-                    diff_text = ""
-            if diff_text != git_diff:
-                truncated_sections.append("git_diff")
-        else:
-            truncated_sections.append("git_diff")
+    # --- P2-1: Phase-aware content allocation ---
+    # Planning phases: PRD/design priority > diff. Dev phases: diff priority > PRD/design.
+    is_planning = "planning" in phase
 
-    # --- design_content (priority 4) ---
-    design_text = ""
-    if design_content and remaining > 0:
-        header_overhead = _estimate_tokens("\n## Design\n", chars_per_token)
-        effective_budget = max(0, remaining - header_overhead)
-        max_chars = int(effective_budget * chars_per_token)
-        d_est = _estimate_tokens(design_content, chars_per_token)
-        if d_est <= effective_budget:
-            design_text = design_content
-            remaining -= d_est
-        elif max_chars > 0:
-            design_text = _truncate_tail(design_content, max_chars)
-            remaining -= _estimate_tokens(design_text, chars_per_token)
+    def _fill_content(text: str, label: str, remaining_budget: int,
+                      header: str = "") -> tuple[str, int, bool]:
+        """Fill a content section, returning (text, remaining_budget, was_truncated)."""
+        result_text = ""
+        truncated = False
+        if text and remaining_budget > 0:
+            hdr_overhead = _estimate_tokens(header, chars_per_token) if header else 0
+            eff_budget = max(0, remaining_budget - hdr_overhead)
+            max_chars = int(eff_budget * chars_per_token)
+            est = _estimate_tokens(text, chars_per_token)
+            if est <= eff_budget:
+                result_text = text
+                remaining_budget -= est
+            elif max_chars > 0:
+                result_text = _truncate_tail(text, max_chars)
+                remaining_budget -= _estimate_tokens(result_text, chars_per_token)
+                truncated = True
+            remaining_budget -= hdr_overhead
+        return result_text, remaining_budget, truncated
+
+    diff_text, design_text, prd_text = "", "", ""
+
+    if is_planning:
+        # Planning: design → prd → diff
+        design_text, remaining, _ = _fill_content(
+            design_content, "design_content", remaining, "\\n## Design\\n")
+        if design_text != design_content:
             truncated_sections.append("design_content")
-        remaining -= header_overhead  # pay for the header
-
-    # --- prd_content (priority 5) ---
-    prd_text = ""
-    if prd_content and remaining > 0:
-        header_overhead = _estimate_tokens("\n## PRD\n", chars_per_token)
-        effective_budget = max(0, remaining - header_overhead)
-        max_chars = int(effective_budget * chars_per_token)
-        p_est = _estimate_tokens(prd_content, chars_per_token)
-        if p_est <= effective_budget:
-            prd_text = prd_content
-            remaining -= p_est
-        elif max_chars > 0:
-            prd_text = _truncate_tail(prd_content, max_chars)
-            remaining -= _estimate_tokens(prd_text, chars_per_token)
+        prd_text, remaining, _ = _fill_content(
+            prd_content, "prd_content", remaining, "\\n## PRD\\n")
+        if prd_text != prd_content:
             truncated_sections.append("prd_content")
-        remaining -= header_overhead  # pay for the header
+        diff_text, remaining, _ = _fill_content(
+            git_diff, "git_diff", remaining)
+        if diff_text != git_diff:
+            truncated_sections.append("git_diff")
+    else:
+        # Dev: diff → design → prd (default)
+        diff_text, remaining, _ = _fill_content(
+            git_diff, "git_diff", remaining)
+        if diff_text != git_diff:
+            truncated_sections.append("git_diff")
+        design_text, remaining, _ = _fill_content(
+            design_content, "design_content", remaining, "\\n## Design\\n")
+        if design_text != design_content:
+            truncated_sections.append("design_content")
+        prd_text, remaining, _ = _fill_content(
+            prd_content, "prd_content", remaining, "\\n## PRD\\n")
+        if prd_text != prd_content:
+            truncated_sections.append("prd_content")  # pay for the header
 
     # --- Assemble (budget headers into the token count) ---
     sections = [system_prompt]

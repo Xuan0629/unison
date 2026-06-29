@@ -1484,6 +1484,7 @@ class Orchestrator:
             last_review_findings=top_findings,
             git_diff=diff,
             phase_summary=psum,
+            phase="planning" if "planning" in phase_label else "dev",
             token_budget=remaining,
         )
         prompt = assembled.prompt
