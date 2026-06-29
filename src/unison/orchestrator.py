@@ -387,6 +387,9 @@ class Orchestrator:
         """
         max_iter = self.spec.max_iterations
 
+        # A1: Capture loop start commit for cumulative diff
+        self._loop_start_commit = self._get_head_commit()
+
         # Map phase → agent role
         role_for_phase = {
             "planning_active": "planner",
@@ -436,6 +439,10 @@ class Orchestrator:
 
             # ---- Verdict routing --------------------------------------------
             verdict = self._parse_verdict(iteration, review_phase)
+
+            # A2: Record reviewer stats for sycophancy tracking
+            if verdict:
+                self._record_reviewer_stats(iteration, review_phase, verdict)
 
             # P0-2: Convergence detection — stall on same findings → force exit
             if verdict == "REQUEST_CHANGES" and iteration >= 2:
@@ -1335,6 +1342,10 @@ class Orchestrator:
                 f"3. Use YAML frontmatter: verdict, summary, findings, metrics "
                 f"4. Do NOT modify src/"
             )
+            # A2: Anti-sycophancy reminder for reviewers with high PASS rates
+            syco_note = self._anti_sycophancy_reminder()
+            if syco_note:
+                task += f"\n{syco_note}"
         else:
             task = f"Perform {role} duties for iteration {iteration}."
 
@@ -1399,6 +1410,11 @@ class Orchestrator:
         # Get recent git diff
         diff = self._recent_diff()
 
+        # A1: Cumulative diff since loop start (regression detection)
+        cumulative_diff = self._cumulative_diff()
+        if cumulative_diff:
+            diff = diff + "\n\n## Cumulative Changes (since loop start)\n" + cumulative_diff
+
         # Compute remaining budget (clamp to >= 1 to avoid ContextBudgetError
         # when the tracker is already over the daily limit).
         # Per-task cap takes precedence over daily cap — a per-agent
@@ -1432,6 +1448,10 @@ class Orchestrator:
                 f"3. Use YAML frontmatter: verdict, summary, findings, metrics "
                 f"4. Do NOT modify src/"
             )
+            # A2: Anti-sycophancy reminder for reviewers with high PASS rates
+            syco_note = self._anti_sycophancy_reminder()
+            if syco_note:
+                task += f"\n{syco_note}"
         else:
             task = f"Perform {role} duties for iteration {iteration}."
 
@@ -1535,6 +1555,47 @@ class Orchestrator:
             persist_path=self.spec.world.unison_dir / "budget.json",
         )
         return self._budget_tracker
+
+    def _get_head_commit(self) -> str:
+        """Return the current HEAD commit hash, or empty string on failure."""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(self.spec.world.root),
+                capture_output=True, timeout=10, check=False,
+            )
+            return result.stdout.decode("utf-8", errors="replace").strip()[:8]
+        except Exception:
+            return ""
+
+    def _cumulative_diff(self, max_chars: int = 1200) -> str:
+        """A1: Return ``git diff <loop-start> HEAD --stat`` showing scope across entire loop.
+
+        Compact --stat output (~200 chars typical) shows which files changed
+        cumulatively, helping agents detect fix-regression patterns.
+        """
+        if not getattr(self, "_loop_start_commit", ""):
+            return ""
+        try:
+            # Check the start commit still exists
+            check = subprocess.run(
+                ["git", "cat-file", "-e", self._loop_start_commit],
+                cwd=str(self.spec.world.root),
+                capture_output=True, timeout=10, check=False,
+            )
+            if check.returncode != 0:
+                return ""
+            result = subprocess.run(
+                ["git", "diff", self._loop_start_commit, "HEAD", "--stat"],
+                cwd=str(self.spec.world.root),
+                capture_output=True, timeout=30, check=False,
+            )
+            if result.returncode == 0:
+                raw = result.stdout.decode("utf-8", errors="replace")
+                return raw[:max_chars] + ("\n...[cumulative diff truncated]" if len(raw) > max_chars else "")
+        except Exception:
+            pass
+        return ""
 
     def _recent_diff(self, max_chars: int = 8192) -> str:
         """Return ``git diff HEAD~1 HEAD`` output (truncated), or ``""`` on failure."""
@@ -1789,6 +1850,70 @@ class Orchestrator:
         prev_findings = prev_data.get("findings", []) if isinstance(prev_data, dict) else []
 
         return has_converged(prev_findings, curr_findings)
+
+    def _record_reviewer_stats(self, iteration: int, review_phase: str, verdict: str) -> None:
+        """A2: Append reviewer stats to ~/.unison/reviewer_stats.jsonl for sycophancy tracking."""
+        import json
+        from datetime import datetime, timezone
+
+        stats_path = Path.home() / ".unison" / "reviewer_stats.jsonl"
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Determine reviewer runtime from agent spec
+        reviewer_agents = self._resolve_agents("reviewer")
+        reviewer_runtime = reviewer_agents[0].runtime if reviewer_agents else "unknown"
+
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "project": self.spec.world.root.name,
+            "mode": self.spec.mode or "unknown",
+            "reviewer": reviewer_runtime,
+            "iteration": iteration,
+            "total_iterations": self._state.iteration,
+            "verdict": verdict,
+        }
+        with open(stats_path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def _anti_sycophancy_reminder(self) -> str:
+        """A2: Check reviewer stats and return anti-sycophancy reminder if PASS rate suspicious.
+
+        Suspicious = PASS rate > 80% AND avg iterations-per-PASS <= 2 across recent history.
+        """
+        import json
+
+        stats_path = Path.home() / ".unison" / "reviewer_stats.jsonl"
+        if not stats_path.exists():
+            return ""
+
+        # Read last 20 reviewer stats
+        entries = []
+        with open(stats_path) as f:
+            for line in f:
+                try:
+                    entries.append(json.loads(line.strip()))
+                except json.JSONDecodeError:
+                    continue
+
+        # Only consider entries from this reviewer runtime
+        reviewer_agents = self._resolve_agents("reviewer")
+        reviewer_runtime = reviewer_agents[0].runtime if reviewer_agents else ""
+        relevant = [e for e in entries[-20:] if e.get("reviewer") == reviewer_runtime]
+        if len(relevant) < 5:
+            return ""  # Not enough data
+
+        passes = [e for e in relevant if e.get("verdict") == "PASS"]
+        pass_rate = len(passes) / len(relevant)
+        avg_iters = sum(e.get("iteration", 5) for e in passes) / max(len(passes), 1)
+
+        if pass_rate > 0.80 and avg_iters <= 2:
+            return (
+                f"⚠️ ANTI-SYCOPHANCY: Your historical PASS rate is {pass_rate:.0%} "
+                f"(avg {avg_iters:.1f} iterations to PASS). "
+                f"Default to skepticism. At least 1 concrete improvement is mandatory. "
+                f"Do not PASS without meaningful findings."
+            )
+        return ""
 
     def _archive_reviews(self) -> None:
         """P0-1: Archive old review files to reviews/archive/YYYY-MM-DD/ at pipeline done.
