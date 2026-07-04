@@ -233,6 +233,40 @@ Fix attempts are logged to `fixes/` for auditability. Reviewers use strict verdi
 parsing — a broken reviewer cannot auto-pass a bad fix.
 
 
+### Greenfield Mode — Isolated New Module Development
+
+Prevent agents from getting distracted by existing bugs. Greenfield mode restricts
+the developer agent to only specified files — no reading existing source code:
+
+```yaml
+mode: "greenfield"
+greenfield:
+  files: ["src/unison/new_module.py", "tests/test_new_module.py"]
+  task: "Build a feature that does X"
+  skeleton: "src/unison/new_module.py"
+```
+
+Uses the reusable `prompts/greenfield.md` template.
+
+### Acceptance Criteria Freezing
+
+Inspired by Dan McInerney's architect-loop: acceptance criteria are frozen to
+`reviews/acceptance-criteria.md` **before** development starts. The reviewer
+judges against the frozen file — no moving goalposts mid-review.
+
+### A2A Debate Mode
+
+Multi-agent asynchronous debate via filesystem communication. Agents write
+position papers and critiques to inbox/outbox, with automatic convergence
+detection. Mode: `a2a-debate`. See `src/unison/a2a_debate.py`.
+
+### `unison init` — Interactive Pipeline Generator
+
+```bash
+unison init                           # interactive Q&A → pipeline.yaml + prompts/
+unison init --preset code-dev         # non-interactive: skip wizard
+```
+
 
 ## Architecture
 
@@ -240,10 +274,11 @@ parsing — a broken reviewer cannot auto-pass a bad fix.
 Unison Orchestrator (state machine)
 ├── Planner Agent    ⇄  Reviewer Agent   ← planning loop
 ├── Developer Agent  ⇄  Reviewer Agent   ← dev loop
+├── A2A Debate Mode  (multi-agent filesystem debate)
 ├── FileLockManager     (fcntl.flock)
 ├── SnapshotManager     (~/.unison/snapshots/)
 ├── RiskEvaluator       (3-tuple rules)
-└── BudgetTracker       (token limits)
+├── BudgetTracker       (token limits)
 
 Observer (independent process, 60s poll)
 ├── state.json + notifications.jsonl
@@ -252,11 +287,14 @@ Observer (independent process, 60s poll)
 
 World (shared filesystem)
 ├── prd/PRD.md, tech-design.md
-├── reviews/iter-N.md, plan-iter-N.md
-├── inbox/ outbox/ (agent messages)
+├── reviews/iter-N.md, acceptance-criteria.md
+├── inbox/ outbox/ (A2A debate messages)
 ├── observer/ logs/ reports/
 └── .unison/ state, lock, checkpoints, budget
 ```
+
+The Web Dashboard follows `~/DESIGN.md` for design tokens (colors, typography, spacing)
+to ensure consistent amber-accent dark theme across all agent-generated UIs.
 
 ---
 
