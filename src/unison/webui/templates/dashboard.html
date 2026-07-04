@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UNISON</title>
+<link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ================================================================== -->
+  <!-- TOPBAR                                                            -->
+  <!-- ================================================================== -->
+  <header id="topbar" role="banner">
+    <span class="topbar__title" id="topbar-title" aria-live="polite">UNISON</span>
+    <button id="export-btn"
+            class="topbar__btn topbar__btn--icon"
+            onclick="exportState()"
+            aria-label="Export state"
+            title="Download state.json">&darr;</button>
+    <span id="phase-badge" class="badge badge--init" role="status" aria-label="Pipeline phase">
+      <span class="badge__dot" aria-hidden="true"></span>
+      <span id="phase-badge-text">--</span>
+    </span>
+    <span class="topbar__spacer"></span>
+    <button id="control-pause"
+            class="topbar__btn topbar__btn--control"
+            onclick="sendControl('pause')"
+            aria-label="Pause pipeline"
+            title="Pause pipeline">⏸</button>
+    <button id="control-skip"
+            class="topbar__btn topbar__btn--control"
+            onclick="sendControl('skip')"
+            aria-label="Skip current phase"
+            title="Skip current phase">⏭</button>
+    <button id="control-report"
+            class="topbar__btn topbar__btn--control"
+            onclick="sendControl('report')"
+            aria-label="Generate report"
+            title="Generate report">📋</button>
+    <button id="lang-toggle"
+            class="topbar__btn"
+            onclick="toggleLang()"
+            aria-label="Toggle language"
+            title="Switch language">CN</button>
+    <button id="theme-toggle"
+            class="topbar__btn topbar__btn--icon"
+            onclick="toggleTheme()"
+            aria-label="Toggle dark/light theme"
+            title="Toggle theme">&#9788;</button>
+  </header>
+
+  <!-- ================================================================== -->
+  <!-- SIDEBAR                                                            -->
+  <!-- ================================================================== -->
+  <nav id="sidebar" aria-label="Sidebar">
+    <div class="sidebar__section">
+      <h3 class="sidebar__heading" id="tasks-heading">TASKS</h3>
+      <div id="task-list">
+        <div class="task-item">
+          <span class="task-item__dot task-item__dot--pending" aria-hidden="true"></span>
+          <span class="task-item__label" id="no-tasks-label">No tasks yet</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar__section">
+      <h3 class="sidebar__heading sidebar__heading--collapsible" id="history-heading-toggle" onclick="toggleSection('history-list')" role="button" tabindex="0" aria-expanded="false">
+        <span class="sidebar__heading-arrow">&#9654;</span>
+        <span id="history-heading">HISTORY</span>
+      </h3>
+      <div id="history-list" class="sidebar__collapsible u-hidden"></div>
+    </div>
+
+    <div class="sidebar__section">
+      <h3 class="sidebar__heading" id="agents-heading">AGENTS</h3>
+      <div id="agent-cards"></div>
+    </div>
+
+    <div class="sidebar__section">
+      <h3 class="sidebar__heading" id="config-heading">CONFIG</h3>
+      <div id="pipeline-config"></div>
+    </div>
+
+    <div class="sidebar__section">
+      <h3 class="sidebar__heading sidebar__heading--collapsible" id="token-settings-heading-toggle" onclick="toggleSection('token-settings')" role="button" tabindex="0" aria-expanded="false">
+        <span class="sidebar__heading-arrow">&#9654;</span>
+        <span id="token-settings-heading">TOKEN SETTINGS</span>
+      </h3>
+      <div id="token-settings" class="sidebar__collapsible u-hidden">
+        <div class="token-settings__field">
+          <input class="token-settings__input" id="daily-limit-input" type="number" placeholder="&infin;" step="1000" min="0" onchange="onTokenSettingChange()" aria-label="Daily token limit">
+          <div class="token-settings__hint" id="daily-limit-hint">Daily Limit</div>
+        </div>
+        <div class="token-settings__field">
+          <input class="token-settings__input" id="task-limit-input" type="number" placeholder="&infin;" step="1000" min="0" onchange="onTokenSettingChange()" aria-label="Per-task token limit">
+          <div class="token-settings__hint" id="task-limit-hint">Per-Task Limit</div>
+        </div>
+        <div class="token-settings__hint" id="settings-hint">Configure in pipeline.yaml budget field for persistence</div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ================================================================== -->
+  <!-- MAIN CONTENT                                                       -->
+  <!-- ================================================================== -->
+  <main id="content">
+
+    <!-- Empty state (hidden when data present) -->
+    <div id="no-data-state" class="card empty-state u-hidden">
+      <div class="empty-state__icon">&#128736;</div>
+      <div class="empty-state__title" id="no-data-title">No pipeline data yet.</div>
+      <div class="empty-state__hint" id="no-data-hint"><code>unison run --pipeline my-pipeline.yaml</code></div>
+    </div>
+
+    <!-- Status row: Phase | Iteration | Verdict (3 cards) -->
+    <div id="status-row">
+      <div class="card status-card card--interactive">
+        <div class="status-card__label" id="phase-label">PHASE</div>
+        <div class="status-card__value" id="phase-value" aria-live="polite">--</div>
+      </div>
+
+      <div class="card status-card card--interactive">
+        <div class="status-card__label" id="iter-label">ITERATION</div>
+        <div class="status-card__value" id="iter-value">0</div>
+      </div>
+
+      <div class="card status-card card--interactive" id="verdict-card">
+        <div class="status-card__label" id="verdict-label">VERDICT</div>
+        <div class="status-card__value" id="verdict-value">--</div>
+      </div>
+    </div>
+
+    <!-- Token gauge dashboard (dynamically created per agent) -->
+    <div id="gauge-dashboard" class="card">
+      <div class="gauge-row" id="gauge-row"></div>
+    </div>
+
+    <!-- Timeline -->
+    <div id="timeline" class="card" aria-label="Phase timeline"></div>
+
+    <!-- Active agent panel -->
+    <div id="active-panel" class="card card--accent-left" aria-live="polite" aria-atomic="true">
+      <div class="active-panel__message" id="active-msg">Loading&hellip;</div>
+      <div class="active-panel__detail" id="active-detail"></div>
+    </div>
+
+    <!-- Error panel (hidden by default) -->
+    <div id="error-panel" class="card card--danger-left" hidden aria-live="assertive"></div>
+
+    <!-- Log preview -->
+    <div id="log-preview" class="card" aria-label="Recent transition log">
+      <div class="log-entry">Waiting for pipeline data&hellip;</div>
+    </div>
+
+  </main>
+</div>
+
+<script src="/static/dashboard.js"></script>
+</body>
+</html>
