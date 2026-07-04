@@ -36,19 +36,17 @@ class ErrorClassifier:
 
     @staticmethod
     def classify(result: AgentResult, spec: PipelineSpec) -> str:
-        """Return UNISON_BUG | CONSUMER_BUG | TIMEOUT | MODEL_ERROR | UNKNOWN."""
+        """Return UNISON_BUG | CONSUMER_BUG | TIMEOUT | MODEL_ERROR | UNKNOWN.
+
+        UNSAFE patterns (code bugs) are checked **before** SAFE
+        patterns (timeout, rate-limit, API errors).  This ensures
+        that a crash inside ``src/unison/`` is classified as a bug
+        even when the error message happens to contain "timeout" or
+        an API-error keyword.
+        """
         err = (result.error or "").lower()
 
-        # 1. Timeout
-        if "timeout" in err:
-            return "TIMEOUT"
-
-        # 2. Model/API errors (transient, not code bugs)
-        for kw in _MODEL_ERROR_KW:
-            if kw in err:
-                return "MODEL_ERROR"
-
-        # 3. Read agent log for traceback
+        # 1. UNSAFE — traceback in our source code (always a code bug)
         if result.log_path and Path(result.log_path).exists():
             log_content = Path(result.log_path).read_text(errors="replace")
             if _UNISON_PREFIX in log_content:
@@ -56,13 +54,22 @@ class ErrorClassifier:
             if "src/" in log_content:
                 return "CONSUMER_BUG"
 
-        # 4. Fallback: stderr tail
+        # 2. UNSAFE — traceback in stderr tail
         if result.stderr_tail:
             tail = result.stderr_tail.lower()
             if _UNISON_PREFIX in tail:
                 return "UNISON_BUG"
             if "traceback" in tail or "error" in tail:
                 return "CONSUMER_BUG"
+
+        # 3. SAFE — timeout (transient, safe to retry)
+        if "timeout" in err:
+            return "TIMEOUT"
+
+        # 4. SAFE — model / API errors (rate-limit, auth, overloaded, …)
+        for kw in _MODEL_ERROR_KW:
+            if kw in err:
+                return "MODEL_ERROR"
 
         return "UNKNOWN"
 
