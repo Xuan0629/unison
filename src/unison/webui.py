@@ -41,8 +41,12 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import threading
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+from socketserver import ThreadingMixIn
 from string import Template
 
 from unison.state import State
@@ -1569,8 +1573,34 @@ function updateStaticLabels() {
 
 
 // ======================================================================
-// 6. POLLING
+// 6. SSE + POLLING  (SSE push preferred, polling as fallback)
 // ======================================================================
+
+var _sseActive = false;
+
+function startSSE() {
+  if (!window.EventSource) return false;
+  var sse = new EventSource('/api/events');
+  sse.onmessage = function(e) {
+    var state = JSON.parse(e.data);
+    if (!_prev) {
+      patchAll(state);
+    } else {
+      diffPatch(_prev, state);
+    }
+    _prev = state;
+  };
+  sse.onerror = function() {
+    sse.close();
+    if (_sseActive) {
+      _sseActive = false;
+      poll();
+      _pollId = setInterval(poll, 3000);
+    }
+  };
+  _sseActive = true;
+  return true;
+}
 
 function poll() {
   fetch("/api/state")
@@ -2192,8 +2222,11 @@ function patchHistory() {
   restoreTokenSettings();
   restoreSectionStates();
   patchHistory();
-  poll();
-  _pollId = setInterval(poll, 3000);
+  // Try SSE push first, fall back to 3 s polling
+  if (!startSSE()) {
+    poll();
+    _pollId = setInterval(poll, 3000);
+  }
 })();
 </script>
 </body>
@@ -2213,6 +2246,8 @@ class UnisonHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/api/state":
             self._json_response(self._load_state())
+        elif self.path == "/api/events":
+            self._sse_response()
         else:
             self._html_response()
 
@@ -2377,6 +2412,54 @@ class UnisonHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _sse_response(self) -> None:
+        """Stream state changes to an SSE (Server-Sent Events) client.
+
+        Sends the current state immediately, then pushes a new event
+        each time the background monitor detects a checkpoint change.
+        A keepalive comment is sent every 15 s to prevent proxies from
+        closing the connection.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        # Per-client queue — the monitor pushes a sentinel here on changes
+        my_queue: queue.Queue = queue.Queue()
+        with _sse_clients_lock:
+            _sse_clients.append(my_queue)
+
+        try:
+            # --- initial state -------------------------------------------------
+            data = self._load_state()
+            payload = f"data: {json.dumps(data)}\n\n".encode("utf-8")
+            self.wfile.write(payload)
+            self.wfile.flush()
+
+            # --- stream subsequent changes ------------------------------------
+            while True:
+                try:
+                    my_queue.get(timeout=15)  # block, but wake for keepalive
+                    data = self._load_state()
+                    payload = f"data: {json.dumps(data)}\n\n".encode("utf-8")
+                    self.wfile.write(payload)
+                    self.wfile.flush()
+                except queue.Empty:
+                    # No change in 15 s → send SSE comment as keepalive
+                    try:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    break
+        finally:
+            with _sse_clients_lock:
+                _sse_clients.remove(my_queue)
+
     def log_message(self, format, *args) -> None:
         pass  # suppress access logs
 
@@ -2491,6 +2574,55 @@ def _phase_agent(phase: str) -> str:
 
 
 # ============================================================================
+# SSE infrastructure — push state changes to connected browsers
+# ============================================================================
+
+_sse_clients: list[queue.Queue] = []
+_sse_clients_lock = threading.Lock()
+_sse_stop = threading.Event()
+_sse_thread: threading.Thread | None = None
+
+
+def _sse_monitor(project_root: Path, interval: float = 0.25) -> None:
+    """Watch for new/changed checkpoints and notify all SSE clients.
+
+    Runs as a daemon thread.  Pushes a ``True`` sentinel to every
+    connected client queue whenever a checkpoint file is created or
+    updated (detected via mtime comparison).
+    """
+    import glob
+
+    checkpoint_dir = Path.home() / ".unison" / "checkpoints" / project_root.name
+    last_mtime = 0.0
+
+    while not _sse_stop.is_set():
+        _sse_stop.wait(interval)
+        try:
+            if not checkpoint_dir.exists():
+                continue
+            files = sorted(
+                glob.glob(str(checkpoint_dir / "ckpt-*.json")),
+                key=lambda p: Path(p).stat().st_mtime,
+                reverse=True,
+            )
+            if not files:
+                continue
+            mtime = Path(files[0]).stat().st_mtime
+            if mtime > last_mtime:
+                last_mtime = mtime
+                with _sse_clients_lock:
+                    for q in _sse_clients:
+                        q.put(True)
+        except OSError:
+            continue
+
+
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    """HTTPServer with per-request threading so SSE does not block other routes."""
+    daemon_threads = True
+
+
+# ============================================================================
 # Server entry point
 # ============================================================================
 
@@ -2502,10 +2634,24 @@ def serve(project_root: str, port: int = 9099) -> None:
         project_root: Path to the Unison project directory (contains .unison/).
         port: TCP port to listen on (default 9099).
     """
+    global _sse_stop, _sse_thread
+
     UnisonHandler.project_root = Path(project_root).resolve()
-    server = HTTPServer(("127.0.0.1", port), UnisonHandler)
+
+    # Start background monitor that pushes checkpoint-change signals to
+    # connected SSE clients.
+    _sse_stop.clear()
+    _sse_thread = threading.Thread(
+        target=_sse_monitor,
+        args=(UnisonHandler.project_root,),
+        daemon=True,
+    )
+    _sse_thread.start()
+
+    server = ThreadedHTTPServer(("127.0.0.1", port), UnisonHandler)
     print(f"Unison Web UI  →  http://127.0.0.1:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        _sse_stop.set()
         server.shutdown()
