@@ -7,6 +7,8 @@ Subcommands:
   run       Run a pipeline (loads spec, invokes Orchestrator)
   dry-run   Load + validate spec without executing agents
   mode      Print the pipeline mode (4-agent / 2-agent)
+  init      Interactive onboarding — generate pipeline.yaml
+  new       Generate pipeline.yaml + prompts/ from a description
 """
 
 from __future__ import annotations
@@ -84,6 +86,17 @@ def _build_parser() -> argparse.ArgumentParser:
     # --- mode --------------------------------------------------------
     md = sub.add_parser("mode", help="Print pipeline mode (full-dev, code-dev, ...)")
     md.add_argument("--pipeline", required=True, type=Path)
+
+    # --- init --------------------------------------------------------
+    init = sub.add_parser("init", help="Interactive onboarding — generate pipeline.yaml")
+    init.add_argument("description", nargs="?", type=str, default=None,
+                      help="What are you building? (asked interactively if omitted)")
+    init.add_argument("--output", "-o", type=Path, default=Path("."),
+                      help="Output directory (default: current dir)")
+    init.add_argument("--preset", type=str, default=None,
+                      help="Skip prompts, use preset mode (code-dev/full-dev/design-debate)")
+    init.add_argument("--project-root", type=str, default=".",
+                      help="project_root value in pipeline.yaml (default: '.')")
 
     # --- new ---------------------------------------------------------
     new = sub.add_parser("new", help="Generate pipeline.yaml + prompts/ from a description")
@@ -253,6 +266,18 @@ def _print_human_summary(state: State) -> None:
     print("=" * 60)
 
 
+def _cmd_init(args: argparse.Namespace) -> int:
+    """Run the interactive init wizard."""
+    from unison.init_wizard import InitWizard
+
+    wizard = InitWizard(project_root=args.output)
+    wizard.run(
+        description=args.description,
+        preset=args.preset,
+    )
+    return 0
+
+
 def _cmd_new(args: argparse.Namespace) -> int:
     """Generate pipeline.yaml + prompts/ from a natural-language description."""
     from unison.pipeline_generator import generate
@@ -276,6 +301,7 @@ _HANDLERS = {
     "run": _cmd_run,
     "dry-run": _cmd_dry_run,
     "mode": _cmd_mode,
+    "init": _cmd_init,
     "new": _cmd_new,
     "webui": _cmd_webui,
 }
