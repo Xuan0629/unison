@@ -2230,7 +2230,11 @@ class UnisonHandler(BaseHTTPRequestHandler):
             files = sorted(glob.glob(str(checkpoint_dir / "ckpt-*.json")),
                            key=lambda p: Path(p).stat().st_mtime, reverse=True)
             if files:
-                state = State.atomic_read(Path(files[0]))
+                try:
+                    state = State.atomic_read(Path(files[0]))
+                except (json.JSONDecodeError, OSError, ValueError):
+                    # Corrupt or unreadable checkpoint -> serve defaults
+                    state = State()
         data = state.to_dict()
 
         # Rename for JS clarity

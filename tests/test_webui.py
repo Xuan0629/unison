@@ -538,3 +538,215 @@ class TestLoadState:
         assert budget["daily_limit"] == 50000
         assert budget["per_task_used"] == 500
         assert budget["per_task_limit"] == 10000
+
+
+# ============================================================================
+# _load_state — checkpoint file loading + error handling
+# ============================================================================
+
+class TestLoadStateCheckpoint:
+    """Tests for _load_state checkpoint-file loading paths."""
+
+    def test_loads_valid_checkpoint(self, tmp_path):
+        """When a valid checkpoint file exists, it is loaded and enriched."""
+        import json
+        from unison.webui import UnisonHandler
+
+        checkpoint_dir = Path.home() / ".unison" / "checkpoints" / tmp_path.name
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        ckpt_file = checkpoint_dir / "ckpt-0001.json"
+        ckpt_file.write_text(json.dumps({
+            "version": "2.0",
+            "phase": "dev_active",
+            "iteration": 5,
+            "history": [
+                {"from_phase": None, "to_phase": "init", "by": "orchestrator",
+                 "timestamp": "2026-01-01T00:00:00Z", "note": ""},
+            ],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": "abc1234",
+            "last_review_verdict": "REQUEST_CHANGES",
+            "last_activity": "2026-01-01T00:01:00Z",
+        }))
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        try:
+            with patch.object(handler, "_load_budget", return_value={
+                "daily_used": 0, "daily_limit": 1_000_000,
+                "per_task_used": 0, "per_task_limit": 200_000,
+            }):
+                with patch.object(handler, "_load_agents", return_value=[
+                    {"role": "developer", "runtime": "claude", "model": "sonnet"},
+                ]):
+                    data = handler._load_state()
+        finally:
+            # Clean up the test checkpoint
+            import shutil
+            p = checkpoint_dir
+            if p.exists():
+                shutil.rmtree(p)
+
+        assert data["phase"] == "dev_active"
+        assert data["iteration"] == 5
+        assert data["last_commit"] == "abc1234"
+        assert data["last_verdict"] == "REQUEST_CHANGES"
+        assert data["active_agent"] == "developer"
+        assert "transitions" in data
+        assert "history" not in data
+
+    def test_corrupt_checkpoint_falls_back_to_defaults(self, tmp_path):
+        """If checkpoint JSON is corrupt, serve default State values."""
+        from unison.webui import UnisonHandler
+
+        checkpoint_dir = Path.home() / ".unison" / "checkpoints" / tmp_path.name
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        ckpt_file = checkpoint_dir / "ckpt-0001.json"
+        ckpt_file.write_text("this is not valid json {{{")
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        try:
+            with patch.object(handler, "_load_budget", return_value={
+                "daily_used": 0, "daily_limit": 1_000_000,
+                "per_task_used": 0, "per_task_limit": 200_000,
+            }):
+                with patch.object(handler, "_load_agents", return_value=[]):
+                    data = handler._load_state()
+        finally:
+            import shutil
+            p = checkpoint_dir
+            if p.exists():
+                shutil.rmtree(p)
+
+        # Falls back to default State values
+        assert data["phase"] == "init"
+        assert data["iteration"] == 0
+        assert data["halt_signal"] is False
+
+    def test_no_checkpoint_dir_uses_defaults(self, tmp_path):
+        """When no checkpoint directory exists, defaults are used."""
+        from unison.webui import UnisonHandler
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path  # No .unison/ dir
+
+        with patch.object(handler, "_load_budget", return_value={
+            "daily_used": 0, "daily_limit": 1_000_000,
+            "per_task_used": 0, "per_task_limit": 200_000,
+        }):
+            with patch.object(handler, "_load_agents", return_value=[]):
+                data = handler._load_state()
+
+        assert data["phase"] == "init"
+        assert data["iteration"] == 0
+        assert data["transitions"] == []
+
+
+# ============================================================================
+# _load_pipeline_config — YAML discovery and parsing
+# ============================================================================
+
+class TestLoadPipelineConfig:
+    """Tests for YAML pipeline config discovery."""
+
+    def test_returns_none_when_no_yaml_files(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        # No .yaml files exist
+        result = handler._load_pipeline_config()
+        assert result is None
+
+    def test_finds_pipeline_yaml_when_present(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        (tmp_path / "pipeline.yaml").write_text("agents:\n  developer:\n    runtime: claude\n    model: sonnet\n")
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        with patch("unison.webui.yaml", create=True) as mock_yaml:
+            mock_yaml.safe_load.return_value = {
+                "agents": {"developer": {"runtime": "claude", "model": "sonnet"}}
+            }
+            result = handler._load_pipeline_config()
+        assert result is not None
+        assert "agents" in result
+
+    def test_skips_yaml_without_agents_key(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        (tmp_path / "other.yaml").write_text("budget:\n  daily_token_limit: 500000\n")
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        with patch("unison.webui.yaml", create=True) as mock_yaml:
+            mock_yaml.safe_load.return_value = {
+                "budget": {"daily_token_limit": 500000}
+            }
+            result = handler._load_pipeline_config()
+        # No "agents" key → skipped → no valid config
+        assert result is None
+
+    def test_handles_corrupt_yaml_gracefully(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        (tmp_path / "pipeline.yaml").write_text("this is: not: valid: yaml: :::")
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        with patch("unison.webui.yaml", create=True) as mock_yaml:
+            mock_yaml.safe_load.side_effect = Exception("parse error")
+            result = handler._load_pipeline_config()
+        # All files fail → returns None
+        assert result is None
+
+    def test_prefers_pipeline_yaml_over_others(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        # Create pipeline.yaml (with agents — first candidate)
+        (tmp_path / "pipeline.yaml").write_text("agents: {planner: {runtime: claude}}")
+        # Also create another yaml
+        (tmp_path / "other.yaml").write_text("agents: {developer: {runtime: claude}}")
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        with patch("unison.webui.yaml", create=True) as mock_yaml:
+            mock_yaml.safe_load.return_value = {
+                "agents": {"planner": {"runtime": "claude"}}
+            }
+            result = handler._load_pipeline_config()
+        assert result["agents"] == {"planner": {"runtime": "claude"}}
+
+
+# ============================================================================
+# _derive_mode — edge cases
+# ============================================================================
+
+class TestDeriveModeEdgeCases:
+    """Edge cases for pipeline mode derivation."""
+
+    def test_agent_with_missing_role_key(self):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        # Agent dict without "role" key → empty string inserted
+        mode = handler._derive_mode([{"runtime": "claude", "model": "sonnet"}])
+        assert mode == "inspect-only"
+
+    def test_empty_roles_in_agents(self):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        mode = handler._derive_mode([
+            {"role": "", "runtime": "claude"},
+            {"role": "developer", "runtime": "claude"},
+        ])
+        assert mode == "code-dev"
