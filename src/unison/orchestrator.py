@@ -401,6 +401,16 @@ class Orchestrator:
             if self._state.halt_signal:
                 return
 
+            # ---- Dashboard control check (every iteration boundary) --------
+            control = self._check_control_files()
+            if control == "pause":
+                self.halt("Dashboard pause requested")
+                return
+            elif control == "skip":
+                self._skip_requested = True
+            elif control == "report":
+                self._generate_control_report()
+
             # ---- Active phase -----------------------------------------------
             self._state.transition(
                 active_phase, "orchestrator",
@@ -439,6 +449,11 @@ class Orchestrator:
 
             # ---- Verdict routing --------------------------------------------
             verdict = self._parse_verdict(iteration, review_phase)
+
+            # Dashboard skip: force PASS to exit loop (consumes flag)
+            if getattr(self, "_skip_requested", False):
+                self._skip_requested = False
+                verdict = "PASS"
 
             # A2: Record reviewer stats for sycophancy tracking
             if verdict:
@@ -1495,6 +1510,52 @@ class Orchestrator:
     # ==================================================================
     # Internal: helpers
     # ==================================================================
+
+    def _check_control_files(self) -> str | None:
+        """Check for dashboard control files in ``.unison/control/``.
+
+        Called at phase boundaries.  Reads and consumes exactly one
+        control file (pause → halt, skip → force PASS, report → snapshot).
+
+        Returns:
+            The action string (``"pause"``, ``"skip"``, ``"report"``)
+            if a control file was consumed, or ``None``.
+        """
+        control_dir = self.spec.world.root / ".unison" / "control"
+        if not control_dir.exists():
+            return None
+
+        for action in ("pause", "skip", "report"):
+            cf = control_dir / f"{action}.json"
+            if cf.exists():
+                try:
+                    cf.unlink()  # consume the control file
+                except OSError:
+                    pass
+                return action
+        return None
+
+    def _generate_control_report(self) -> None:
+        """Write a status snapshot to ``.unison/control/report-output.json``."""
+        import json as _json
+        from datetime import datetime, timezone as _timezone
+
+        report_dir = self.spec.world.root / ".unison" / "control"
+        report_dir.mkdir(parents=True, exist_ok=True)
+
+        report = {
+            "generated_at": datetime.now(_timezone.utc).isoformat(),
+            "phase": self._state.phase,
+            "iteration": self._state.iteration,
+            "halt_signal": self._state.halt_signal,
+            "halt_reason": self._state.halt_reason,
+            "last_commit": self._state.last_dev_commit,
+            "last_verdict": self._state.last_review_verdict,
+            "mode": self.spec.mode or "code-dev",
+            "max_iterations": self.spec.max_iterations,
+        }
+        out = report_dir / "report-output.json"
+        out.write_text(_json.dumps(report, indent=2, ensure_ascii=False))
 
     def _resolve_agents(self, pipeline_role: str) -> list[AgentSpec]:
         """Return ALL AgentSpecs whose effective_role matches *pipeline_role*.

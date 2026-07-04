@@ -763,3 +763,128 @@ agents:
 
         assert not dag_called, "DAG path should NOT be called when spec.dag is None"
         assert linear_called, "linear path should be called when spec.dag is None"
+
+
+# ============================================================================
+# Dashboard control — _check_control_files + _generate_control_report
+# ============================================================================
+
+class TestCheckControlFiles:
+    """Tests for Orchestrator._check_control_files — reads .unison/control/."""
+
+    def _make_orch(self, tmp_path):
+        """Helper: create an Orchestrator with a minimal spec."""
+        from unison.world import World
+        from unison.pipeline import PipelineLoader
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        (project_root / "prd").mkdir()
+        (project_root / "reviews").mkdir()
+        (project_root / ".unison").mkdir(parents=True, exist_ok=True)
+        (project_root / "prompts").mkdir()
+        (project_root / "prd" / "PRD.md").write_text("# PRD")
+        (project_root / "prd" / "tech-design.md").write_text("# Design")
+        (project_root / "prompts" / "developer.md").write_text("Dev")
+        (project_root / "prompts" / "reviewer.md").write_text("Rev")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/reviewer.md"
+""")
+
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        # Override world root to use our project_root
+        from unison.world import World
+        spec = type(spec)(
+            version=spec.version,
+            world=World(root=project_root),
+            agents=spec.agents,
+            project=spec.project,
+        )
+        return Orchestrator(spec=spec)
+
+    def test_returns_none_when_no_control_dir(self, tmp_path):
+        orch = self._make_orch(tmp_path)
+        result = orch._check_control_files()
+        assert result is None
+
+    def test_returns_none_when_control_dir_empty(self, tmp_path):
+        orch = self._make_orch(tmp_path)
+        control_dir = orch.spec.world.root / ".unison" / "control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        result = orch._check_control_files()
+        assert result is None
+
+    def test_returns_pause_and_consumes_file(self, tmp_path):
+        orch = self._make_orch(tmp_path)
+        control_dir = orch.spec.world.root / ".unison" / "control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        (control_dir / "pause.json").write_text('{"action":"pause"}')
+
+        result = orch._check_control_files()
+        assert result == "pause"
+        # File should be consumed
+        assert not (control_dir / "pause.json").exists()
+
+    def test_returns_skip_and_consumes_file(self, tmp_path):
+        orch = self._make_orch(tmp_path)
+        control_dir = orch.spec.world.root / ".unison" / "control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        (control_dir / "skip.json").write_text('{"action":"skip"}')
+
+        result = orch._check_control_files()
+        assert result == "skip"
+        assert not (control_dir / "skip.json").exists()
+
+    def test_returns_report_and_consumes_file(self, tmp_path):
+        orch = self._make_orch(tmp_path)
+        control_dir = orch.spec.world.root / ".unison" / "control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        (control_dir / "report.json").write_text('{"action":"report"}')
+
+        result = orch._check_control_files()
+        assert result == "report"
+        assert not (control_dir / "report.json").exists()
+
+    def test_pause_takes_priority_over_skip(self, tmp_path):
+        """Pause is checked first — returns pause even if skip also exists."""
+        orch = self._make_orch(tmp_path)
+        control_dir = orch.spec.world.root / ".unison" / "control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        (control_dir / "pause.json").write_text('{"action":"pause"}')
+        (control_dir / "skip.json").write_text('{"action":"skip"}')
+
+        result = orch._check_control_files()
+        assert result == "pause"
+        # Only pause should be consumed; skip remains
+        assert (control_dir / "skip.json").exists()
+
+    def test_generate_control_report_writes_file(self, tmp_path):
+        orch = self._make_orch(tmp_path)
+        import json
+
+        orch._generate_control_report()
+
+        report_file = orch.spec.world.root / ".unison" / "control" / "report-output.json"
+        assert report_file.exists()
+
+        data = json.loads(report_file.read_text())
+        assert "generated_at" in data
+        assert "phase" in data
+        assert "iteration" in data
+        assert data["phase"] == "init"
+        assert data["iteration"] == 0
+        assert data["halt_signal"] is False

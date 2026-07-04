@@ -750,3 +750,78 @@ class TestDeriveModeEdgeCases:
             {"role": "developer", "runtime": "claude"},
         ])
         assert mode == "code-dev"
+
+
+# ============================================================================
+# Dashboard control — POST /api/control + _handle_control
+# ============================================================================
+
+class TestHandleControl:
+    """Tests for _handle_control — writes control files to .unison/control/."""
+
+    def test_pause_writes_control_file(self, tmp_path):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        result = handler._handle_control("pause")
+        assert result["ok"] is True
+        assert result["action"] == "pause"
+
+        cf = tmp_path / ".unison" / "control" / "pause.json"
+        assert cf.exists()
+        import json
+        data = json.loads(cf.read_text())
+        assert data["action"] == "pause"
+
+    def test_skip_writes_control_file(self, tmp_path):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        result = handler._handle_control("skip")
+        assert result["ok"] is True
+
+        cf = tmp_path / ".unison" / "control" / "skip.json"
+        assert cf.exists()
+
+    def test_report_writes_control_file(self, tmp_path):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        result = handler._handle_control("report")
+        assert result["ok"] is True
+
+        cf = tmp_path / ".unison" / "control" / "report.json"
+        assert cf.exists()
+
+    def test_invalid_action_returns_error(self, tmp_path):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        result = handler._handle_control("invalid")
+        assert result["ok"] is False
+        assert "error" in result
+        assert "Unknown action" in result["error"]
+
+    def test_empty_action_returns_error(self, tmp_path):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        result = handler._handle_control("")
+        assert result["ok"] is False
+
+    def test_control_dir_created_if_missing(self, tmp_path):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        control_dir = tmp_path / ".unison" / "control"
+        assert not control_dir.exists()
+
+        handler._handle_control("pause")
+        assert control_dir.exists()
+        assert control_dir.is_dir()

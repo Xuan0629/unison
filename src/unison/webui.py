@@ -290,6 +290,26 @@ body {
   line-height: 1;
 }
 
+/* ---- Dashboard control buttons ---- */
+
+.topbar__btn--control {
+  border-color: var(--accent-dim);
+  font-size: var(--fs-lg);
+  padding: var(--space-4) var(--space-8);
+  min-width: 36px;
+}
+
+.topbar__btn--control:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--fg-bright);
+}
+
+.topbar__btn--control:active {
+  transform: scale(0.94);
+  transition: transform 0.1s ease;
+}
+
 
 /* ========================================================================
    5. PHASE BADGE
@@ -1181,6 +1201,21 @@ button:focus-visible,
       <span id="phase-badge-text">--</span>
     </span>
     <span class="topbar__spacer"></span>
+    <button id="control-pause"
+            class="topbar__btn topbar__btn--control"
+            onclick="sendControl('pause')"
+            aria-label="Pause pipeline"
+            title="Pause pipeline">⏸</button>
+    <button id="control-skip"
+            class="topbar__btn topbar__btn--control"
+            onclick="sendControl('skip')"
+            aria-label="Skip current phase"
+            title="Skip current phase">⏭</button>
+    <button id="control-report"
+            class="topbar__btn topbar__btn--control"
+            onclick="sendControl('report')"
+            aria-label="Generate report"
+            title="Generate report">📋</button>
     <button id="lang-toggle"
             class="topbar__btn"
             onclick="toggleLang()"
@@ -1348,6 +1383,10 @@ var L = {
       done: "Done",
       halt: "Halted"
     },
+    pause: "Pause",
+    skip: "Skip",
+    report: "Report",
+    controlSent: "{action} request sent",
     titlePrefix: "UNISON",
     modes: {
       "code-dev": "code-dev",
@@ -1402,6 +1441,10 @@ var L = {
       done: "完成",
       halt: "已暂停"
     },
+    pause: "暂停",
+    skip: "跳过",
+    report: "报告",
+    controlSent: "已发送 {action} 请求",
     titlePrefix: "万物一心",
     modes: {
       "code-dev": "代码开发",
@@ -1621,7 +1664,35 @@ function poll() {
 
 
 // ======================================================================
-// 7. FULL RENDER
+// 7. DASHBOARD CONTROL  (pause / skip / report)
+// ======================================================================
+
+function sendControl(action) {
+  fetch("/api/control", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({action: action})
+  }).then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.ok) {
+        // Brief visual feedback — flash the button
+        var btn = document.getElementById("control-" + action);
+        if (btn) {
+          btn.style.background = "var(--accent)";
+          btn.style.color = "var(--accent-fg)";
+          setTimeout(function () {
+            btn.style.background = "";
+            btn.style.color = "";
+          }, 600);
+        }
+      }
+    })
+    .catch(function (_) { /* silent fail */ });
+}
+
+
+// ======================================================================
+// 8. FULL RENDER
 // ======================================================================
 
 function patchAll(s) {
@@ -1644,7 +1715,7 @@ function patchAll(s) {
 
 
 // ======================================================================
-// 8. DIFF-BASED PARTIAL PATCH  (zero flicker)
+// 9. DIFF-BASED PARTIAL PATCH  (zero flicker)
 // ======================================================================
 
 function diffPatch(prev, next) {
@@ -1676,7 +1747,7 @@ function diffPatch(prev, next) {
 
 
 // ======================================================================
-// 9. COMPONENT RENDERERS
+// 10. COMPONENT RENDERERS
 // ======================================================================
 
 // -- 9a. Title ---------------------------------------------------------
@@ -2057,7 +2128,7 @@ function patchEmptyState(s) {
 
 
 // ======================================================================
-// 10. TOKEN SETTINGS
+// 11. TOKEN SETTINGS
 // ======================================================================
 
 function onTokenSettingChange() {
@@ -2090,7 +2161,7 @@ function restoreTokenSettings() {
 
 
 // ======================================================================
-// 11. COLLAPSIBLE SECTIONS
+// 12. COLLAPSIBLE SECTIONS
 // ======================================================================
 
 function toggleSection(id) {
@@ -2138,7 +2209,7 @@ function restoreSectionStates() {
 
 
 // ======================================================================
-// 12. QUICK EXPORT
+// 13. QUICK EXPORT
 // ======================================================================
 
 function exportState() {
@@ -2163,7 +2234,7 @@ function exportState() {
 
 
 // ======================================================================
-// 13. HISTORY TASKS  (localStorage-based completed run log)
+// 14. HISTORY TASKS  (localStorage-based completed run log)
 // ======================================================================
 
 function loadHistory() {
@@ -2213,7 +2284,7 @@ function patchHistory() {
 
 
 // ======================================================================
-// 14. INITIALISATION
+// 15. INITIALISATION
 // ======================================================================
 
 (function init() {
@@ -2250,6 +2321,22 @@ class UnisonHandler(BaseHTTPRequestHandler):
             self._sse_response()
         else:
             self._html_response()
+
+    def do_POST(self) -> None:
+        """Handle POST /api/control — write a control file for the orchestrator."""
+        if self.path == "/api/control":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body)
+                action = data.get("action", "")
+                result = self._handle_control(action)
+                self._json_response(result)
+            except (json.JSONDecodeError, ValueError) as e:
+                self._json_response({"ok": False, "error": str(e)})
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     # ------------------------------------------------------------------
     # State assembly
@@ -2411,6 +2498,29 @@ class UnisonHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(body)
+
+    def _handle_control(self, action: str) -> dict:
+        """Write a control-file to ``.unison/control/`` for the orchestrator.
+
+        The orchestrator polls this directory at phase boundaries and
+        acts on ``pause`` (halt), ``skip`` (force PASS), or ``report``
+        (snapshot current state).
+        """
+        valid = {"pause", "skip", "report"}
+        if action not in valid:
+            return {"ok": False, "error":
+                    f"Unknown action: {action}. Valid: {', '.join(sorted(valid))}"}
+
+        control_dir = self.project_root / ".unison" / "control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+
+        control_file = control_dir / f"{action}.json"
+        control_file.write_text(json.dumps({
+            "action": action,
+            "timestamp": time.time(),
+        }))
+
+        return {"ok": True, "action": action}
 
     def _sse_response(self) -> None:
         """Stream state changes to an SSE (Server-Sent Events) client.
