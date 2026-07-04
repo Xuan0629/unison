@@ -1,0 +1,55 @@
+Business Source License 1.1
+
+License text copyright (c) 2017 MariaDB Corporation Ab, All Rights Reserved.
+"Business Source License" is a trademark of MariaDB Corporation Ab.
+
+Parameters
+
+Licensor:             Xuan0629
+
+Licensed Work:        Unison (万物一心) — Multi-Agent Collaboration Bridge
+                      The Licensed Work is (c) 2026 Xuan0629
+
+Change Date:          2030-07-01
+
+Change License:       GNU General Public License v3.0 or later
+
+For information about alternative licensing arrangements, please contact
+the Licensor at the project's GitHub repository.
+
+Notice
+
+The Business Source License (this document, or the "License") is not an Open
+Source license. However, the Licensed Work will eventually be made available
+under an Open Source License, as stated in this License.
+
+License text copyright (c) 2017 MariaDB Corporation Ab, All Rights Reserved.
+"Business Source License" is a trademark of MariaDB Corporation Ab.
+
+-----------------------------------------------------------------------------
+
+Business Source License 1.1
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above, permitting limited
+production use.
+
+Effective on the Change Date, or the fourth anniversary of the first publicly
+available distribution of a specific version of the Licensed Work under this
+License, whichever comes first, the Licensor hereby grants you rights under
+the terms of the Change License, and the terms of the Change License shall
+supersede the terms of this License for all purposes. If you copy or modify
+the Licensed Work, your rights under this License will terminate automatically
+if you fail to comply with the terms of this License.
+
+"Production use" means use of the Licensed Work that is made available to
+third parties as part of a product or service, whether for a fee or not. For
+the avoidance of doubt, use of the Licensed Work for internal development,
+testing, CI/CD, research, and personal projects is explicitly permitted as
+non-production use.
+
+Any use of the Licensed Work in production requires a separate commercial
+license from the Licensor. Contact the Licensor for commercial licensing terms.
