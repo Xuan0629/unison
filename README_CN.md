@@ -125,6 +125,8 @@ unison webui --project . --port 9099
 | `inspect-only` | Reviewer(s) → 报告 | 审计/审查 |
 | `agent-fix` | Multi-Developer → Multi-Reviewer | Agent 修复/优化 |
 | `migrate` | Planner ↔ Reviewer → Developer ↔ Reviewer | 跨项目迁移 |
+| `a2a-debate` | 多 Agent 异步文件系统辩论 | Agent 间设计审查 |
+| `greenfield` | Developer ↔ Reviewer（隔离新模块） | 从零构建新功能，不碰已有代码 |
 
 ### 自定义角色
 
