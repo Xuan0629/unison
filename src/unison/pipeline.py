@@ -42,6 +42,7 @@ from interfaces import (
     AgentSpec,
     BootstrapConfig,
     BudgetConfig,
+    GreenfieldConfig,
     PipelineMode,
     PipelineSpec,
     ProjectConfig,
@@ -200,6 +201,7 @@ class PipelineLoader:
             observer_poll_interval=raw.get("observer_poll_interval", 60),
             agent_log_retention_hours=raw.get("agent_log_retention_hours", 168),
             self_heal=self._build_self_heal(raw.get("self_heal")),
+            greenfield=self._build_greenfield(raw.get("greenfield")),
         )
 
     # ------------------------------------------------------------------
@@ -521,6 +523,17 @@ class PipelineLoader:
             if key in raw:
                 kwargs[key] = raw[key]
         return SelfHealConfig(**kwargs)
+
+    @staticmethod
+    def _build_greenfield(raw: dict[str, Any] | None) -> GreenfieldConfig | None:
+        """Build GreenfieldConfig from raw YAML, returns None if not set."""
+        if not raw:
+            return None
+        return GreenfieldConfig(
+            files=raw.get("files", []),
+            task=raw.get("task", ""),
+            skeleton=raw.get("skeleton"),
+        )
 
 
 # ============================================================================
