@@ -163,7 +163,9 @@ class UnisonHandler(BaseHTTPRequestHandler):
                 with open(budget_path, "r", encoding="utf-8") as f:
                     bd = json.load(f)
                 daily_used = bd.get("daily_used", 0)
-                per_task_used = bd.get("per_task_used", 0)
+                # budget.py stores "task_used"; also accept "per_task_used"
+                # for backward compatibility with hand-crafted test data
+                per_task_used = bd.get("task_used", bd.get("per_task_used", 0))
             except (json.JSONDecodeError, OSError):
                 pass
 

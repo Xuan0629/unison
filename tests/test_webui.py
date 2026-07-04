@@ -358,7 +358,7 @@ class TestLoadBudget:
         budget_file = unison_dir / "budget.json"
         budget_file.write_text(json.dumps({
             "daily_used": 50000,
-            "per_task_used": 12000,
+            "task_used": 12000,
         }))
 
         handler = UnisonHandler.__new__(UnisonHandler)
