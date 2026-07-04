@@ -275,6 +275,7 @@ class Orchestrator:
         "inspect-only":  lambda self: self._run_review_only(),
         "agent-fix":     lambda self: self._run_dev_loop(),
         "migrate":       lambda self: (self._run_planning_loop(), self._run_dev_loop()),
+        "greenfield":    lambda self: self._run_dev_loop(),  # same as code-dev, greenfield template injected in AgentRunner
     }
 
     def _run_state_machine(self) -> None:
