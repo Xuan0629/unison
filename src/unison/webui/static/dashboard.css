@@ -840,7 +840,110 @@ body {
 
 
 /* ========================================================================
-   12. ACTIVE PANEL
+   12. PIPELINE FLOW DIAGRAM
+   ======================================================================== */
+
+.pipeline-flow {
+  padding: var(--space-12) var(--space-16);
+  overflow-x: auto;
+}
+
+.pipeline-flow__svg {
+  display: block;
+  width: 100%;
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+/* ---- Phase boxes ---- */
+
+.pf-box {
+  transition: fill 0.4s ease, stroke 0.4s ease;
+}
+
+.pf-box--active {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+.pf-box--done {
+  fill: var(--bg);
+  stroke: var(--fg-dim);
+}
+
+.pf-box--pending {
+  fill: var(--bg-card);
+  stroke: var(--border);
+}
+
+/* ---- Phase labels ---- */
+
+.pf-label {
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  user-select: none;
+}
+
+.pf-label--active {
+  fill: var(--accent-fg);
+}
+
+.pf-label--done {
+  fill: var(--fg-dim);
+}
+
+.pf-label--pending {
+  fill: var(--fg-dim);
+}
+
+/* ---- Arrows ---- */
+
+.pf-arrow {
+  transition: stroke 0.4s ease, fill 0.4s ease;
+}
+
+.pf-arrow--active {
+  stroke: var(--accent);
+  fill: var(--accent);
+}
+
+.pf-arrow--done {
+  stroke: var(--fg-dim);
+  fill: var(--fg-dim);
+}
+
+.pf-arrow--pending {
+  stroke: var(--border);
+  fill: var(--border);
+}
+
+/* ---- Info labels below boxes ---- */
+
+.pf-info {
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--fg);
+}
+
+.pf-verdict {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.pf-verdict--pass {
+  fill: var(--green);
+}
+
+.pf-verdict--request_changes {
+  fill: var(--orange);
+}
+
+
+/* ========================================================================
+   13. ACTIVE PANEL
    ======================================================================== */
 
 #active-panel {

@@ -365,6 +365,7 @@ function patchAll(s) {
   patchGauges(s);
   patchVerdict(s);
   patchActive(s);
+  patchPipelineFlow(s);
   patchTimeline(s);
   patchTasks(s);
   patchAgents(s);
@@ -382,9 +383,9 @@ function patchAll(s) {
 // ======================================================================
 
 function diffPatch(prev, next) {
-  if (prev.phase          !== next.phase)          { patchPhaseBadge(next); patchActive(next); patchStatusCards(next); }
-  if (prev.iteration      !== next.iteration)      { patchStatusCards(next); }
-  if (prev.last_verdict   !== next.last_verdict)   patchVerdict(next);
+  if (prev.phase          !== next.phase)          { patchPhaseBadge(next); patchActive(next); patchStatusCards(next); patchPipelineFlow(next); }
+  if (prev.iteration      !== next.iteration)      { patchStatusCards(next); patchPipelineFlow(next); }
+  if (prev.last_verdict   !== next.last_verdict)   { patchVerdict(next); patchPipelineFlow(next); }
   if (prev.halt_signal    !== next.halt_signal ||
       prev.halt_reason    !== next.halt_reason)    { patchError(next); patchActive(next); }
   if (prev.last_commit    !== next.last_commit)    patchError(next);
@@ -763,6 +764,7 @@ function patchEmptyState(s) {
   var active   = document.getElementById("active-panel");
   var log      = document.getElementById("log-preview");
   var status   = document.getElementById("status-row");
+  var flow     = document.getElementById("pipeline-flow");
   var gauges   = document.getElementById("gauge-dashboard");
   var agents   = document.getElementById("agent-cards");
   var config   = document.getElementById("pipeline-config");
@@ -774,6 +776,7 @@ function patchEmptyState(s) {
     if (active)   active.classList.add("u-hidden");
     if (log)      log.classList.add("u-hidden");
     if (status)   status.classList.add("u-hidden");
+    if (flow)     flow.classList.add("u-hidden");
     if (gauges)   gauges.classList.add("u-hidden");
     // Clear sidebar sections that depend on pipeline data
     if (agents)   agents.innerHTML = '<div class="agent-card"><span class="agent-card__role">' + t("noAgents") + '</span></div>';
@@ -785,8 +788,125 @@ function patchEmptyState(s) {
     if (active)   active.classList.remove("u-hidden");
     if (log)      log.classList.remove("u-hidden");
     if (status)   status.classList.remove("u-hidden");
+    if (flow)     flow.classList.remove("u-hidden");
     if (gauges)   gauges.classList.remove("u-hidden");
   }
+}
+
+
+// -- 9o. Pipeline flow diagram -----------------------------------------
+
+function patchPipelineFlow(s) {
+  var el = document.getElementById("pipeline-flow");
+  if (!el) return;
+
+  var phase = s.phase || "init";
+  var cat = phaseCategory(s.halt_signal ? "halt" : phase);
+
+  // Map phase category to flow stage index (0=init, 1=planning, 2=dev, 3=done)
+  var stageMap = {init: 0, planning: 1, dev: 2, review: 2, done: 3, halt: -1};
+  var activeIdx = stageMap.hasOwnProperty(cat) ? stageMap[cat] : -1;
+
+  var phases = [
+    {key: "init",     label: t("phases.init")},
+    {key: "planning", label: t("phases.planning_active")},
+    {key: "dev",      label: t("phases.dev_active")},
+    {key: "done",     label: t("phases.done")}
+  ];
+
+  var iteration = s.iteration || 0;
+  var verdict   = s.last_verdict || "";
+
+  var BW  = 130;   // box width
+  var BH  = 30;    // box height
+  var GAP = 36;    // arrow gap between boxes
+  var PX  = 8;     // horizontal padding
+  var PY  = 14;    // vertical padding
+
+  var totalW = 4 * BW + 3 * GAP + 2 * PX;
+  var totalH = 80;
+
+  var html = '<svg class="pipeline-flow__svg" viewBox="0 0 ' + totalW + ' ' + totalH + '"'
+           + ' aria-label="Pipeline flow diagram" role="img">';
+
+  for (var i = 0; i < 4; i++) {
+    var x = PX + i * (BW + GAP);
+    var y = PY;
+
+    // Box state: active, done, or pending
+    var state;
+    if (activeIdx === -1) {
+      state = "done";                         // halt: all dimmed
+    } else if (i < activeIdx) {
+      state = "done";
+    } else if (i === activeIdx) {
+      state = "active";
+    } else {
+      state = "pending";
+    }
+
+    // Box rect
+    html += '<rect class="pf-box pf-box--' + state + '"'
+         + ' x="' + x + '" y="' + y + '"'
+         + ' width="' + BW + '" height="' + BH + '"'
+         + ' rx="6"/>';
+
+    // Box label
+    html += '<text class="pf-label pf-label--' + state + '"'
+         + ' x="' + (x + BW / 2) + '" y="' + (y + BH / 2 + 1) + '"'
+         + ' text-anchor="middle" dominant-baseline="central">'
+         + esc(phases[i].label) + '</text>';
+
+    // Arrow to next box (skip after last)
+    if (i < 3) {
+      var ax1 = x + BW;
+      var ax2 = x + BW + GAP;
+      var ay  = y + BH / 2;
+
+      var arrowState;
+      if (activeIdx === -1) {
+        arrowState = "done";
+      } else if (i < activeIdx) {
+        arrowState = "done";
+      } else if (i === activeIdx) {
+        arrowState = "active";
+      } else {
+        arrowState = "pending";
+      }
+
+      // Arrow line
+      html += '<line class="pf-arrow pf-arrow--' + arrowState + '"'
+           + ' x1="' + ax1 + '" y1="' + ay + '"'
+           + ' x2="' + (ax2 - 7) + '" y2="' + ay + '"'
+           + ' stroke-width="2"/>';
+
+      // Arrow head
+      html += '<polygon class="pf-arrow pf-arrow--' + arrowState + '"'
+           + ' points="' + (ax2 - 7) + ',' + (ay - 5)
+           + ' ' + ax2 + ',' + ay
+           + ' ' + (ax2 - 7) + ',' + (ay + 5) + '"/>';
+    }
+  }
+
+  // Info labels below the active phase box
+  if (activeIdx >= 0 && activeIdx < 4) {
+    var ix = PX + activeIdx * (BW + GAP) + BW / 2;
+    var iy = PY + BH + 22;
+
+    html += '<text class="pf-info"'
+         + ' x="' + ix + '" y="' + iy + '"'
+         + ' text-anchor="middle">Iter ' + iteration + '</text>';
+
+    if (verdict) {
+      var vLabel = verdict === "PASS" ? t("pass") : t("requestChanges");
+      html += '<text class="pf-verdict pf-verdict--' + verdict.toLowerCase() + '"'
+           + ' x="' + ix + '" y="' + (iy + 15) + '"'
+           + ' text-anchor="middle">' + esc(vLabel) + '</text>';
+    }
+  }
+
+  html += '</svg>';
+  el.innerHTML = html;
 }
 
 
