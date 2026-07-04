@@ -270,11 +270,15 @@ class SelfHealConfig:
         auto_fix_consumer: Auto-fix consumer project bugs (default False, opt-in).
         max_fix_rounds: Max rounds for fixer to revise patches.
         fix_timeout: Fixer diagnosis timeout in seconds.
+        consumer_fix_mode: "lightweight" skips dual-review for consumer bugs;
+            "full" runs the complete fixer+reviewers+PR pipeline.
+            Only applies to CONSUMER_BUG, not UNISON_BUG.
     """
     auto_fix_unison: bool = True
     auto_fix_consumer: bool = False
     max_fix_rounds: int = 2
     fix_timeout: int = 300
+    consumer_fix_mode: str = "full"  # "lightweight" | "full"
 
 
 @dataclass(frozen=True)

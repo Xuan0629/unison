@@ -115,7 +115,11 @@ class FixOrchestrator:
     # ------------------------------------------------------------------
 
     def attempt_fix(self, error_type: str, result: AgentResult) -> SelfHealResult:
-        """Main entry point. Classify → fix → review → commit → PR."""
+        """Main entry point. Classify → fix → (review) → commit → PR.
+
+        Lightweight mode (consumer_fix_mode="lightweight" + CONSUMER_BUG):
+        single-agent fix → run tests → PASS → commit. Review is skipped.
+        """
         if error_type not in ("UNISON_BUG", "CONSUMER_BUG"):
             return SelfHealResult(success=False, error_type=error_type)
 
@@ -126,6 +130,10 @@ class FixOrchestrator:
         if error_type == "CONSUMER_BUG" and not self._config.auto_fix_consumer:
             return SelfHealResult(success=False, error_type=error_type,
                                   diagnosis="auto_fix_consumer is disabled")
+
+        # Lightweight path: consumer bug only, skip dual-review
+        if error_type == "CONSUMER_BUG" and self._config.consumer_fix_mode == "lightweight":
+            return self._attempt_lightweight_fix(result)
 
         if self._config.max_fix_rounds < 1:
             return SelfHealResult(success=False, error_type=error_type,
@@ -167,6 +175,59 @@ class FixOrchestrator:
             fix_applied=True, fix_commit=commit_hash, pr_url=pr_url,
             log_path=log_path, reviewers_passed=len(passed),
         )
+
+    # ------------------------------------------------------------------
+    # Lightweight fix path (consumer bugs only, no review)
+    # ------------------------------------------------------------------
+
+    def _attempt_lightweight_fix(self, result: AgentResult) -> SelfHealResult:
+        """Lightweight fix: single-agent fix → run tests → PASS → commit.
+
+        Only activated for CONSUMER_BUG when consumer_fix_mode="lightweight".
+        Skips multi-agent review and PR creation entirely.
+        """
+        error_type = "CONSUMER_BUG"
+
+        # 1. Fixer diagnoses and produces a patch
+        fix_proposal = self._run_fixer(result)
+        if not fix_proposal:
+            return SelfHealResult(success=False, error_type=error_type,
+                                  diagnosis="fixer failed to produce a diagnosis")
+
+        # 2. Run tests to validate the fix
+        test_passed = self._run_tests()
+        if not test_passed:
+            return SelfHealResult(success=False, error_type=error_type,
+                                  diagnosis="tests failed after fix; aborting lightweight path")
+
+        # 3. Commit (no PR for lightweight fixes)
+        commit_hash = self._commit_fix(fix_proposal, error_type)
+
+        # 4. Write fix log (no reviewers entry)
+        log_path = self._write_fix_log(fix_proposal, error_type, commit_hash, "", [])
+
+        return SelfHealResult(
+            success=True, error_type=error_type,
+            diagnosis=fix_proposal.get("diagnosis", ""),
+            fix_applied=True, fix_commit=commit_hash, pr_url="",
+            log_path=log_path, reviewers_passed=0,
+        )
+
+    # ------------------------------------------------------------------
+    # Test runner
+    # ------------------------------------------------------------------
+
+    def _run_tests(self) -> bool:
+        """Run the project's test command and return True if all pass."""
+        test_cmd = self._spec.project.test_command or "pytest tests/ -v"
+        try:
+            proc = subprocess.run(
+                test_cmd, shell=True, capture_output=True, text=True,
+                timeout=self._config.fix_timeout, cwd=str(self._world.root),
+            )
+            return proc.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
 
     # ------------------------------------------------------------------
     # Fixer (Hermes)

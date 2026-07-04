@@ -517,7 +517,7 @@ class PipelineLoader:
         if not raw:
             return SelfHealConfig()
         kwargs: dict[str, Any] = {}
-        for key in ("auto_fix_unison", "auto_fix_consumer", "max_fix_rounds", "fix_timeout"):
+        for key in ("auto_fix_unison", "auto_fix_consumer", "max_fix_rounds", "fix_timeout", "consumer_fix_mode"):
             if key in raw:
                 kwargs[key] = raw[key]
         return SelfHealConfig(**kwargs)
