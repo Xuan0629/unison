@@ -85,6 +85,16 @@ def _build_parser() -> argparse.ArgumentParser:
     md = sub.add_parser("mode", help="Print pipeline mode (full-dev, code-dev, ...)")
     md.add_argument("--pipeline", required=True, type=Path)
 
+    # --- new ---------------------------------------------------------
+    new = sub.add_parser("new", help="Generate pipeline.yaml + prompts/ from a description")
+    new.add_argument("description", type=str, help="Natural-language description of the task")
+    new.add_argument("--output", "-o", type=Path, default=Path("."),
+                     help="Output directory (default: current dir)")
+    new.add_argument("--yes", "-y", action="store_true",
+                     help="Skip prompts, use auto-detected defaults")
+    new.add_argument("--project-root", type=str, default=".",
+                     help="project_root value in pipeline.yaml (default: '.')")
+
     # --- webui -------------------------------------------------------
     wui = sub.add_parser("webui", help="Start web dashboard for pipeline status")
     wui.add_argument("--project", type=Path, default=Path("."),
@@ -243,6 +253,18 @@ def _print_human_summary(state: State) -> None:
     print("=" * 60)
 
 
+def _cmd_new(args: argparse.Namespace) -> int:
+    """Generate pipeline.yaml + prompts/ from a natural-language description."""
+    from unison.pipeline_generator import generate
+    generate(
+        description=args.description,
+        output_dir=args.output,
+        yes=args.yes,
+        project_root=args.project_root,
+    )
+    return 0
+
+
 def _cmd_webui(args: argparse.Namespace) -> int:
     """Start the web dashboard."""
     from unison.webui import serve
@@ -254,6 +276,7 @@ _HANDLERS = {
     "run": _cmd_run,
     "dry-run": _cmd_dry_run,
     "mode": _cmd_mode,
+    "new": _cmd_new,
     "webui": _cmd_webui,
 }
 
