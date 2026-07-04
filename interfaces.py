@@ -46,7 +46,8 @@ PipelineMode: TypeAlias = Literal[
     "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no dev)
     "inspect-only",   # Reviewer(s) → report (no planner, no dev)
     "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
-    "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer (same as full-dev, named for clarity)
+    "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer
+    "greenfield",     # New module from scratch — agent works only on specified files, no existing code
 ]
 
 class RiskLevel(Enum):
@@ -281,7 +282,25 @@ class SelfHealConfig:
     consumer_fix_mode: str = "full"  # "lightweight" | "full"
 
 
-@dataclass(frozen=True)
+@dataclass
+class GreenfieldConfig:
+    """Greenfield mode configuration.
+
+    When set, the pipeline runs in greenfield mode: the developer agent
+    works ONLY on the specified files and MUST NOT read existing source
+    code. The `prompts/greenfield.md` template is injected into the
+    developer's system prompt with the file list and task description
+    substituted.
+
+    This prevents the common failure mode where agents discover existing
+    bugs and fix them instead of building the assigned new feature.
+    """
+    files: list[str]          # New files to create (relative to project_root)
+    task: str                 # Description of what to build
+    skeleton: str | None = None  # Path to skeleton file with TODO markers (optional)
+
+
+@dataclass
 class PipelineSpec:
     """一次 pipeline 运行的全部配置（不可变）。"""
     version: str  # "1.0"
@@ -304,6 +323,7 @@ class PipelineSpec:
     agent_log_retention_hours: int = 168  # 7d
     who_can_run: list[str] = field(default_factory=lambda: ["cli"])  # "cli", "discord:channel_id", "hermes:session_id"
     self_heal: SelfHealConfig = field(default_factory=lambda: SelfHealConfig())  # self-heal auto-fix
+    greenfield: GreenfieldConfig | None = None  # greenfield mode: isolated new module dev
 
     def get(self, role: AgentRole) -> AgentSpec:
         if role not in self.agents:
