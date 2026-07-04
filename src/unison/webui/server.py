@@ -463,19 +463,48 @@ _sse_thread: threading.Thread | None = None
 
 
 def _sse_monitor(project_root: Path, interval: float = 0.25) -> None:
-    """Watch for new/changed checkpoints and notify all SSE clients.
+    """Watch for phase changes and notify all SSE clients.
+
+    Phase 6: Subscribes to the internal event bus for real-time push.
+    Falls back to checkpoint-file polling when the event bus is
+    unavailable (e.g. webui running in a separate process).
 
     Runs as a daemon thread.  Pushes a ``True`` sentinel to every
-    connected client queue whenever a checkpoint file is created or
-    updated (detected via mtime comparison).
+    connected client queue whenever a phase change is detected.
     """
     import glob
 
+    # ---- Phase 6: subscribe to internal event bus -----------------------------
+    try:
+        from unison.event_bus import get_event_bus
+        bus = get_event_bus()
+
+        def _on_phase(event_data: dict) -> None:
+            """Push phase event to all SSE clients."""
+            with _sse_clients_lock:
+                for q in _sse_clients:
+                    try:
+                        q.put_nowait(True)
+                    except queue.Full:
+                        pass
+
+        bus.subscribe("phase", _on_phase)
+    except Exception:
+        _on_phase = None  # event bus unavailable, fall back to polling
+
+    # ---- Fallback: checkpoint-file polling ------------------------------------
     checkpoint_dir = Path.home() / ".unison" / "checkpoints" / project_root.name
     last_mtime = 0.0
 
     while not _sse_stop.is_set():
         _sse_stop.wait(interval)
+        # When event bus is active, the polling interval can be longer
+        # since we get real-time push.  Use a 5 s poll as fallback.
+        poll_interval = 5.0 if _on_phase is not None else interval
+        if _on_phase is None or _sse_stop.wait(poll_interval - interval if poll_interval > interval else 0):
+            # _sse_stop was set during the extra wait
+            if _sse_stop.is_set():
+                break
         try:
             if not checkpoint_dir.exists():
                 continue
@@ -491,7 +520,10 @@ def _sse_monitor(project_root: Path, interval: float = 0.25) -> None:
                 last_mtime = mtime
                 with _sse_clients_lock:
                     for q in _sse_clients:
-                        q.put(True)
+                        try:
+                            q.put_nowait(True)
+                        except queue.Full:
+                            pass
         except OSError:
             continue
 

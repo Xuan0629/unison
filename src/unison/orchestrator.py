@@ -29,6 +29,7 @@ import yaml
 from unison.verdict import YamlFrontmatterParser
 from unison.context_deflate import assemble_context, extract_top_findings
 from unison.budget import BudgetTracker
+from unison.event_bus import get_event_bus
 from unison.runners.claude import ClaudeRunner
 from unison.runners.codex import CodexRunner
 from unison.runners.hermes import HermesRunner
@@ -146,6 +147,27 @@ class Orchestrator:
         """
         self._state.halt_signal = True
         self._state.halt_reason = reason
+        self._publish_phase_event("halt", note=reason)
+
+    def _publish_phase_event(self, phase: str, note: str = "") -> None:
+        """Publish a phase-transition event to the internal event bus.
+
+        Used by Observer and SSE to get real-time updates instead of
+        polling state.json / checkpoints.
+        """
+        try:
+            bus = get_event_bus()
+            bus.publish("phase", {
+                "phase": phase,
+                "iteration": self._state.iteration,
+                "halt_signal": self._state.halt_signal,
+                "halt_reason": self._state.halt_reason,
+                "last_verdict": self._state.last_review_verdict,
+                "last_commit": self._state.last_dev_commit,
+                "note": note,
+            })
+        except Exception:
+            pass  # event bus failure is non-fatal
 
     def pre_invoke_cleanup(self) -> None:
         """Run ``git reset --hard HEAD && git clean -fd``.
@@ -271,6 +293,7 @@ class Orchestrator:
         if not self._state.halt_signal:
             self._state.transition("done", "orchestrator",
                                    note="pipeline complete")
+            self._publish_phase_event("done", note="pipeline complete")
             self._archive_reviews()
             self._save_checkpoint()
 
@@ -280,6 +303,7 @@ class Orchestrator:
             return
         self._state.transition("planning_active", "orchestrator",
                                iter_n=1, note="starting planning loop")
+        self._publish_phase_event("planning_active", note="starting planning loop")
         self._save_checkpoint()
         self._run_loop(
             active_phase="planning_active",
@@ -302,6 +326,7 @@ class Orchestrator:
             return
         self._state.transition("dev_review", "orchestrator",
                                iter_n=1, note="starting review-only")
+        self._publish_phase_event("dev_review", note="starting review-only")
         self._save_checkpoint()
         # Pipeline B: detect multi-reviewer from agent composition
         reviewer_agents = self._resolve_agents("reviewer")
@@ -316,6 +341,7 @@ class Orchestrator:
 
         self._state.transition("dev_active", "orchestrator",
                                iter_n=1, note="starting DAG development")
+        self._publish_phase_event("dev_active", note="starting DAG development")
         self._save_checkpoint()
 
         scheduler = DAGScheduler(self.spec.dag)
@@ -358,6 +384,7 @@ class Orchestrator:
         """Run the standard linear dev_active ↔ dev_review loop (V1 mode)."""
         self._state.transition("dev_active", "orchestrator",
                                iter_n=1, note="starting development loop")
+        self._publish_phase_event("dev_active", note="starting development loop")
         self._save_checkpoint()
 
         self._run_loop(
@@ -417,6 +444,8 @@ class Orchestrator:
                 iter_n=iteration,
                 note=f"{active_phase} iter {iteration}/{max_iter}",
             )
+            self._publish_phase_event(active_phase,
+                                      note=f"iter {iteration}/{max_iter}")
             self._save_checkpoint(iteration)
 
             # Pipeline B: detect multi-agent parallel group
@@ -435,6 +464,8 @@ class Orchestrator:
                 iter_n=iteration,
                 note=f"{review_phase} iter {iteration}/{max_iter}",
             )
+            self._publish_phase_event(review_phase,
+                                      note=f"iter {iteration}/{max_iter}")
             self._save_checkpoint(iteration)
 
             # Pipeline B: auto-detect multi-reviewer from agent composition

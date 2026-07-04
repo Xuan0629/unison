@@ -7,6 +7,7 @@ import errno
 import json
 import logging
 import os
+import queue
 import struct
 import sys
 import time
@@ -18,6 +19,7 @@ from typing import Literal
 
 from unison.world import World
 from unison.state import State
+from unison.event_bus import get_event_bus
 
 logger = logging.getLogger(__name__)
 
@@ -582,6 +584,7 @@ class Observer:
         self._running = False
         self._use_polling = False
         self._notification_offset = 0
+        self._event_queue: queue.Queue[dict] = queue.Queue()  # event bus → main loop bridge
 
     # ---- public API ----------------------------------------------------------
 
@@ -594,13 +597,22 @@ class Observer:
         ``_poll_interval`` seconds), runs a liveness check on the
         current state.  Falls back to polling mode on ENOSPC.
 
+        Phase 6: Subscribes to the internal event bus for real-time phase
+        change notifications.  The file watcher is kept as a polling
+        fallback for notifications.jsonl and for when the event bus
+        is unavailable (e.g. observer running in a separate process).
+
         Raises:
             RuntimeError: state.json 缺失时。
         """
         # 确保目录存在
         self.world.ensure_directories()
 
-        # 监控两个父目录
+        # ---- Phase 6: subscribe to internal event bus -------------------------
+        bus = get_event_bus()
+        bus.subscribe("phase", self._on_phase_event)
+
+        # 监控两个父目录（保留文件监控作为 fallback）
         paths = [self.world.unison_dir, self.world.observer_dir]
         try:
             self.watcher.watch(paths)
@@ -621,10 +633,31 @@ class Observer:
 
         self._running = True
         while self._running:
+            # ---- Check event bus queue first (non-blocking) -------------------
+            try:
+                bus_event = self._event_queue.get_nowait()
+                # Process phase event directly — no need to read state.json
+                phase = bus_event.get("phase", "")
+                if not self._check_liveness_from_event(bus_event):
+                    self._write_notification(Notification(
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        phase=phase,
+                        severity="warn",
+                        title="Session stalled (event bus)",
+                        body=(
+                            f"No activity for {self.stall_threshold_seconds}s+ "
+                            f"in phase {phase}"
+                        ),
+                    ))
+                continue
+            except queue.Empty:
+                pass
+
+            # ---- Fallback: file watcher (polling for notifications.jsonl) ------
             event = self.watcher.next_event(timeout_seconds=self._poll_interval)
 
             if event is None:
-                # Timed out — check liveness
+                # Timed out — check liveness (poll fallback)
                 if self.world.state_file.exists():
                     try:
                         state = State.atomic_read(self.world.state_file)
@@ -652,7 +685,7 @@ class Observer:
             if event.path.name not in ("state.json", "notifications.jsonl"):
                 continue
 
-            # 处理 state.json 变化
+            # 处理 state.json 变化（poll fallback）
             if event.path.name == "state.json":
                 if not self.world.state_file.exists():
                     raise RuntimeError("state.json missing, cannot continue")
@@ -681,12 +714,65 @@ class Observer:
                 else:
                     self._process_new_notifications()
 
+        # ---- Phase 6: unsubscribe on stop --------------------------------------
+        bus.unsubscribe("phase", self._on_phase_event)
         self.watcher.stop()
 
     def stop(self) -> None:
         """停止 Observer 循环。"""
         self._running = False
         self.watcher.stop()
+
+    # ---- Phase 6: event bus callbacks ------------------------------------------
+
+    def _on_phase_event(self, event_data: dict) -> None:
+        """Callback for event bus ``"phase"`` topic.
+
+        Invoked from the publishing thread (orchestrator).  Pushes the
+        event into the internal queue for processing by the main loop.
+        This is intentionally non-blocking — the main loop drains the
+        queue at its own pace.
+        """
+        try:
+            self._event_queue.put_nowait(event_data)
+        except queue.Full:
+            pass  # drop event if queue is full (shouldn't happen)
+
+    def _check_liveness_from_event(self, event_data: dict) -> bool:
+        """Check liveness from an event bus event (no state.json read needed).
+
+        The event carries ``halt_signal`` and ``phase``.  If the session
+        is halted or in ``done`` phase, it's considered alive.  Otherwise
+        we fall back to the file-based liveness check.
+
+        Returns:
+            True if the session appears alive.
+        """
+        phase = event_data.get("phase", "")
+        halt_signal = event_data.get("halt_signal", False)
+
+        # Done or halted phases are always "alive"
+        if phase == "done" or halt_signal:
+            return True
+
+        # For active phases, trust the event — the orchestrator just
+        # published it, so activity is recent.
+        if phase in ("planning_active", "planning_review",
+                      "dev_active", "dev_review", "init"):
+            return True
+
+        # Unknown phase — fall back to file-based check
+        return self._check_liveness_from_file()
+
+    def _check_liveness_from_file(self) -> bool:
+        """Fallback: read state.json and run the standard liveness check."""
+        if not self.world.state_file.exists():
+            return False
+        try:
+            state = State.atomic_read(self.world.state_file)
+            return self.check_liveness(state)
+        except Exception:
+            return False
 
     def check_liveness(self, state: State) -> bool:
         """5min 无活动 + phase ≠ done → False（紧急通知触发）。
