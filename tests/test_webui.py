@@ -1,0 +1,540 @@
+"""Tests for webui.py — module-level helpers (derived from PRD/tech-design spec)."""
+
+import pytest
+from unittest.mock import patch, MagicMock
+from pathlib import Path
+
+from unison.webui import (
+    _derive_active_agent,
+    _derive_tasks,
+    _mark_last_status,
+    _task_label,
+    _phase_agent,
+)
+from unison.state import Transition, State
+
+
+# ============================================================================
+# _derive_active_agent — phase → active agent role
+# ============================================================================
+
+class TestDeriveActiveAgent:
+    """PRD spec: planning_* → "planner", dev_* → "developer",
+       review_* → "reviewer", done → None, init → None."""
+
+    def test_init_returns_none(self):
+        assert _derive_active_agent("init") is None
+
+    def test_done_returns_none(self):
+        assert _derive_active_agent("done") is None
+
+    def test_none_returns_none(self):
+        assert _derive_active_agent(None) is None
+        assert _derive_active_agent("") is None
+
+    def test_planning_active_returns_planner(self):
+        assert _derive_active_agent("planning_active") == "planner"
+
+    def test_planning_review_returns_reviewer(self):
+        # _review suffix takes priority → reviewer
+        assert _derive_active_agent("planning_review") == "reviewer"
+
+    def test_dev_active_returns_developer(self):
+        assert _derive_active_agent("dev_active") == "developer"
+
+    def test_dev_review_returns_reviewer(self):
+        assert _derive_active_agent("dev_review") == "reviewer"
+
+    def test_halt_returns_developer(self):
+        # "halt" contains no phase keyword → None.  Verifying the actual
+        # behaviour: neither planning/dev/review nor _review matches.
+        # (Halt is handled by the JS layer via halt_signal flag.)
+        assert _derive_active_agent("halt") is None
+
+    def test_unknown_phase_returns_none(self):
+        assert _derive_active_agent("unknown_phase") is None
+
+
+# ============================================================================
+# _phase_agent — phase → responsible agent role (for task derivation)
+# ============================================================================
+
+class TestPhaseAgent:
+    """Maps a phase string to its owning agent role."""
+
+    def test_planning_phases(self):
+        assert _phase_agent("planning_active") == "planner"
+        assert _phase_agent("planning_review") == "planner"
+
+    def test_dev_phases(self):
+        assert _phase_agent("dev_active") == "developer"
+        assert _phase_agent("dev_review") == "developer"
+
+    def test_review_phases(self):
+        # "review" substring match
+        assert _phase_agent("review_active") == "reviewer"
+        assert _phase_agent("review_review") == "reviewer"
+
+    def test_init_and_done(self):
+        assert _phase_agent("init") == "unknown"
+        assert _phase_agent("done") == "unknown"
+
+
+# ============================================================================
+# _task_label — human-readable task label from phase base + suffix
+# ============================================================================
+
+class TestTaskLabel:
+    """Converts a phase base + work/review into a human-readable label."""
+
+    def test_planning_work(self):
+        assert _task_label("planning", "work") == "Plan"
+
+    def test_planning_review(self):
+        assert _task_label("planning", "review") == "Plan Review"
+
+    def test_dev_work(self):
+        assert _task_label("dev", "work") == "Develop"
+
+    def test_dev_review(self):
+        assert _task_label("dev", "review") == "Code Review"
+
+    def test_unknown_base(self):
+        # Falls back to title-case base + title-case suffix
+        assert _task_label("unknown", "work") == "Unknown Work"
+        assert _task_label("migrate", "review") == "Migrate Review"
+
+
+# ============================================================================
+# _mark_last_status — update the most recent task with a given status
+# ============================================================================
+
+class TestMarkLastStatus:
+    """Mutates the tasks list in-place, returns True if a match was found."""
+
+    def test_marks_last_matching_status(self):
+        tasks = [
+            {"id": "1", "status": "done", "agent": "planner"},
+            {"id": "2", "status": "active", "agent": "developer"},
+            {"id": "3", "status": "review", "agent": "reviewer"},
+        ]
+        found = _mark_last_status(tasks, "review", "done")
+        assert found is True
+        assert tasks[2]["status"] == "done"
+
+    def test_stores_verdict_when_provided(self):
+        tasks = [{"id": "1", "status": "review"}]
+        _mark_last_status(tasks, "review", "done", verdict="PASS")
+        assert tasks[0]["verdict"] == "PASS"
+
+    def test_no_match_returns_false(self):
+        tasks = [{"id": "1", "status": "done"}]
+        found = _mark_last_status(tasks, "active", "done")
+        assert found is False
+
+    def test_empty_list_returns_false(self):
+        found = _mark_last_status([], "active", "done")
+        assert found is False
+
+    def test_only_marks_last_match(self):
+        tasks = [
+            {"id": "1", "status": "review"},
+            {"id": "2", "status": "review"},
+        ]
+        _mark_last_status(tasks, "review", "done")
+        # Only the last "review" task should be marked done
+        assert tasks[0]["status"] == "review"
+        assert tasks[1]["status"] == "done"
+
+
+# ============================================================================
+# _derive_tasks — build task list from phase-transition history
+# ============================================================================
+
+def _make_t(from_phase, to_phase, by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+            note="", verdict=None):
+    """Helper to create a Transition object for tests."""
+    return Transition(
+        from_phase=from_phase,
+        to_phase=to_phase,
+        by=by,
+        timestamp=timestamp,
+        note=note,
+        verdict=verdict,
+    )
+
+
+class TestDeriveTasks:
+    """PRD spec: tasks derived from transition history, active→review pairs."""
+
+    def test_empty_history_returns_empty_list(self):
+        assert _derive_tasks([]) == []
+
+    def test_init_to_planning_active_creates_no_task(self):
+        # Single transition: init → planning_active (no review pair)
+        history = [_make_t(None, "init"), _make_t("init", "planning_active")]
+        tasks = _derive_tasks(history)
+        assert tasks == []
+
+    def test_planning_active_to_review_creates_work_and_review_tasks(self):
+        """PRD: active→review = work done + review begun."""
+        history = [
+            _make_t(None, "init"),
+            _make_t("init", "planning_active"),
+            _make_t("planning_active", "planning_review"),
+        ]
+        tasks = _derive_tasks(history)
+        assert len(tasks) == 2
+        assert tasks[0] == {"id": "1", "label": "Plan", "status": "done", "agent": "planner"}
+        assert tasks[1] == {"id": "2", "label": "Plan Review", "status": "review", "agent": "reviewer"}
+
+    def test_dev_active_to_review_creates_work_and_review_tasks(self):
+        history = [
+            _make_t(None, "init"),
+            _make_t("init", "dev_active"),
+            _make_t("dev_active", "dev_review"),
+        ]
+        tasks = _derive_tasks(history)
+        assert len(tasks) == 2
+        assert tasks[0] == {"id": "1", "label": "Develop", "status": "done", "agent": "developer"}
+        assert tasks[1] == {"id": "2", "label": "Code Review", "status": "review", "agent": "reviewer"}
+
+    def test_review_to_active_with_request_changes(self):
+        """PRD: review → active (REQUEST_CHANGES) closes review, starts new work."""
+        history = [
+            _make_t(None, "init"),
+            _make_t("init", "planning_active"),
+            _make_t("planning_active", "planning_review"),
+            _make_t("planning_review", "planning_active", verdict="REQUEST_CHANGES"),
+        ]
+        tasks = _derive_tasks(history)
+        assert len(tasks) == 3
+        # First work task is done
+        assert tasks[0] == {"id": "1", "label": "Plan", "status": "done", "agent": "planner"}
+        # First review is done with REQUEST_CHANGES
+        assert tasks[1] == {"id": "2", "label": "Plan Review", "status": "done", "agent": "reviewer", "verdict": "REQUEST_CHANGES"}
+        # New work task started
+        assert tasks[2] == {"id": "3", "label": "Plan", "status": "active", "agent": "planner"}
+
+    def test_review_to_done_with_pass(self):
+        """PRD: review → done (PASS) closes the last review."""
+        history = [
+            _make_t(None, "init"),
+            _make_t("init", "planning_active"),
+            _make_t("planning_active", "planning_review"),
+            _make_t("planning_review", "done", verdict="PASS"),
+        ]
+        tasks = _derive_tasks(history)
+        assert len(tasks) == 2
+        assert tasks[1]["status"] == "done"
+        assert tasks[1]["verdict"] == "PASS"
+
+    def test_full_pipeline_planning_dev_done(self):
+        """End-to-end: planning → dev → done."""
+        history = [
+            _make_t(None, "init"),
+            _make_t("init", "planning_active"),
+            _make_t("planning_active", "planning_review"),
+            _make_t("planning_review", "dev_active", verdict="PASS"),
+            _make_t("dev_active", "dev_review"),
+            _make_t("dev_review", "done", verdict="PASS"),
+        ]
+        tasks = _derive_tasks(history)
+        # Expected: Plan(done), Plan Review(done, PASS), Develop(done), Code Review(done, PASS)
+        assert len(tasks) == 4
+        assert tasks[0] == {"id": "1", "label": "Plan", "status": "done", "agent": "planner"}
+        assert tasks[1] == {"id": "2", "label": "Plan Review", "status": "done", "agent": "reviewer", "verdict": "PASS"}
+        assert tasks[2] == {"id": "3", "label": "Develop", "status": "done", "agent": "developer"}
+        assert tasks[3] == {"id": "4", "label": "Code Review", "status": "done", "agent": "reviewer", "verdict": "PASS"}
+
+    def test_multiple_retry_cycles(self):
+        """Multiple review→active cycles with REQUEST_CHANGES."""
+        history = [
+            _make_t(None, "init"),
+            _make_t("init", "dev_active"),
+            _make_t("dev_active", "dev_review"),
+            _make_t("dev_review", "dev_active", verdict="REQUEST_CHANGES"),  # retry 1
+            _make_t("dev_active", "dev_review"),
+            _make_t("dev_review", "dev_active", verdict="REQUEST_CHANGES"),  # retry 2
+            _make_t("dev_active", "dev_review"),
+            _make_t("dev_review", "done", verdict="PASS"),
+        ]
+        tasks = _derive_tasks(history)
+        # Dev1(done), Review1(done,REQUEST_CHANGES), Dev2(done), Review2(done,REQUEST_CHANGES), Dev3(done), Review3(done,PASS)
+        assert len(tasks) == 6
+        statuses = [t["status"] for t in tasks]
+        assert statuses == ["done", "done", "done", "done", "done", "done"]
+        verdicts = [t.get("verdict") for t in tasks]
+        assert verdicts == [None, "REQUEST_CHANGES", None, "REQUEST_CHANGES", None, "PASS"]
+
+    def test_dict_input_accepted(self):
+        """_derive_tasks accepts both Transition objects and plain dicts."""
+        history = [
+            {"from_phase": None, "to_phase": "init", "by": "orchestrator", "timestamp": "..."},
+            {"from_phase": "init", "to_phase": "planning_active", "by": "orchestrator", "timestamp": "..."},
+            {"from_phase": "planning_active", "to_phase": "planning_review", "by": "planner", "timestamp": "..."},
+        ]
+        tasks = _derive_tasks(history)
+        assert len(tasks) == 2
+        assert tasks[0]["label"] == "Plan"
+
+    def test_transition_objects_accepted(self):
+        """_derive_tasks works with Transition dataclass instances."""
+        history = [
+            Transition(None, "init", "orchestrator", "2026-01-01T00:00:00Z"),
+            Transition("init", "planning_active", "orchestrator", "2026-01-01T00:01:00Z"),
+            Transition("planning_active", "planning_review", "planner", "2026-01-01T00:02:00Z"),
+        ]
+        tasks = _derive_tasks(history)
+        assert len(tasks) == 2
+
+
+# ============================================================================
+# UnisonHandler._derive_mode — pipeline mode from agent roles
+# ============================================================================
+
+class TestDeriveMode:
+    """Derive pipeline mode string from the set of agent roles."""
+
+    def test_full_dev_when_planner_and_developer_present(self):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        mode = handler._derive_mode([
+            {"role": "planner", "runtime": "claude", "model": "sonnet"},
+            {"role": "developer", "runtime": "claude", "model": "sonnet"},
+            {"role": "reviewer", "runtime": "codex", "model": "gpt-5"},
+        ])
+        assert mode == "full-dev"
+
+    def test_code_dev_when_only_developer(self):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        mode = handler._derive_mode([
+            {"role": "developer", "runtime": "claude", "model": "sonnet"},
+        ])
+        assert mode == "code-dev"
+
+    def test_inspect_only_when_neither(self):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        mode = handler._derive_mode([
+            {"role": "reviewer", "runtime": "codex", "model": "gpt-5"},
+        ])
+        assert mode == "inspect-only"
+
+    def test_empty_agents_returns_inspect_only(self):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        assert handler._derive_mode([]) == "inspect-only"
+
+
+# ============================================================================
+# _load_budget — budget.json + pipeline config limits
+# ============================================================================
+
+class TestLoadBudget:
+    """Budget is read from budget.json, limits from pipeline YAML config."""
+
+    def test_defaults_when_no_budget_file_no_config(self, tmp_path):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        with patch.object(handler, "_load_pipeline_config", return_value=None):
+            budget = handler._load_budget()
+        assert budget == {
+            "daily_used": 0,
+            "daily_limit": 1_000_000,
+            "per_task_used": 0,
+            "per_task_limit": 200_000,
+        }
+
+    def test_reads_usage_from_budget_json(self, tmp_path):
+        import json
+        from unison.webui import UnisonHandler
+
+        unison_dir = tmp_path / ".unison"
+        unison_dir.mkdir()
+        budget_file = unison_dir / "budget.json"
+        budget_file.write_text(json.dumps({
+            "daily_used": 50000,
+            "per_task_used": 12000,
+        }))
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        with patch.object(handler, "_load_pipeline_config", return_value=None):
+            budget = handler._load_budget()
+        assert budget["daily_used"] == 50000
+        assert budget["per_task_used"] == 12000
+
+    def test_reads_limits_from_pipeline_config(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        pipeline_config = {
+            "budget": {
+                "daily_token_limit": 500_000,
+                "per_task_limit": 100_000,
+            }
+        }
+        with patch.object(handler, "_load_pipeline_config", return_value=pipeline_config):
+            budget = handler._load_budget()
+        assert budget["daily_limit"] == 500_000
+        assert budget["per_task_limit"] == 100_000
+
+    def test_handles_corrupt_budget_json(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        unison_dir = tmp_path / ".unison"
+        unison_dir.mkdir()
+        (unison_dir / "budget.json").write_text("not json {{")
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        with patch.object(handler, "_load_pipeline_config", return_value=None):
+            budget = handler._load_budget()
+        # Falls back to defaults
+        assert budget["daily_used"] == 0
+        assert budget["daily_limit"] == 1_000_000
+
+
+# ============================================================================
+# _load_agents — extract agent specs from pipeline YAML
+# ============================================================================
+
+class TestLoadAgents:
+    """Agent list extracted from pipeline YAML's 'agents' section."""
+
+    def test_returns_empty_list_when_no_config(self):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+
+        with patch.object(handler, "_load_pipeline_config", return_value=None):
+            assert handler._load_agents() == []
+
+    def test_returns_empty_list_when_no_agents_key(self):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+
+        with patch.object(handler, "_load_pipeline_config", return_value={"budget": {}}):
+            assert handler._load_agents() == []
+
+    def test_parses_agents_section(self):
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+
+        pipeline = {
+            "agents": {
+                "planner": {"runtime": "claude", "model": "claude-sonnet-4-6"},
+                "developer": {"runtime": "claude", "model": "claude-sonnet-4-6"},
+            }
+        }
+        with patch.object(handler, "_load_pipeline_config", return_value=pipeline):
+            agents = handler._load_agents()
+        assert len(agents) == 2
+        assert agents[0] == {"role": "planner", "runtime": "claude", "model": "claude-sonnet-4-6"}
+        assert agents[1] == {"role": "developer", "runtime": "claude", "model": "claude-sonnet-4-6"}
+
+    def test_string_value_agent_skipped(self):
+        """Agent values that are strings (not dicts) are skipped."""
+        from unison.webui import UnisonHandler
+        handler = UnisonHandler.__new__(UnisonHandler)
+
+        pipeline = {
+            "agents": {
+                "planner": "claude",  # string, not dict — should be skipped
+                "developer": {"runtime": "claude", "model": "sonnet"},
+            }
+        }
+        with patch.object(handler, "_load_pipeline_config", return_value=pipeline):
+            agents = handler._load_agents()
+        assert len(agents) == 1
+        assert agents[0]["role"] == "developer"
+
+
+# ============================================================================
+# _load_state — primary state enrichment endpoint
+# ============================================================================
+
+class TestLoadState:
+    """PRD: /api/state enriches State.to_dict() with budget, agents, tasks."""
+
+    def test_returns_expected_keys(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        with patch.object(handler, "_load_budget", return_value={
+            "daily_used": 0, "daily_limit": 1_000_000,
+            "per_task_used": 0, "per_task_limit": 200_000,
+        }):
+            with patch.object(handler, "_load_agents", return_value=[
+                {"role": "planner", "runtime": "claude", "model": "sonnet"},
+            ]):
+                data = handler._load_state()
+
+        # PRD-required keys
+        for key in ("phase", "iteration", "halt_signal", "halt_reason",
+                     "last_activity", "last_commit", "last_verdict",
+                     "transitions", "budget", "agents", "active_agent", "tasks"):
+            assert key in data, f"Missing key: {key}"
+
+    def test_transitions_renamed_from_history(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        with patch.object(handler, "_load_budget", return_value={
+            "daily_used": 0, "daily_limit": 1_000_000,
+            "per_task_used": 0, "per_task_limit": 200_000,
+        }):
+            with patch.object(handler, "_load_agents", return_value=[]):
+                data = handler._load_state()
+
+        # "history" should not exist; "transitions" should
+        assert "history" not in data
+        assert "transitions" in data
+
+    def test_active_agent_matches_phase(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        with patch.object(handler, "_load_budget", return_value={
+            "daily_used": 0, "daily_limit": 1_000_000,
+            "per_task_used": 0, "per_task_limit": 200_000,
+        }):
+            with patch.object(handler, "_load_agents", return_value=[
+                {"role": "developer", "runtime": "claude", "model": "sonnet"},
+            ]):
+                data = handler._load_state()
+
+        # Default state phase is "init", so active_agent should be None
+        assert data["active_agent"] is None
+
+    def test_budget_structure(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        with patch.object(handler, "_load_budget", return_value={
+            "daily_used": 1000, "daily_limit": 50000,
+            "per_task_used": 500, "per_task_limit": 10000,
+        }):
+            with patch.object(handler, "_load_agents", return_value=[]):
+                data = handler._load_state()
+
+        budget = data["budget"]
+        assert budget["daily_used"] == 1000
+        assert budget["daily_limit"] == 50000
+        assert budget["per_task_used"] == 500
+        assert budget["per_task_limit"] == 10000
