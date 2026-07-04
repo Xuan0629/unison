@@ -288,8 +288,6 @@ World（共享文件系统）
 └── .unison/ state、lock、checkpoints、budget
 ```
 
-Web Dashboard 遵循 `~/DESIGN.md` 获取设计 tokens（颜色、字体、间距），
-确保所有 agent 生成的 UI 保持一致的琥珀色暗黑主题。
 
 ---
 

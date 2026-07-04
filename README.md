@@ -293,8 +293,6 @@ World (shared filesystem)
 └── .unison/ state, lock, checkpoints, budget
 ```
 
-The Web Dashboard follows `~/DESIGN.md` for design tokens (colors, typography, spacing)
-to ensure consistent amber-accent dark theme across all agent-generated UIs.
 
 ---
 
