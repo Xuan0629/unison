@@ -386,6 +386,11 @@ class Orchestrator:
         self._state.transition("dev_active", "orchestrator",
                                iter_n=1, note="starting development loop")
         self._publish_phase_event("dev_active", note="starting development loop")
+
+        # === architect-loop pattern: freeze acceptance criteria before dev ===
+        self._freeze_acceptance_criteria()
+        # === end architect-loop pattern ===
+
         self._save_checkpoint()
 
         self._run_loop(
@@ -1566,6 +1571,33 @@ class Orchestrator:
                     pass
                 return action
         return None
+
+    # === architect-loop pattern: freeze acceptance criteria ===
+    def _freeze_acceptance_criteria(self) -> None:
+        """Write acceptance criteria to a frozen file before dev starts."""
+        world = self.spec.world
+        criteria_path = world.reviews_dir / "acceptance-criteria.md"
+        criteria_path.parent.mkdir(parents=True, exist_ok=True)
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        test_cmd = self.spec.project.test_command or "N/A"
+        max_iter = self.spec.max_iterations
+
+        criteria_path.write_text(
+            f"# Acceptance Criteria (FROZEN)\n\n"
+            f"**Frozen at:** {now}\n"
+            f"**Test command:** `{test_cmd}`\n"
+            f"**Max iterations:** {max_iter}\n\n"
+            f"## Rules for Reviewer\n\n"
+            f"1. Judge against these criteria — do not add new criteria mid-review\n"
+            f"2. If the code passes the test command, it meets minimum bar\n"
+            f"3. REQUEST_CHANGES only for: test failures, security issues, "
+            f"architectural violations\n\n"
+            f"## Project Test Command\n\n"
+            f"```bash\n{test_cmd}\n```\n",
+            encoding="utf-8",
+        )
 
     def _generate_control_report(self) -> None:
         """Write a status snapshot to ``.unison/control/report-output.json``."""
