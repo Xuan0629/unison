@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from interfaces import AgentResult, PipelineSpec, SelfHealConfig
+from unison.interfaces import AgentResult, PipelineSpec, SelfHealConfig
 from unison.pipeline import PipelineLoader
 from unison.self_heal import ErrorClassifier, FixOrchestrator, SelfHealResult
 
@@ -518,7 +518,7 @@ class TestAttemptFixEdgeCases:
             "self_heal": config,
         }
         # Use PipelineSpec constructor directly
-        from interfaces import PipelineSpec
+        from unison.interfaces import PipelineSpec
         test_spec = PipelineSpec(**spec_dict)
 
         from unison.self_heal import FixOrchestrator
@@ -535,7 +535,7 @@ class TestAttemptFixEdgeCases:
 
     def test_disabled_auto_fix_unison(self, minimal_spec):
         """auto_fix_unison=False should skip UNISON_BUG."""
-        from interfaces import PipelineSpec
+        from unison.interfaces import PipelineSpec
         from unison.self_heal import FixOrchestrator
 
         config = SelfHealConfig(auto_fix_unison=False)
@@ -557,7 +557,7 @@ class TestAttemptFixEdgeCases:
 
     def test_disabled_auto_fix_consumer(self, minimal_spec):
         """auto_fix_consumer=False should skip CONSUMER_BUG."""
-        from interfaces import PipelineSpec
+        from unison.interfaces import PipelineSpec
         from unison.self_heal import FixOrchestrator
 
         config = SelfHealConfig(auto_fix_consumer=False)

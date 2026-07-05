@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from interfaces import AgentSpec
+from unison.interfaces import AgentSpec
 from unison.pipeline import PipelineLoader, PipelineValidationError
 
 

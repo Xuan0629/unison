@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from interfaces import WorktreeConfig
+from unison.interfaces import WorktreeConfig
 
 
 @dataclass

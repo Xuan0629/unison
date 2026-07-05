@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from interfaces import AgentSpec
+from unison.interfaces import AgentSpec
 from unison.runners.base import BaseRunner
 
 

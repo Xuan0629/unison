@@ -19,7 +19,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from interfaces import AgentResult, PipelineSpec, ReviewVerdict, VerdictParseError
+from unison.interfaces import AgentResult, PipelineSpec, ReviewVerdict, VerdictParseError
 from unison.pipeline import PipelineValidationError
 from unison.state import State
 from unison.lock import FileLockManager
@@ -890,7 +890,7 @@ class Orchestrator:
         # Build worktree config from spec.parallel_dev or defaults
         pd = self.spec.parallel_dev
         if pd is None:
-            from interfaces import WorktreeConfig
+            from unison.interfaces import WorktreeConfig
             pd = WorktreeConfig(enabled=True)
 
         mgr = WorktreeManager(config=pd, project_root=world.root)
@@ -1117,7 +1117,7 @@ class Orchestrator:
                 parallel (Pipeline B).  When ``None``, falls back to
                 homogeneous N-copy mode.
         """
-        from interfaces import ReviewerConfig
+        from unison.interfaces import ReviewerConfig
         from unison.reviewer_pool import ReviewerPool
 
         world = self.spec.world
@@ -1633,7 +1633,7 @@ class Orchestrator:
         Returns:
             List of matching ``AgentSpec`` instances (empty if no match).
         """
-        from interfaces import AgentSpec
+        from unison.interfaces import AgentSpec
 
         agents: list[AgentSpec] = []
         for spec in self.spec.agents.values():

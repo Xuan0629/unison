@@ -12,23 +12,15 @@ from pathlib import Path
 
 import yaml
 
-from interfaces import AgentResult, PipelineSpec, SelfHealConfig, World
+from unison.interfaces import AgentResult, PipelineSpec, SelfHealConfig, World
+
+# Re-use the consolidated constants from the supervisor module so there is
+# a single source of truth for error-classification keywords.
+from unison.supervisor import _UNISON_PREFIX, _MODEL_ERROR_KW  # noqa: F401 — re-exported
 
 # ============================================================================
 # Error Classification
 # ============================================================================
-
-_UNISON_PREFIX = "src/unison/"
-
-# Model/API error keywords — these are NOT code bugs
-_MODEL_ERROR_KW = (
-    "rate limit", "rate_limit", "too many requests",
-    "api error", "api_error",
-    "unauthorized", "authentication", "invalid api key",
-    "model not found", "model_not_found",
-    "overloaded", "service unavailable",
-    "context length", "context_length", "maximum context",
-)
 
 
 class ErrorClassifier:

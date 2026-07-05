@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 
-from interfaces import AgentResult, AgentRole
+from unison.interfaces import AgentResult, AgentRole
 
 
 @dataclass

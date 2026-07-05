@@ -190,7 +190,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     spec, _ = _load(args.pipeline)
     if args.project is not None:
         # Override project_root from CLI flag
-        from interfaces import World  # type: ignore
+        from unison.interfaces import World  # type: ignore
         spec = spec  # immutable; re-load with overridden root
         spec_path = args.pipeline
         loader = PipelineLoader()

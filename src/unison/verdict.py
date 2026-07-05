@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from interfaces import ReviewVerdict, VerdictParseError, Verdict
+from unison.interfaces import ReviewVerdict, VerdictParseError, Verdict
 
 
 def _quote_bracketed_findings(yaml_text: str) -> str:

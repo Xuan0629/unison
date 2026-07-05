@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from interfaces import AgentSpec, AgentResult
+from unison.interfaces import AgentSpec, AgentResult
 
 
 # ------------------------------------------------------------------

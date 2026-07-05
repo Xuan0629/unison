@@ -38,7 +38,7 @@ class _NonWaitingThreadPoolExecutor(ThreadPoolExecutor):
 
 import yaml
 
-from interfaces import (
+from unison.interfaces import (
     AgentSpec,
     BootstrapConfig,
     BudgetConfig,

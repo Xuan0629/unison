@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from interfaces import AgentSpec, Stage
+from unison.interfaces import AgentSpec, Stage
 from unison.pipeline import DAGScheduler, PipelineLoader, PipelineValidationError
 from unison.world import World
 

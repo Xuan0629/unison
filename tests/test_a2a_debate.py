@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from interfaces import AgentSpec, PipelineSpec, World, AgentResult
+from unison.interfaces import AgentSpec, PipelineSpec, World, AgentResult
 from unison.a2a_debate import (
     A2ADebateMode,
     DebateRound,

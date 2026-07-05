@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from interfaces import AgentRole, Operation
+from unison.interfaces import AgentRole, Operation
 
 
 # ---------------------------------------------------------------------------

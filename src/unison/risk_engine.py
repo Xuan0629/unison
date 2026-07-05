@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from interfaces import Operation, RiskLevel, RiskMatrixConfig
+from unison.interfaces import Operation, RiskLevel, RiskMatrixConfig
 
 
 # ---------------------------------------------------------------------------

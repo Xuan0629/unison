@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from unison.snapshot import FileSnapshotManager, SnapshotRecord
-from interfaces import Operation
+from unison.interfaces import Operation
 
 
 class TestFileSnapshotManager:

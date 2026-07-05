@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from interfaces import ReviewerConfig, ReviewVerdict
+from unison.interfaces import ReviewerConfig, ReviewVerdict
 from unison.reviewer_pool import ReviewerPool
 
 

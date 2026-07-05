@@ -7,7 +7,7 @@ from unison.orchestrator import Orchestrator
 from unison.state import State
 from unison.world import World
 from unison.pipeline import PipelineLoader
-from interfaces import PipelineSpec
+from unison.interfaces import PipelineSpec
 
 
 class TestOrchestrator:

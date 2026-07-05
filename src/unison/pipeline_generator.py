@@ -19,7 +19,7 @@ from pathlib import Path
 
 import yaml
 
-from interfaces import PipelineMode
+from unison.interfaces import PipelineMode
 
 # ────────────────────────────────────────────────────────────────
 # Keyword patterns for auto-detecting pipeline mode

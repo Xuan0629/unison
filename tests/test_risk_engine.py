@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from unison.risk_engine import RuleEngineRiskEvaluator, RiskEvaluation
-from interfaces import RiskLevel, Operation, RiskMatrixConfig
+from unison.interfaces import RiskLevel, Operation, RiskMatrixConfig
 
 
 class TestRuleEngineRiskEvaluator:

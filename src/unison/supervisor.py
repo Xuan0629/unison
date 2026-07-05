@@ -24,10 +24,30 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from interfaces import AgentResult, AgentSpec, AgentRunner
+from unison.interfaces import AgentResult, AgentSpec, AgentRunner
 
 # Re-use the secret-masking engine from the runner base
 from unison.runners.base import mask_secrets
+
+
+# ============================================================================
+# _atomic_write_json — temp-file + rename, shared by ManifestWriter & snapshots
+# ============================================================================
+
+
+def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
+    """Write *data* atomically to *path* via temp-file + ``os.rename``.
+
+    Every writer that persists JSON to disk MUST use this helper so that
+    readers never see a half-written file.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    os.rename(tmp, path)
 
 
 # ============================================================================
@@ -39,8 +59,8 @@ from unison.runners.base import mask_secrets
 class ManifestWriter:
     """Atomic JSON manifest writer for crash / supervision records.
 
-    Every write goes through a ``.tmp`` file that is atomically renamed
-    to the target path, so a reader never sees a half-written file.
+    Every write goes through ``_atomic_write_json`` so a reader never
+    sees a half-written file.
     """
 
     path: Path
@@ -51,13 +71,7 @@ class ManifestWriter:
 
     def _atomic_write(self, data: dict[str, Any]) -> None:
         """Write *data* atomically to ``self.path``."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8",
-        )
-        os.rename(tmp, self.path)
+        _atomic_write_json(self.path, data)
 
     # ------------------------------------------------------------------
     # public API
@@ -319,6 +333,11 @@ class SupervisedRunner:
         """
         session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
 
+        if self.max_attempts <= 0:
+            raise ValueError(
+                f"max_attempts must be >= 1, got {self.max_attempts}"
+            )
+
         for attempt in range(1, self.max_attempts + 1):
             # ── env snapshot before every attempt ─────────────────────────
             snapshot = EnvSnapshot.capture(workdir)
@@ -358,13 +377,9 @@ class SupervisedRunner:
     # ------------------------------------------------------------------
 
     def _save_snapshot(self, label: str, snapshot: EnvSnapshot) -> None:
-        """Persist *snapshot* to ``snapshot_dir/<label>.json``."""
-        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+        """Persist *snapshot* atomically to ``snapshot_dir/<label>.json``."""
         snap_path = self.snapshot_dir / f"{label}.json"
-        snap_path.write_text(
-            json.dumps(snapshot.to_dict(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        _atomic_write_json(snap_path, snapshot.to_dict())
 
     def _record_attempt(
         self,

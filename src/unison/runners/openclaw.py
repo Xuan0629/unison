@@ -17,7 +17,7 @@ import urllib.error
 from dataclasses import dataclass
 from pathlib import Path
 
-from interfaces import AgentSpec, AgentResult
+from unison.interfaces import AgentSpec, AgentResult
 
 GATEWAY_URL = "http://127.0.0.1:18789"
 

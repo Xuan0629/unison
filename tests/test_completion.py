@@ -5,7 +5,7 @@ import pytest
 import subprocess
 
 from unison.completion import GitCompletionDetector
-from interfaces import AgentResult
+from unison.interfaces import AgentResult
 
 
 class TestGitCompletionDetector:
@@ -271,7 +271,7 @@ class TestReviewFileForPhase:
         from unison.orchestrator import Orchestrator
         from unison.state import State
         from unison.world import World
-        from interfaces import PipelineSpec, AgentSpec
+        from unison.interfaces import PipelineSpec, AgentSpec
 
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text(

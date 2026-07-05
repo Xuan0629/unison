@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
-from interfaces import ReviewerConfig, ReviewVerdict, Verdict
+from unison.interfaces import ReviewerConfig, ReviewVerdict, Verdict
 
 
 class ReviewerPool:

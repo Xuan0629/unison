@@ -7,7 +7,7 @@ from unison.runners.base import AgentRunner
 from unison.runners.claude import ClaudeRunner
 from unison.runners.codex import CodexRunner
 from unison.runners.hermes import HermesRunner
-from interfaces import AgentSpec, AgentResult
+from unison.interfaces import AgentSpec, AgentResult
 
 
 class TestClaudeRunner:
