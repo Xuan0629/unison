@@ -338,6 +338,36 @@ agents:
 
 ---
 
+## P10-P14：Pipeline 可靠性模块（v1.1）
+
+五个新模块通过多 Agent 代码审查强化了 Unison 的 pipeline 可靠性：
+
+| 模块 | 用途 | Pipeline |
+|------|------|----------|
+| `supervisor.py` | 崩溃检测（安全/不安全分类）、环境快照、自动恢复 | P10 |
+| `manifest.py` | 结构化停止清单（JSON）、Discord 嵌入、依赖树 | P11 |
+| `observatory.py` | 偏差检测：约束引擎、范围外审计、需求追溯 | P12 |
+| `retry_engine.py` | 错误分类、策略链、健康记忆、代理管理 | P13 |
+| `pipeline.py` DAG | `continue_on_failure` 模式、运行时依赖验证、output_manifest | P14 |
+
+### 关键修复：Verdict 解析器
+
+YAML frontmatter 解析器（`verdict.py`）现已支持块标量（`summary: |`），解决了 Claude Code 的自然 YAML 输出导致 "Could not parse verdict" 卡死的严重 bug。
+
+### 关键修复：Developer 模板
+
+硬编码的开发者任务模板（"Write code in src/"）与用户 skill prompt（"Review implementation"）冲突，导致 Claude Code 在多轮迭代中不修改代码。**通过 MoA 推荐的约束/指令分离方案修复：** 模板现在只提供操作约束（测试命令、提交格式），任务意图完全由 Developer Instructions 控制。
+
+```python
+# 修复前（冲突）
+"Iteration 1: Write code in src/, tests in tests/..." + "# Review implementation..."
+
+# 修复后（无冲突）
+"Iteration 1 — Operational Constraints: Run tests... Commit..." + "# Fix the issues..."
+```
+
+---
+
 ## 故障排除
 
 | 症状 | 解决 |

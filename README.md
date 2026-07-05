@@ -343,6 +343,36 @@ agents:
 
 ---
 
+## P10-P14: Pipeline Reliability Modules (v1.1)
+
+Five new modules hardened Unison's pipeline reliability through multi-agent code review:
+
+| Module | Purpose | Pipeline |
+|--------|---------|----------|
+| `supervisor.py` | Crash detection (safe/unsafe), env snapshot, auto-resume | P10 |
+| `manifest.py` | Structured halt manifest (JSON), Discord embed, dependency tree | P11 |
+| `observatory.py` | Drift detection: constraints, out-of-scope audit, traceability | P12 |
+| `retry_engine.py` | Error classification, strategy chain, health memory, proxy mgmt | P13 |
+| `pipeline.py` DAG | `continue_on_failure` mode, runtime dep verification, output manifest | P14 |
+
+### Key Fix: Verdict Parser
+
+The YAML frontmatter parser (`verdict.py`) now handles block scalars (`summary: |`), resolving a critical bug where Claude Code's natural YAML output caused "Could not parse verdict" halts.
+
+### Key Fix: Developer Template
+
+The hardcoded developer task template ("Write code in src/") conflicted with user skill prompts ("Review implementation"), causing Claude Code to silently skip fixes across iterations. **Fixed by MoA-recommended constraint/instruction separation:** the template now provides only operational constraints (test command, commit format) and delegates task intent to the Developer Instructions.
+
+```python
+# Before (conflict)
+"Iteration 1: Write code in src/, tests in tests/..." + "# Review implementation..."
+
+# After (no conflict)
+"Iteration 1 — Operational Constraints: Run tests... Commit..." + "# Fix the following issues..."
+```
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
