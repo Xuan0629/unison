@@ -545,7 +545,7 @@ class TestIntegration:
         proxy = ProxyManager([
             ProxyEndpoint("ep1", "url1", "direct"),
             ProxyEndpoint("ep2", "url2", "direct"),
-        ])
+        ], health=HealthMemory(failure_threshold=1))
         engine = RetryEngine(config=config, proxy=proxy)
 
         call_count = [0]
