@@ -303,43 +303,70 @@ World（共享文件系统）
 | Claude Code | `claude` | `claude -p --dangerously-skip-permissions` |
 | Codex CLI | `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox` |
 | Hermes | `hermes` | `hermes chat -q --yolo`（自动加载 model + 工程技能） |
-| OpenClaw | `openclaw` | HTTP API (gateway:18789) |
+| OpenClaw | `openclaw` | `openclaw agent --agent <id> --session-key ... --json` |
 
----
 
-## 示例工作流
+### 自定义 Agent
 
-### 代码开发（`code-dev`）
-
-```yaml
-# pipeline.yaml
-version: "2.0"
-project_root: "."
-agents:
-  developer: {role: developer, runtime: claude, model: deepseek-v4-pro, system_prompt_path: "prompts/dev.md"}
-  reviewer:  {role: reviewer,  runtime: codex, model: gpt-5.5,        system_prompt_path: "prompts/review.md"}
-project: {test_command: "pytest tests/ -q", max_iterations: 3}
-```
-
-### 设计讨论会（`design-debate`）
+任何可通过 CLI 接收文本 prompt 并输出文本响应的 AI Agent 均可接入：
 
 ```yaml
 agents:
-  architect: {role: architect, pipeline_role: planner,   runtime: claude}
-  pm:        {role: pm,        pipeline_role: planner,   runtime: codex}
-  critic:    {role: critic,    pipeline_role: reviewer,  runtime: claude}
-  analyst:   {role: analyst,   pipeline_role: reviewer,  runtime: codex}
+  my_agent:
+    role: developer
+    runtime: custom          # 或任意预配置 runtime
+    binary: my-agent-cli     # CLI 可执行文件
+    cli_flags: ["-p", "--auto"]
+    model: gpt-4o
 ```
+
+Runner 以子进程方式调用并将 stdout 作为 Agent 输出。
 
 ---
 
 ## 依赖
 
 - **Python** ≥ 3.12
-- **Claude Code** — `npm install -g @anthropic-ai/claude-code`
-- **Codex CLI** — `npm install -g @openai/codex`
 - **Git**
 - **PyYAML** — `pip install pyyaml`
+- **任意有 CLI 的 AI Agent** — 至少 2 个（Claude Code、Codex、Hermes、OpenClaw 已预配置）
+
+---
+
+## 最佳实践
+
+### 模型选择
+
+为不同角色配置不同模型，充分发挥各模型优势：
+
+```yaml
+agents:
+  developer:
+    runtime: claude
+    model: claude-sonnet-4-6    # Claude 擅长编码
+  reviewer:
+    runtime: codex
+    model: deepseek-v4-pro      # 不同模型独立审查，避免「回音室」
+```
+
+**建议**（非强制）：
+- Developer 和 Reviewer 使用不同模型（至少不同 provider）——避免审查变成「回音室」
+- Planner 角色使用推理能力强的模型（如 deepseek-v4-pro、gpt-5.5）
+- 多 Reviewer 并行审查显著提高质量
+
+### 角色分配
+
+- 避免同一 Agent 实例在同一 pipeline 中同时扮演上游和下游角色
+- 多 Reviewer 模式能发现单个 Reviewer 会遗漏的问题
+
+### Agent 质量决定协作质量
+
+Unison 提供协作框架，你的 Agent 配置决定协作质量——Agent 的 system prompt、skill、模型越好，Unison 产出越好。
+
+> **以上均为建议，非限制。Unison 适用于任何 CLI Agent 配置——自由实验。**
+
+---
+
 
 ---
 

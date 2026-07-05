@@ -308,43 +308,66 @@ World (shared filesystem)
 | Claude Code | `claude` | `claude -p --dangerously-skip-permissions` |
 | Codex CLI | `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox` |
 | Hermes | `hermes` | `hermes chat -q --yolo` (model + engineering skills auto-loaded) |
-| OpenClaw | `openclaw` | HTTP API (gateway:18789) |
+| OpenClaw | `openclaw` | `openclaw agent --agent <id> --session-key ... --json` |
 
----
+### Custom Agents
 
-## Example Workflows
-
-### Code Development (`code-dev`)
-
-```yaml
-# pipeline.yaml
-version: "2.0"
-project_root: "."
-agents:
-  developer: {role: developer, runtime: claude, model: deepseek-v4-pro, system_prompt_path: "prompts/dev.md"}
-  reviewer:  {role: reviewer,  runtime: codex, model: gpt-5.5,        system_prompt_path: "prompts/review.md"}
-project: {test_command: "pytest tests/ -q", max_iterations: 3}
-```
-
-### Design Debate (`design-debate`)
+Any AI agent with a CLI that reads a text prompt and writes a text response can be used:
 
 ```yaml
 agents:
-  architect: {role: architect, pipeline_role: planner,   runtime: claude}
-  pm:        {role: pm,        pipeline_role: planner,   runtime: codex}
-  critic:    {role: critic,    pipeline_role: reviewer,  runtime: claude}
-  analyst:   {role: analyst,   pipeline_role: reviewer,  runtime: codex}
+  my_agent:
+    role: developer
+    runtime: custom          # or any of the pre-configured runtimes
+    binary: my-agent-cli     # CLI executable
+    cli_flags: ["-p", "--auto"]
+    model: gpt-4o
 ```
+
+The runner invokes it as a subprocess and captures stdout as the agent's output.
 
 ---
 
 ## Dependencies
 
 - **Python** ≥ 3.12
-- **Claude Code** — `npm install -g @anthropic-ai/claude-code`
-- **Codex CLI** — `npm install -g @openai/codex`
 - **Git**
 - **PyYAML** — `pip install pyyaml`
+- **Any AI Agent with a CLI** — at least 2 (Claude Code, Codex, Hermes, and OpenClaw are pre-configured)
+
+---
+
+## Best Practices
+
+### Model Selection
+
+Match models to roles — different models for different tasks:
+
+```yaml
+agents:
+  developer:
+    runtime: claude
+    model: claude-sonnet-4-6    # Claude excels at coding
+  reviewer:
+    runtime: codex
+    model: deepseek-v4-pro      # Different model provides independent review
+```
+
+**Suggestions** (not requirements):
+- Use different models (or at minimum, different providers) for Developer and Reviewer — avoids "echo chamber" reviews
+- Use strong reasoning models for Planner roles (deepseek-v4-pro, gpt-5.5)
+- Multiple parallel reviewers improve quality significantly
+
+### Role Assignment
+
+- Avoid using the same agent instance for upstream and downstream roles in the same pipeline
+- Multi-reviewer mode catches issues a single reviewer would miss
+
+### Agent Quality Matters
+
+Unison provides the collaboration framework. Your agent configuration determines the collaboration quality — the better your agents' system prompts, skills, and models, the better Unison performs.
+
+> **These are suggestions, not limitations. Unison works with any CLAI agent configuration — experiment freely.**
 
 ---
 
