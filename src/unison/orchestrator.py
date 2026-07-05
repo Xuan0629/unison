@@ -1381,10 +1381,11 @@ class Orchestrator:
             )
         elif role == "developer":
             task = (
-                f"Iteration {iteration}: Read prd/PRD.md and prd/tech-design.md. "
-                f"Write code in src/, tests in tests/. "
-                f"Run: {self.spec.project.test_command}. "
-                f"Commit with: git add -A && git commit -m '...'"
+                f"Iteration {iteration} — Developer Operational Constraints:\n"
+                f"- Read prd/PRD.md and prd/tech-design.md for requirements context\n"
+                f"- Run tests after changes: {self.spec.project.test_command}\n"
+                f"- Commit with: git add -A && git commit -m '<descriptive message>'\n"
+                f"- Follow the Developer Instructions below for your specific task"
             )
         elif role == "reviewer":
             review_file = self._review_file_for_phase(review_phase, iteration)
@@ -1497,10 +1498,11 @@ class Orchestrator:
             )
         elif role == "developer":
             task = (
-                f"Iteration {iteration}: Read prd/PRD.md and prd/tech-design.md. "
-                f"Write code in src/, tests in tests/. "
-                f"Run: {self.spec.project.test_command}. "
-                f"Commit with: git add -A && git commit -m '...'"
+                f"Iteration {iteration} — Developer Operational Constraints:\n"
+                f"- Read prd/PRD.md and prd/tech-design.md for requirements context\n"
+                f"- Run tests after changes: {self.spec.project.test_command}\n"
+                f"- Commit with: git add -A && git commit -m '<descriptive message>'\n"
+                f"- Follow the Developer Instructions below for your specific task"
             )
         elif role == "reviewer":
             review_file = self._review_file_for_phase(review_phase, iteration)
