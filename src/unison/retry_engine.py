@@ -21,7 +21,7 @@ import json
 import os
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from unison.interfaces import RetryConfig, RetryStrategyConfig, RetryAction
