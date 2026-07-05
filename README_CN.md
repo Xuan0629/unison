@@ -346,7 +346,7 @@ agents:
     model: claude-sonnet-4-6    # Claude 擅长编码
   reviewer:
     runtime: codex
-    model: deepseek-v4-pro      # 不同模型独立审查，避免「回音室」
+    model: gpt-5.5              # 不同模型独立审查，避免「回音室」
 ```
 
 **建议**（非强制）：
@@ -365,6 +365,8 @@ Unison 提供协作框架，你的 Agent 配置决定协作质量——Agent 的
 
 > **以上均为建议，非限制。Unison 适用于任何 CLI Agent 配置——自由实验。**
 
+> ⚠️ **关于 Token 用量**：多 Agent 协作天然比单 Agent 消耗更多 token——每个审查者都是独立的 LLM 调用。这是质量的代价：多个独立视角能发现单个 Agent 会遗漏的问题。项目贡献者不对您的 token 账单负责。😄
+
 ---
 
 
@@ -380,6 +382,12 @@ Unison 提供协作框架，你的 Agent 配置决定协作质量——Agent 的
 | Claude Code 不修改代码 | 已修复（v1.1）：developer 模板不再硬编码 "Write code"，任务意图由 Developer Instructions 控制 |
 | Codex "Missing OPENAI_API_KEY" | 设置 `OPENAI_API_KEY` 环境变量，或确认 Codex CLI 配置正确 |
 | Self-heal fixer 修复失败 | 查看 `fixes/*.yaml` 诊断日志；reviewer 可能拒绝了修复方案 |
+
+---
+
+## 延伸阅读
+
+详见 [docs/MANUAL.md](docs/MANUAL.md) 获取完整使用手册——涵盖 pipeline 模式、Agent 配置、高级功能和故障排除的详细说明。
 
 ---
 

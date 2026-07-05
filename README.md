@@ -350,7 +350,7 @@ agents:
     model: claude-sonnet-4-6    # Claude excels at coding
   reviewer:
     runtime: codex
-    model: deepseek-v4-pro      # Different model provides independent review
+    model: gpt-5.5              # Different model provides independent review
 ```
 
 **Suggestions** (not requirements):
@@ -367,7 +367,9 @@ agents:
 
 Unison provides the collaboration framework. Your agent configuration determines the collaboration quality — the better your agents' system prompts, skills, and models, the better Unison performs.
 
-> **These are suggestions, not limitations. Unison works with any CLAI agent configuration — experiment freely.**
+> **These are suggestions, not limitations. Unison works with any CLI agent configuration — experiment freely.**
+
+> ⚠️ **A note on token usage**: Multi-agent collaboration inherently consumes more tokens than single-agent workflows — every reviewer is an independent LLM call. This is the price of quality: multiple independent perspectives catch issues a single agent would miss. Project contributors are not responsible for your token bill. 😄
 
 ---
 
@@ -381,6 +383,12 @@ Unison provides the collaboration framework. Your agent configuration determines
 | Claude Code makes no changes | Fixed (v1.1): dev template no longer hardcodes "Write code", delegates to Developer Instructions |
 | Codex "Missing OPENAI_API_KEY" | Set `OPENAI_API_KEY` env var, or verify Codex CLI configuration |
 | Self-heal fixer fails | Check `fixes/*.yaml` diagnostics; reviewer may have rejected the fix |
+
+---
+
+## Further Reading
+
+See [docs/MANUAL.md](docs/MANUAL.md) for the full usage manual — covering pipeline modes, agent configuration, advanced features, and troubleshooting in detail.
 
 ---
 
