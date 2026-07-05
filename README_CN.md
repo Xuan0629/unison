@@ -201,6 +201,11 @@ agents:
 | Git Worktree | 并行 Developer 隔离分支开发 |
 | Schema 迁移 | V1 pipeline.yaml 自动升级到 V2 |
 | **Self-Heal** | **pipeline 运行中自动诊断并修复 Unison 自身 bug（→ §Self-Heal）** |
+| Supervisor | 崩溃检测（安全/不安全分类）、环境快照、自动恢复 |
+| Manifest | 结构化 halt 清单（JSON）、Discord 嵌入、依赖树 |
+| Observatory | 偏差检测：约束引擎、范围外审计、需求追溯 |
+| RetryEngine | 错误分类、策略链、健康记忆、多代理切换 |
+| DAG 部分推进 | `continue_on_failure` 模式——失败节点不终止整体 pipeline |
 
 可配置的超时与保留策略（YAML 顶层）：
 
@@ -338,46 +343,16 @@ agents:
 
 ---
 
-## P10-P14：Pipeline 可靠性模块（v1.1）
-
-五个新模块通过多 Agent 代码审查强化了 Unison 的 pipeline 可靠性：
-
-| 模块 | 用途 | Pipeline |
-|------|------|----------|
-| `supervisor.py` | 崩溃检测（安全/不安全分类）、环境快照、自动恢复 | P10 |
-| `manifest.py` | 结构化停止清单（JSON）、Discord 嵌入、依赖树 | P11 |
-| `observatory.py` | 偏差检测：约束引擎、范围外审计、需求追溯 | P12 |
-| `retry_engine.py` | 错误分类、策略链、健康记忆、代理管理 | P13 |
-| `pipeline.py` DAG | `continue_on_failure` 模式、运行时依赖验证、output_manifest | P14 |
-
-### 关键修复：Verdict 解析器
-
-YAML frontmatter 解析器（`verdict.py`）现已支持块标量（`summary: |`），解决了 Claude Code 的自然 YAML 输出导致 "Could not parse verdict" 卡死的严重 bug。
-
-### 关键修复：Developer 模板
-
-硬编码的开发者任务模板（"Write code in src/"）与用户 skill prompt（"Review implementation"）冲突，导致 Claude Code 在多轮迭代中不修改代码。**通过 MoA 推荐的约束/指令分离方案修复：** 模板现在只提供操作约束（测试命令、提交格式），任务意图完全由 Developer Instructions 控制。
-
-```python
-# 修复前（冲突）
-"Iteration 1: Write code in src/, tests in tests/..." + "# Review implementation..."
-
-# 修复后（无冲突）
-"Iteration 1 — Operational Constraints: Run tests... Commit..." + "# Fix the issues..."
-```
-
----
-
 ## 故障排除
 
 | 症状 | 解决 |
 |------|------|
 | "Could not acquire lock" | `rm -f ~/.unison/locks/<project>.lock` |
-| "ContextBudgetError" | `rm -f .unison/budget.json`（重置当日预算） |
-| Review 文件污染 | 在 pipeline 间执行 `rm -f reviews/iter-*.md reviews/plan-iter-*.md` |
-| Codex "Missing OPENAI_API_KEY" | 确保 `~/.hermes/.env` 存在并包含 API key |
+| "ContextBudgetError" | 在 pipeline YAML 中增大 `budget.daily_token_limit`；或 `rm -f .unison/budget.json` 重置当日预算 |
+| "Could not parse verdict" | 已修复（v1.1）：verdict 解析器现支持 YAML block scalar |
+| Claude Code 不修改代码 | 已修复（v1.1）：developer 模板不再硬编码 "Write code"，任务意图由 Developer Instructions 控制 |
+| Codex "Missing OPENAI_API_KEY" | 设置 `OPENAI_API_KEY` 环境变量，或确认 Codex CLI 配置正确 |
 | Self-heal fixer 修复失败 | 查看 `fixes/*.yaml` 诊断日志；reviewer 可能拒绝了修复方案 |
-302|| Planner 只写占位符 | 使用更强的 `task_instruction`，加 "WRITE NOW" 指令 |
 
 ---
 

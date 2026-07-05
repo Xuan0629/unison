@@ -201,6 +201,11 @@ Works for all roles (Planner, Developer, Reviewer), not just Reviewer.
 | Git Worktrees | Isolated parallel development branches |
 | Schema Migration | V1 pipeline.yaml auto-upgraded to V2 |
 | **Self-Heal** | **Auto-diagnose and fix Unison bugs while pipeline runs (→ §Self-Heal)** |
+| Supervisor | Crash detection (safe/unsafe), env snapshot, auto-resume |
+| Manifest | Structured halt manifest (JSON), Discord embed, dependency tree |
+| Observatory | Drift detection: constraints, out-of-scope audit, traceability |
+| RetryEngine | Error classification, strategy chain, health memory, multi-proxy |
+| DAG Partial Advance | `continue_on_failure` mode — failed nodes don't halt the pipeline |
 
 Configurable timeouts and retention (YAML top-level):
 
@@ -343,46 +348,16 @@ agents:
 
 ---
 
-## P10-P14: Pipeline Reliability Modules (v1.1)
-
-Five new modules hardened Unison's pipeline reliability through multi-agent code review:
-
-| Module | Purpose | Pipeline |
-|--------|---------|----------|
-| `supervisor.py` | Crash detection (safe/unsafe), env snapshot, auto-resume | P10 |
-| `manifest.py` | Structured halt manifest (JSON), Discord embed, dependency tree | P11 |
-| `observatory.py` | Drift detection: constraints, out-of-scope audit, traceability | P12 |
-| `retry_engine.py` | Error classification, strategy chain, health memory, proxy mgmt | P13 |
-| `pipeline.py` DAG | `continue_on_failure` mode, runtime dep verification, output manifest | P14 |
-
-### Key Fix: Verdict Parser
-
-The YAML frontmatter parser (`verdict.py`) now handles block scalars (`summary: |`), resolving a critical bug where Claude Code's natural YAML output caused "Could not parse verdict" halts.
-
-### Key Fix: Developer Template
-
-The hardcoded developer task template ("Write code in src/") conflicted with user skill prompts ("Review implementation"), causing Claude Code to silently skip fixes across iterations. **Fixed by MoA-recommended constraint/instruction separation:** the template now provides only operational constraints (test command, commit format) and delegates task intent to the Developer Instructions.
-
-```python
-# Before (conflict)
-"Iteration 1: Write code in src/, tests in tests/..." + "# Review implementation..."
-
-# After (no conflict)
-"Iteration 1 — Operational Constraints: Run tests... Commit..." + "# Fix the following issues..."
-```
-
----
-
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
 | "Could not acquire lock" | `rm -f ~/.unison/locks/<project>.lock` |
-| "ContextBudgetError" | `rm -f .unison/budget.json` (resets daily budget) |
-| Review file pollution | `rm -f reviews/iter-*.md reviews/plan-iter-*.md` between runs |
-| Codex "Missing OPENAI_API_KEY" | Ensure `~/.hermes/.env` exists with your API keys |
-| Self-heal fixer fails | Check `fixes/*.yaml` for diagnosis; reviewers may have rejected the fix |
-304|| Planner writes placeholders | Use stronger `task_instruction` with explicit "WRITE NOW" directives |
+| "ContextBudgetError" | Increase `budget.daily_token_limit` in pipeline YAML; or `rm -f .unison/budget.json` to reset daily budget |
+| "Could not parse verdict" | Fixed (v1.1): verdict parser now supports YAML block scalars |
+| Claude Code makes no changes | Fixed (v1.1): dev template no longer hardcodes "Write code", delegates to Developer Instructions |
+| Codex "Missing OPENAI_API_KEY" | Set `OPENAI_API_KEY` env var, or verify Codex CLI configuration |
+| Self-heal fixer fails | Check `fixes/*.yaml` diagnostics; reviewer may have rejected the fix |
 
 ---
 
