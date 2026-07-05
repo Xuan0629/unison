@@ -345,7 +345,8 @@ class Orchestrator:
         self._publish_phase_event("dev_active", note="starting DAG development")
         self._save_checkpoint()
 
-        scheduler = DAGScheduler(self.spec.dag)
+        scheduler = DAGScheduler(self.spec.dag,
+                                 continue_on_failure=self.spec.dag_continue_on_failure)
         cancel_event = scheduler.cancel_event
         self._dag_cancel_event = cancel_event
 

@@ -944,7 +944,7 @@ class TestDAGSchedulerExecuteParallel:
         scheduler = DAGScheduler(stages)
         executor = self._make_executor({"a": True, "b": True})
         results = scheduler.execute_parallel(executor, max_workers=2)
-        assert results == {"a": True, "b": True}
+        assert results == {"a": 'passed', "b": 'passed'}
 
     def test_execute_linear_dependencies(self):
         """线性依赖：依赖在前执行。"""
@@ -960,8 +960,8 @@ class TestDAGSchedulerExecuteParallel:
         ]
         scheduler = DAGScheduler(stages)
         results = scheduler.execute_parallel(executor, max_workers=2)
-        assert results["a"] is True
-        assert results["b"] is True
+        assert results["a"] == 'passed'
+        assert results["b"] == 'passed'
         # a 必须在 b 之前执行
         assert execution_order.index("a") < execution_order.index("b")
 
@@ -981,9 +981,9 @@ class TestDAGSchedulerExecuteParallel:
             return stage.name != "a"  # a 失败
 
         results = scheduler.execute_parallel(executor, max_workers=2)
-        assert results["a"] is False
-        assert results["b"] is False  # 失败传播
-        assert results["c"] is True
+        assert results["a"] == 'failed'
+        assert results["b"] == 'skipped'  # 失败传播
+        assert results["c"] == 'passed'
         # b 不应该被 executor 调用
         assert "b" not in executed
 
@@ -1004,11 +1004,11 @@ class TestDAGSchedulerExecuteParallel:
             return stage.name != "b"  # b 失败
 
         results = scheduler.execute_parallel(executor, max_workers=2)
-        assert results["a"] is True
-        assert results["b"] is False
-        assert results["c"] is True
-        # d 依赖 b（失败），所以被传播失败
-        assert results["d"] is False
+        assert results["a"] == 'passed'
+        assert results["b"] == 'failed'
+        assert results["c"] == 'passed'
+        # d 依赖 b（失败），所以被传播跳过
+        assert results["d"] == 'skipped'
         assert "d" not in executed
 
     def test_execute_with_timeout(self):
@@ -1023,7 +1023,7 @@ class TestDAGSchedulerExecuteParallel:
             return True
 
         results = scheduler.execute_parallel(executor, max_workers=1)
-        assert results["slow"] is False
+        assert results["slow"] == 'failed'
 
     def test_execute_exception_marks_failure(self):
         """executor 抛异常时 Stage 被标记为失败。"""
@@ -1039,8 +1039,8 @@ class TestDAGSchedulerExecuteParallel:
             return True
 
         results = scheduler.execute_parallel(executor, max_workers=1)
-        assert results["a"] is False
-        assert results["b"] is False  # 失败传播
+        assert results["a"] == 'failed'
+        assert results["b"] == 'skipped'  # 失败传播
 
     def test_execute_parallel_execution(self):
         """验证并行执行：独立 Stage 同时执行。"""
@@ -1109,9 +1109,9 @@ class TestDAGSchedulerV2:
         elapsed = time.monotonic() - start
 
         # "hung" stage should be marked failed because of timeout
-        assert results["hung"] is False
+        assert results["hung"] == 'failed'
         # "fast" stage should succeed
-        assert results["fast"] is True
+        assert results["fast"] == 'passed'
         # The scheduler returns within timeout + reasonable grace period
         assert elapsed < 5.0, f"Expected <5s elapsed, got {elapsed:.2f}s"
 
@@ -1130,7 +1130,7 @@ class TestDAGSchedulerV2:
             return True
 
         results = scheduler.execute_parallel(executor, max_workers=2)
-        assert results == {"a": True, "b": True}
+        assert results == {"a": 'passed', "b": 'passed'}
         # "a" must be submitted before "b"
         assert submission_order.index("a") < submission_order.index("b")
 
@@ -1159,7 +1159,7 @@ class TestDAGSchedulerV2:
         results = scheduler.execute_parallel(
             executor, max_workers=2, pool_factory=DaemonThreadPool
         )
-        assert results == {"a": True, "b": True}
+        assert results == {"a": 'passed', "b": 'passed'}
 
         # Pool threads should have been cleaned up (shutdown was called)
         after_count = len(threading.enumerate())
@@ -1197,8 +1197,8 @@ class TestDAGSchedulerV2:
         results = scheduler.execute_parallel(executor, max_workers=2)
         elapsed = time.monotonic() - start
 
-        assert results["hung"] is False
-        assert results["fast"] is True
+        assert results["hung"] == 'failed'
+        assert results["fast"] == 'passed'
         # Default path must return within timeout + small grace.
         # We allow 1.6s (timeout=1.0s + 0.5s grace + 0.1s CI noise).
         assert elapsed < 1.6, (
@@ -1223,7 +1223,7 @@ class TestDAGSchedulerV2:
             return True
 
         results = scheduler.execute_parallel(executor, max_workers=2)
-        assert results == {"a": True, "b": True}
+        assert results == {"a": 'passed', "b": 'passed'}
         assert not scheduler.cancel_event.is_set(), (
             "cancel_event must not be set during normal (non-timeout) execution"
         )
@@ -1242,7 +1242,7 @@ class TestDAGSchedulerV2:
             return True
 
         results = scheduler.execute_parallel(executor, max_workers=2)
-        assert results["slow"] is False
+        assert results["slow"] == 'failed'
         assert scheduler.cancel_event.is_set(), (
             "cancel_event must be set when a stage exceeds its deadline"
         )
@@ -1291,7 +1291,7 @@ class TestDAGSchedulerV2:
 
         results = scheduler.execute_parallel(executor, max_workers=2)
         # "hung" is marked failed via timeout
-        assert results["hung"] is False
+        assert results["hung"] == 'failed'
         # "cooperative" stage ran and aborted (or if fast enough, may have
         # started before cancel_event was set; either way the scheduler
         # shouldn't block)

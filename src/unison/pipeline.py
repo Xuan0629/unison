@@ -554,16 +554,21 @@ class DAGScheduler:
         results = scheduler.execute_parallel(executor=my_executor, max_workers=4)
     """
 
-    def __init__(self, stages: list[Stage]) -> None:
+    def __init__(self, stages: list[Stage],
+                 continue_on_failure: bool = False) -> None:
         """构建依赖图并检测环。
 
         Args:
             stages: DAG 中的 Stage 列表。
+            continue_on_failure: If True, continue executing independent
+                stages after a stage fails, marking dependents as
+                ``'skipped'``.  (P14)
 
         Raises:
             ValueError: 如果依赖图包含环，或依赖引用了不存在的 Stage。
         """
         self.stages: list[Stage] = stages
+        self.continue_on_failure: bool = continue_on_failure
         self._graph: dict[str, set[str]] = {}  # stage_name → dependencies
         self.cancel_event = threading.Event()
         """Set when any stage exceeds its deadline.
@@ -717,11 +722,12 @@ class DAGScheduler:
         executor: callable,
         max_workers: int = 4,
         pool_factory: callable = None,
-    ) -> dict[str, bool]:
+    ) -> dict[str, str]:
         """并行执行 DAG。
 
         无依赖的 Stage 同时提交到线程池。每完成一个 Stage 即检查是否有
-        新的 Stage 变得可执行。依赖失败 Stage 的后续 Stage 自动标记失败。
+        新的 Stage 变得可执行。依赖失败 Stage 的后续 Stage 自动标记为
+        ``'skipped'``。
 
         Uses a deadline-aware loop with ``wait(FIRST_COMPLETED)`` so
         overdue stages are marked failed without blocking on their
@@ -742,7 +748,8 @@ class DAGScheduler:
                 Defaults to ``ThreadPoolExecutor``.
 
         Returns:
-            ``{stage_name: success}`` 的映射。
+            ``{stage_name: 'passed'|'failed'|'skipped'}`` 的映射。
+            (P14)
         """
         from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
@@ -757,7 +764,7 @@ class DAGScheduler:
 
         completed: set[str] = set()
         failed: set[str] = set()
-        results: dict[str, bool] = {}
+        results: dict[str, str] = {}
 
         self.cancel_event.clear()
 
@@ -785,10 +792,10 @@ class DAGScheduler:
                     stage, _ = futures.pop(f)
                     try:
                         success = f.result()
-                        results[stage.name] = success
+                        results[stage.name] = 'passed' if success else 'failed'
                         (completed if success else failed).add(stage.name)
                     except Exception:
-                        results[stage.name] = False
+                        results[stage.name] = 'failed'
                         failed.add(stage.name)
                     in_flight.discard(stage.name)
 
@@ -801,7 +808,7 @@ class DAGScheduler:
                     self.cancel_event.set()
                 for f, stage in overdue:
                     futures.pop(f)
-                    results[stage.name] = False
+                    results[stage.name] = 'failed'
                     failed.add(stage.name)
                     in_flight.discard(stage.name)
 
@@ -814,12 +821,13 @@ class DAGScheduler:
                     futures[fut] = (stage, time.monotonic() + stage.timeout)
                     in_flight.add(stage.name)
 
-            # Propagate failure to descendants
+            # Propagate failure to descendants: dependents of failed
+            # stages are marked 'skipped' (P14).
             for stage in self.stages:
                 if stage.name in results:
                     continue
                 if any(dep in failed for dep in stage.dependencies):
-                    results[stage.name] = False
+                    results[stage.name] = 'skipped'
                     failed.add(stage.name)
         finally:
             # Non-blocking shutdown: do not wait for running workers
