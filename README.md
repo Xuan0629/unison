@@ -1,4 +1,4 @@
-# Unison · 万物一心
+# Unison · 万物一心 · wanwuyixin
 
 [中文](README_CN.md) | **English**
 
@@ -388,7 +388,13 @@ Unison provides the collaboration framework. Your agent configuration determines
 
 ## Further Reading
 
-See [docs/MANUAL.md](docs/MANUAL.md) for the full usage manual — covering pipeline modes, agent configuration, advanced features, and troubleshooting in detail.
+- **[docs/MANUAL.md](docs/MANUAL.md)** — Full usage manual: pipeline modes, agent configuration, advanced features, troubleshooting.
+
+### For Unison Users: Shared Skills
+
+Multiple agents collaborating effectively need consistent skills (coding conventions, design systems, debugging workflows). **[shared-skills](https://github.com/Xuan0629/shared-skills)** is a companion project that keeps agent skills in sync across Claude Code, Codex, Hermes, and OpenClaw — single source of truth, automatic format conversion.
+
+Recommended for any Unison user running pipelines with 2+ agents.
 
 ---
 

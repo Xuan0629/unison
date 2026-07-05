@@ -1,4 +1,4 @@
-# Unison · 万物一心
+# Unison · 万物一心 · wanwuyixin
 
 [English](README.md) | **中文**
 
@@ -387,7 +387,13 @@ Unison 提供协作框架，你的 Agent 配置决定协作质量——Agent 的
 
 ## 延伸阅读
 
-详见 [docs/MANUAL.md](docs/MANUAL.md) 获取完整使用手册——涵盖 pipeline 模式、Agent 配置、高级功能和故障排除的详细说明。
+- **[docs/MANUAL.md](docs/MANUAL.md)** — 完整使用手册：pipeline 模式、Agent 配置、高级功能、故障排除。
+
+### 对 Unison 用户：共享 Skill 系统
+
+多 Agent 高效协作需要一致的 skill 配置（编码规范、设计系统、调试流程等）。**[shared-skills](https://github.com/Xuan0629/shared-skills)** 是配套项目——在 Claude Code、Codex、Hermes、OpenClaw 之间同步 Agent skill，单一数据源、自动格式转换。
+
+推荐所有使用 2+ Agent 的 Unison 用户安装。
 
 ---
 
