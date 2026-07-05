@@ -71,3 +71,9 @@ src/unison.egg-info/
 
 # Internal scripts
 scripts/
+
+# Dev pipeline configs (use .unison/pipelines/ instead)
+p[0-9]*.yaml
+
+# Review archives (runtime artifacts)
+reviews/archive/
