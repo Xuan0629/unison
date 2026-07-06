@@ -513,13 +513,15 @@ agents:
     # ------------------------------------------------------------------
 
     def test_full_dev_mode_not_in_spec_driven_dispatch(self):
-        """full-dev mode uses its own dispatch, not spec-driven."""
-        from unison.orchestrator import Orchestrator
-        # Verify DISPATCH entries are distinct
-        assert "spec-driven" in Orchestrator._DISPATCH
-        assert "full-dev" in Orchestrator._DISPATCH
-        # full-dev dispatch is NOT the same as spec-driven
-        assert Orchestrator._DISPATCH["full-dev"] is not Orchestrator._DISPATCH["spec-driven"]
+        """full-dev mode has its own phase sequence, distinct from spec-driven."""
+        from unison.phase_router import PhaseRouter
+        # Verify both modes have phase definitions
+        spec_phases = PhaseRouter.get_phases("spec-driven")
+        full_phases = PhaseRouter.get_phases("full-dev")
+        assert len(spec_phases) > 0
+        assert len(full_phases) > 0
+        # full-dev and spec-driven are different phase sequences
+        assert spec_phases != full_phases
 
 
 # ===========================================================================

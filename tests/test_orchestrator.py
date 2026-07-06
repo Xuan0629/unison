@@ -654,7 +654,7 @@ budget:
     # ------------------------------------------------------------------
 
     def test_orchestrator_routes_to_dag_scheduler(self, tmp_path, monkeypatch):
-        """Phase 3: spec.dag set → _run_state_machine calls DAG path, not linear."""
+        """Phase 3: spec.dag set → _run_state_machine calls DAG path, not _run_loop."""
         world_root = tmp_path / "project"
         world_root.mkdir()
         (world_root / "prd").mkdir()
@@ -699,22 +699,22 @@ dag:
 
         # Track which development path was taken
         dag_called = []
-        linear_called = []
+        loop_called = []
 
         monkeypatch.setattr(orch, "_run_dag_development",
                            lambda: dag_called.append(True))
-        monkeypatch.setattr(orch, "_run_linear_development",
-                           lambda: linear_called.append(True))
+        monkeypatch.setattr(orch, "_run_loop",
+                           lambda *a, **kw: loop_called.append(True))
         # Also stub _save_checkpoint to avoid filesystem writes
-        monkeypatch.setattr(orch, "_save_checkpoint", lambda: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
 
         orch._run_state_machine()
 
         assert dag_called, "DAG path should be called when spec.dag is set"
-        assert not linear_called, "linear path should NOT be called when spec.dag is set"
+        assert not loop_called, "_run_loop should NOT be called when spec.dag is set"
 
     def test_orchestrator_routes_to_linear_when_no_dag(self, tmp_path, monkeypatch):
-        """Phase 3: spec.dag=None → _run_state_machine calls linear path, not DAG."""
+        """Phase 3: spec.dag=None → _run_state_machine calls _run_loop for dev phase."""
         world_root = tmp_path / "project"
         world_root.mkdir()
         (world_root / "prd").mkdir()
@@ -751,18 +751,18 @@ agents:
         orch = Orchestrator(spec=spec)
 
         dag_called = []
-        linear_called = []
+        loop_called = []
 
         monkeypatch.setattr(orch, "_run_dag_development",
                            lambda: dag_called.append(True))
-        monkeypatch.setattr(orch, "_run_linear_development",
-                           lambda: linear_called.append(True))
-        monkeypatch.setattr(orch, "_save_checkpoint", lambda: None)
+        monkeypatch.setattr(orch, "_run_loop",
+                           lambda *a, **kw: loop_called.append(True))
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
 
         orch._run_state_machine()
 
         assert not dag_called, "DAG path should NOT be called when spec.dag is None"
-        assert linear_called, "linear path should be called when spec.dag is None"
+        assert loop_called, "_run_loop should be called when spec.dag is None"
 
 
 # ============================================================================

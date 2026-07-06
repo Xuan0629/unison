@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from unison.interfaces import AgentResult, PipelineSpec, ReviewVerdict, VerdictParseError
+from unison.phase_router import PhaseRouter
 from unison.pipeline import PipelineValidationError
 from unison.prompt_registry import PromptRegistry
 from unison.state import State
@@ -272,29 +273,39 @@ class Orchestrator:
     # Internal: state machine (§3 two-phase loop → mode dispatch)
     # ==================================================================
 
-    _DISPATCH = {
-        "code-dev":      lambda self: self._run_dev_loop(),
-        "full-dev":      lambda self: (self._run_planning_loop(), self._run_dev_loop()),
-        "design-debate": lambda self: self._run_planning_loop(),
-        "inspect-only":  lambda self: self._run_review_only(),
-        "agent-fix":     lambda self: self._run_dev_loop(),
-        "migrate":       lambda self: (self._run_planning_loop(), self._run_dev_loop()),
-        "greenfield":    lambda self: self._run_dev_loop(),  # same as code-dev, greenfield template injected in AgentRunner
-        "spec-driven":   lambda self: self._run_spec_driven(),
-    }
-
     def _run_state_machine(self) -> None:
-        """Dispatch to the appropriate state-machine path based on pipeline mode.
+        """Run the pipeline state machine driven by PhaseRouter.
 
-        Replaces the old binary ``_should_plan()`` check with a named-mode
-        dispatch table that supports 6 pipeline modes.
+        Each pipeline mode maps to an ordered list of ``PhaseDef`` via
+        :class:`PhaseRouter`.  The state machine iterates phases, routing
+        standard active→review loops to :meth:`_run_loop` and special-case
+        phases to their dedicated handlers.
+
+        Phase routing:
+          - ``spec-check`` → :meth:`_run_spec_verification` (pure Python gate)
+          - ``review``    → :meth:`_run_review_only` (inspect-only mode)
+          - DAG dev       → :meth:`_run_dag_development`
+          - standard      → :meth:`_run_loop`
         """
         mode = self.spec.mode or "code-dev"
-        dispatch = self._DISPATCH.get(mode)
-        if dispatch is None:
+        phases = PhaseRouter.get_phases(mode)
+        if not phases:
             self.halt(f"Unknown pipeline mode: {mode}")
             return
-        dispatch(self)
+
+        for pd in phases:
+            if self._state.halt_signal:
+                return
+
+            if pd.active_phase == "spec-check":
+                self._run_spec_verification()
+            elif pd.name == "review":
+                self._run_review_only()
+            elif pd.active_phase == "dev_active" and self.spec.dag is not None:
+                self._run_dag_development()
+            else:
+                self._run_loop(pd.active_phase, pd.review_phase,
+                               pd.review_of, role=pd.role)
 
         if not self._state.halt_signal:
             self._state.transition("done", "orchestrator",
@@ -522,6 +533,7 @@ class Orchestrator:
         active_phase: str,
         review_phase: str,
         review_of: str,
+        role: str | None = None,
     ) -> None:
         """Run a single active→review loop.
 
@@ -535,18 +547,23 @@ class Orchestrator:
                           ("planning_review" or "dev_review").
             review_of: Human-readable description of what is being reviewed
                        (used in verdict routing messages).
+            role: Agent pipeline role ("planner" or "developer").  When
+                  omitted, inferred from *active_phase*.
         """
         max_iter = self.spec.max_iterations
 
         # A1: Capture loop start commit for cumulative diff
         self._loop_start_commit = self._get_head_commit()
 
-        # Map phase → agent role
-        role_for_phase = {
-            "planning_active": "planner",
-            "dev_active": "developer",
-        }
-        agent_role = role_for_phase[active_phase]
+        # Map phase → agent role (fallback when role is not explicit)
+        if role is not None:
+            agent_role = role
+        else:
+            role_for_phase = {
+                "planning_active": "planner",
+                "dev_active": "developer",
+            }
+            agent_role = role_for_phase[active_phase]
 
         for iteration in range(1, max_iter + 1):
             if self._state.halt_signal:
