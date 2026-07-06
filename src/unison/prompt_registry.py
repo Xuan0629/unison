@@ -303,9 +303,9 @@ class PromptRegistry:
         """Return a role-specific task instruction with variables substituted.
 
         Resolution order:
-        1. Mode-specific key: ``"{role}::{mode}"`` (e.g. ``"developer::spec-driven"``)
-        2. Phase-specific key: derived from *review_phase*
+        1. Phase-specific key: derived from *review_phase*
            (e.g. ``"developer::discuss"`` when phase starts with "discuss")
+        2. Mode-specific key: ``"{role}::{mode}"`` (e.g. ``"developer::spec-driven"``)
         3. Generic role key (e.g. ``"developer"``)
         4. Fallback
 
@@ -325,18 +325,20 @@ class PromptRegistry:
         """
         template = None
 
-        # Priority 1: mode-specific key (e.g. "developer::spec-driven")
-        if mode is not None:
-            mode_key = f"{role}::{mode}"
-            if mode_key in self.DEFAULT_TASKS:
-                template = self.DEFAULT_TASKS[mode_key]
-
-        # Priority 2: phase-specific key (e.g. "developer::discuss")
-        if template is None and review_phase:
+        # Priority 1: phase-specific key (e.g. "developer::discuss")
+        # Phase (what the pipeline is doing right now) is more specific than
+        # mode (what kind of pipeline), so check phase before mode.
+        if review_phase:
             phase = review_phase.replace("_review", "").replace("_active", "")
             phase_key = f"{role}::{phase}"
             if phase_key in self.DEFAULT_TASKS:
                 template = self.DEFAULT_TASKS[phase_key]
+
+        # Priority 2: mode-specific key (e.g. "developer::spec-driven")
+        if template is None and mode is not None:
+            mode_key = f"{role}::{mode}"
+            if mode_key in self.DEFAULT_TASKS:
+                template = self.DEFAULT_TASKS[mode_key]
 
         # Priority 3: generic role key
         if template is None:

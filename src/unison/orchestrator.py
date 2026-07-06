@@ -938,9 +938,9 @@ class Orchestrator:
             # Pipeline B: detect multi-agent parallel group
             agents = self._resolve_agents(agent_role)
             if len(agents) > 1:
-                self._invoke_agents_parallel(agents, agent_role, iteration)
+                self._invoke_agents_parallel(agents, agent_role, iteration, review_phase=review_phase)
             else:
-                self._invoke_agent_for_role(agent_role, iteration)
+                self._invoke_agent_for_role(agent_role, iteration, review_phase=review_phase)
 
             if self._state.halt_signal:
                 return
