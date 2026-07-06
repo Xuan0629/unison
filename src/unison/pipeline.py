@@ -151,10 +151,14 @@ class PipelineLoader:
 
         # ---- agents ----
         agents_raw = raw.get("agents")
-        if not agents_raw or not isinstance(agents_raw, dict):
-            raise PipelineValidationError("Missing required field: agents")
-
-        self._validate_required_agents(agents_raw)
+        if raw.get("mode") == "moa":
+            # MoA mode generates analyzer/synthesizer agents dynamically
+            # from MoaConfig — developer and reviewer are not required.
+            agents_raw = agents_raw if isinstance(agents_raw, dict) else {}
+        else:
+            if not agents_raw or not isinstance(agents_raw, dict):
+                raise PipelineValidationError("Missing required field: agents")
+            self._validate_required_agents(agents_raw)
         agents = self._build_agents(agents_raw)
 
         # ---- world (resolve project_root relative to pipeline file) ----

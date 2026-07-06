@@ -294,6 +294,14 @@ class Orchestrator:
           - standard      → :meth:`_run_loop`
         """
         mode = self.spec.mode or "code-dev"
+
+        # MoA mode uses a dedicated N-round analyze→synthesize loop
+        # driven by MoaConfig.rounds rather than a fixed PhaseRouter
+        # sequence (which always emits 4 phases regardless of rounds).
+        if mode == "moa":
+            self._run_moa_pipeline()
+            return
+
         phases = PhaseRouter.get_phases(mode)
         if not phases:
             self.halt(f"Unknown pipeline mode: {mode}")
@@ -309,8 +317,6 @@ class Orchestrator:
                 self._run_discussion_loop()
             elif pd.name == "review":
                 self._run_review_only()
-            elif pd.name.startswith("moa-"):
-                self._run_moa_phase(pd)
             elif pd.active_phase == "dev_active" and self.spec.dag is not None:
                 self._run_dag_development()
             else:
@@ -355,41 +361,64 @@ class Orchestrator:
     # MoA (Mixture of Agents) handlers
     # ==================================================================
 
-    def _run_moa_phase(self, pd) -> None:
-        """Route moa sub-phases to their handler methods.
+    def _run_moa_pipeline(self) -> None:
+        """Run the full MoA pipeline: N rounds of analyze→synthesize.
 
-        Called from :meth:`_run_state_machine` for each moa PhaseDef.
-        Tracks current round on ``self._moa_current_round``, incremented
-        after each synthesize/finalize phase.
+        Unlike other pipeline modes, MoA does not iterate PhaseRouter
+        phases.  It generates the phase sequence dynamically from
+        ``MoaConfig.rounds``, running an analyze batch followed by a
+        single synthesizer for each round.
+
+        Round 1 uses "moa-analyze" / "moa-synthesize" naming; subsequent
+        rounds use "moa-rebuttal" / "moa-synthesize"; the final round's
+        synthesize is named "moa-finalize".
         """
-        if self._state.halt_signal:
-            return
-
-        # Initialize round counter on first moa phase (lazy — avoids
-        # coupling __init__ to moa)
-        if not hasattr(self, '_moa_current_round'):
-            self._moa_current_round = 1
-
-        round_n = self._moa_current_round
         moa_config = self.spec.moa or MoaConfig()
 
-        # Publish phase event for observability
-        self._state.transition(
-            pd.active_phase, "orchestrator",
-            iter_n=round_n,
-            note=f"moa {pd.name} round {round_n}",
-        )
-        self._publish_phase_event(pd.active_phase, note=f"moa {pd.name} round {round_n}")
-        self._save_checkpoint(round_n)
+        for round_n in range(1, moa_config.rounds + 1):
+            if self._state.halt_signal:
+                return
 
-        if pd.name in ("moa-analyze", "moa-rebuttal"):
+            is_final = round_n == moa_config.rounds
+            analyze_name = "moa-analyze" if round_n == 1 else "moa-rebuttal"
+
+            # ---- Analyze phase ----
+            self._state.transition(
+                "moa_analyze", "orchestrator",
+                iter_n=round_n,
+                note=f"MoA {analyze_name} round {round_n}/{moa_config.rounds}",
+            )
+            self._publish_phase_event(
+                "moa_analyze", note=f"round {round_n}/{moa_config.rounds}",
+            )
+            self._save_checkpoint(round_n)
+
             self._run_moa_analyze(round_n, moa_config)
-        elif pd.name in ("moa-synthesize", "moa-finalize"):
+
+            if self._state.halt_signal:
+                return
+
+            # ---- Synthesize phase ----
+            synth_name = "moa-finalize" if is_final else "moa-synthesize"
+            self._state.transition(
+                "moa_synthesize", "orchestrator",
+                iter_n=round_n,
+                note=f"MoA {synth_name} round {round_n}/{moa_config.rounds}",
+            )
+            self._publish_phase_event(
+                "moa_synthesize", note=f"round {round_n}/{moa_config.rounds}",
+            )
+            self._save_checkpoint(round_n)
+
             self._run_moa_synthesis(round_n, moa_config)
 
-        # Advance round after synthesis/finalize (prepare for next analyze round)
-        if pd.name in ("moa-synthesize", "moa-finalize"):
-            self._moa_current_round += 1
+        # Pipeline complete
+        if not self._state.halt_signal:
+            self._state.transition("done", "orchestrator",
+                                   note="moa pipeline complete")
+            self._publish_phase_event("done", note="moa pipeline complete")
+            self._archive_reviews()
+            self._save_checkpoint()
 
     def _run_moa_analyze(self, round_n: int, moa_config) -> None:
         """Run N analyzer agents in parallel for MoA round *round_n*.
@@ -433,9 +462,19 @@ class Orchestrator:
                 if len(raw) > 8192:
                     synthesis_context += "\n...[synthesis truncated]"
 
+        failed_agents: list[str] = []
+
         def invoke_one(spec: AgentSpec) -> None:
             runner = self._runners.get(spec.runtime)
             if runner is None:
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "MoA analyze round %d: no runner for runtime %r, "
+                    "skipping %s",
+                    round_n, spec.runtime, spec.role,
+                )
+                failed_agents.append(spec.role)
                 return
 
             output_file = reviews_dir / f"moa-{spec.role}-round{round_n}.md"
@@ -496,14 +535,31 @@ class Orchestrator:
             for future in as_completed(futures):
                 try:
                     future.result()
-                except Exception:
-                    pass  # per-agent failures are non-fatal
+                except Exception as exc:
+                    import logging
+                    _log = logging.getLogger(__name__)
+                    _log.warning(
+                        "MoA analyze round %d: agent raised: %s",
+                        round_n, exc,
+                    )
+
+        if failed_agents:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "MoA analyze round %d: %d/%d agents skipped or failed: %s",
+                round_n, len(failed_agents), len(agent_specs),
+                ", ".join(failed_agents),
+            )
 
     def _run_moa_synthesis(self, round_n: int, moa_config) -> None:
         """Run a single synthesizer agent to merge MoA analyses.
 
         Reads all ``reviews/moa-*-round{N}.md`` files and writes a
         consolidated synthesis to ``reviews/moa-synthesis-round{N}.md``.
+
+        The synthesizer is the critical path for MoA — missing runner,
+        absent analysis files, or run failure all halt the pipeline.
         """
         if self._state.halt_signal:
             return
@@ -520,12 +576,9 @@ class Orchestrator:
         ]
 
         if not analysis_files:
-            # No analyses to synthesize — log and skip
-            import logging
-            _log = logging.getLogger(__name__)
-            _log.warning(
-                "moa synthesis round %d: no analysis files found in %s",
-                round_n, reviews_dir,
+            self.halt(
+                f"MoA synthesis round {round_n}: no analysis files found "
+                f"in {reviews_dir} — cannot synthesize without agent output"
             )
             return
 
@@ -575,6 +628,10 @@ class Orchestrator:
 
         runner = self._runners.get(synth_spec.runtime)
         if runner is None:
+            self.halt(
+                f"MoA synthesis round {round_n}: no runner for synthesizer "
+                f"runtime {synth_spec.runtime!r}"
+            )
             return
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -583,13 +640,20 @@ class Orchestrator:
             timestamp,
         )
 
-        runner.run(
+        result = runner.run(
             spec=synth_spec,
             prompt=full_prompt,
             workdir=world.root,
             timeout=self.spec.per_agent_timeout,
             log_path=log_path,
         )
+
+        if not result.success:
+            self.halt(
+                f"MoA synthesis round {round_n} failed: "
+                f"exit_code={result.exit_code}, error={result.error}"
+            )
+            return
 
         # Budget tracking
         tracker = self._get_budget_tracker("synthesizer")

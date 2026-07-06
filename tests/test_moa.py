@@ -192,6 +192,50 @@ agents:
 
         assert spec.mode == "moa"
 
+    def test_moa_mode_without_dev_reviewer_loads(self, tmp_path):
+        """mode: moa without developer/reviewer agents loads successfully.
+
+        MoA generates analyzer/synthesizer agents dynamically from
+        MoaConfig — developer and reviewer are not required.
+        """
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+mode: moa
+project_root: "."
+agents: {}
+moa:
+  agents: 3
+  rounds: 2
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        assert spec.mode == "moa"
+        assert spec.moa is not None
+        assert spec.moa.agents == 3
+        assert spec.moa.rounds == 2
+
+    def test_moa_mode_without_agents_section_loads(self, tmp_path):
+        """mode: moa without an agents: section at all loads successfully."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+mode: moa
+project_root: "."
+moa:
+  agents: 2
+  rounds: 1
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        assert spec.mode == "moa"
+        assert spec.moa is not None
+        assert spec.moa.agents == 2
+        assert spec.moa.rounds == 1
+        assert spec.agents == {}  # no agents defined
+
 
 # ============================================================================
 # Phase Sequence
