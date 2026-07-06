@@ -1,13 +1,28 @@
 [build-system]
 requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "unison"
-version = "1.0.0"
-description = "万物一心 — 本地优先、文件驱动的 Multi-Agent 自动化协作桥梁"
-requires-python = ">=3.11"
+version = "0.6.0"
+description = "Unison (万物一心) — Loop Engineering pipeline for multi-agent collaboration"
+requires-python = ">=3.12"
 dependencies = ["pyyaml>=6.0", "pytest-timeout>=2.0"]
+readme = "README.md"
+license = {text = "Apache-2.0"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/Xuan0629/unison"
+Repository = "https://github.com/Xuan0629/unison"
+Issues = "https://github.com/Xuan0629/unison/issues"
 
 [project.scripts]
 unison = "unison.cli:main"
