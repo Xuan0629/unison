@@ -1,5 +1,6 @@
 # Unison
 observer/logs/
+*.log
 .unison/
 .venv/
 __pycache__/
@@ -58,15 +59,24 @@ state.json
 # Secrets
 .env
 *.env
+.env.*
+auth.json
+*.pem
 
 # IDE
 .vscode/
 .idea/
+.DS_Store
+
+# Dependencies
+node_modules/
 webui-v2-*.yaml
 v2-fix-pipeline.yaml
 
 # Python build artifacts
 src/unison.egg-info/
+dist/
+*.egg-info/
 
 # Internal scripts
 scripts/
