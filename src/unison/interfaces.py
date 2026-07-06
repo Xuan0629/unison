@@ -144,6 +144,11 @@ class World:
         """Developer pre-implementation proposal for discussion phase."""
         return self.reviews_dir / "dev-proposal.md"
 
+    @property
+    def dev_notes_file(self) -> Path:
+        """Developer scratch-pad for cross-iteration context (learnings, blockers)."""
+        return self.reviews_dir / "dev-notes.md"
+
     def halt_signal(self) -> Path:
         return self.unison_dir / "HALT"
 

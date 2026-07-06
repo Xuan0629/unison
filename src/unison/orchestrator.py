@@ -1581,6 +1581,23 @@ class Orchestrator:
         # Prepend the task to system_prompt so the LLM sees it first
         full_system = f"{task}\n\n{system_prompt}"
 
+        # DEV-3: Inject dev-notes.md for cross-iteration context
+        dev_notes = ""
+        if role == "developer":
+            notes_path = world.dev_notes_file
+            if notes_path.exists():
+                raw_notes = notes_path.read_text(encoding="utf-8")
+                # Keep only the last 2KB to avoid bloat
+                if len(raw_notes) > 2048:
+                    raw_notes = raw_notes[-2048:]
+                    raw_notes = raw_notes[raw_notes.find("\n") + 1:]  # drop partial first line
+                dev_notes = (
+                    "\n\n## Developer Notes (from previous iterations)\n"
+                    f"{raw_notes}\n"
+                    "After this iteration, append 1-2 lines to reviews/dev-notes.md "
+                    "summarizing what you learned or what blocked you.\n"
+                )
+
         # P1-1: Build phase summary for agent situational awareness
         prev_verdict = self._state.last_review_verdict or "N/A"
         phase = self._state.phase
@@ -1591,7 +1608,7 @@ class Orchestrator:
                 f"budget_remaining: {remaining} tokens")
 
         assembled = assemble_context(
-            system_prompt=full_system,
+            system_prompt=full_system + dev_notes,
             prd_content=prd_content,
             design_content=design_content,
             last_review_findings=top_findings,
