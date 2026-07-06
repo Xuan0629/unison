@@ -814,9 +814,6 @@ function patchPipelineFlow(s) {
     {key: "done",     label: t("phases.done")}
   ];
 
-  var iteration = s.iteration || 0;
-  var verdict   = s.last_verdict || "";
-
   var BW  = 130;   // box width
   var BH  = 30;    // box height
   var GAP = 36;    // arrow gap between boxes
@@ -885,23 +882,6 @@ function patchPipelineFlow(s) {
            + ' points="' + (ax2 - 7) + ',' + (ay - 5)
            + ' ' + ax2 + ',' + ay
            + ' ' + (ax2 - 7) + ',' + (ay + 5) + '"/>';
-    }
-  }
-
-  // Info labels below the active phase box
-  if (activeIdx >= 0 && activeIdx < 4) {
-    var ix = PX + activeIdx * (BW + GAP) + BW / 2;
-    var iy = PY + BH + 22;
-
-    html += '<text class="pf-info"'
-         + ' x="' + ix + '" y="' + iy + '"'
-         + ' text-anchor="middle">Iter ' + iteration + '</text>';
-
-    if (verdict) {
-      var vLabel = verdict === "PASS" ? t("pass") : t("requestChanges");
-      html += '<text class="pf-verdict pf-verdict--' + verdict.toLowerCase() + '"'
-           + ' x="' + ix + '" y="' + (iy + 15) + '"'
-           + ' text-anchor="middle">' + esc(vLabel) + '</text>';
     }
   }
 
