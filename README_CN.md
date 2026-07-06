@@ -1,25 +1,45 @@
-# Unison · 万物一心 · wanwuyixin
+# Unison · 万物一心
 
 [English](README.md) | **中文**
 
-> *"将弃牌堆中的所有 0 费卡返回手牌，打出 combo。"*
-> ——《Slay the Spire》故障机器人金卡"万物一心"
+<p align="center">
+  <a href="https://github.com/Xuan0629/unison/stargazers"><img src="https://img.shields.io/github/stars/Xuan0629/unison?style=social" alt="stars"></a>
+  <a href="https://github.com/Xuan0629/unison/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Apache 2.0"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+"></a>
+  <a href="https://github.com/Xuan0629/unison/actions"><img src="https://img.shields.io/badge/tests-1056%20passed-brightgreen" alt="1056 tests"></a>
+</p>
 
-**Unison（万物一心）** 是一个本地优先、文件驱动的 Multi-Agent 自动化协作桥梁。
-不依赖 LangChain / CrewAI / AutoGen，自建 Apache 2.0 许可。
+> **停止写提示词。设计循环。剩下的交给 Unison。**
 
-| 平台 | 状态 |
-|------|------|
-| Linux | ✅ 完整支持（主力开发环境） |
-| macOS | ✅ 初步测试通过 — polling fallback 可用 |
-| Windows (WSL) | ⚠️ 待测试 — 预期可用，SIGTERM 缺失 |
+Unison 是一个 **Loop Engineering 管道**——不是提示词库，不是 agent 框架。你定义要构建什么，Unison 运行 Plan → Discuss → Dev → Review 循环直到通过。零依赖 LangChain / CrewAI / AutoGen。
 
-命名灵感来自《Slay the Spire》中"故障机器人"的金卡"万物一心"——
-打出后从弃牌堆中回收所有 0 费资源，复用优质卡组成combo。
+<p align="center"><b>
+  Linux ✅ &nbsp; macOS ✅ &nbsp; Windows (WSL) ⚠️ &nbsp; | &nbsp; Apache 2.0 &nbsp; | &nbsp; 首次提交 2026-06-18
+</b></p>
+
+---
+
 Unison 同样如此：轻量、无状态，将多个 AI Agent 编排为协作流水线，
 以最小资源消耗打出最大效果。
 
 ---
+
+## 为什么选择 Unison
+
+> *"我已经不直接给 Claude 写提示词了。我有循环在运行，它们给 Claude 写提示词并判断该做什么。"*
+> — **Boris Cherny**，Anthropic Claude Code 负责人
+
+这正是 Unison 做的事。不是一次性提示词——而是一个**生产级循环**：规划 → 讨论 → 开发 → 审查 → 重复直到通过。
+
+**自举验证：Unison 用 Unison 开发了自己。** 从首次提交（2026-06-18）起，经过 5 次自我修改循环，Unison 管道重构了 Unison 自身的源代码——添加了 PromptRegistry、SDD 模式、PhaseRouter、MoA 模式和讨论阶段。每一次改动都由 Planner 设计、Developer 实现、Reviewer 把关。1,056 个测试守护每一次提交。
+
+| 自举循环 | Unison 在 Unison 中构建了什么 |
+|---|---|
+| P0 | PromptRegistry — 统一 prompt 模板管理 |
+| P1 | 规范驱动开发（SDD）模式 + GIVEN-WHEN-THEN 门禁 |
+| P2 | PhaseRouter — 数据驱动的管道路由 |
+| P3 | Build prompt 整合，flaky 锁修复 |
+| P5 | MoA 模式 — 可靠的多 agent 合成 |
 
 ## 快速开始
 
@@ -118,6 +138,20 @@ unison webui --project . --port 9099
 ```
 
 ---
+
+---
+
+## 快速导航
+
+| 从这里开始 | |
+|---|---|
+| [快速开始](#快速开始) | 克隆 → 安装 → 运行第一条管道 |
+| [Pipeline 模式](#pipeline-模式自动检测) | 10 种模式：code-dev、full-dev、spec-driven、moa 等 |
+| [Web 面板](#web-面板) | `http://127.0.0.1:9099` 实时查看 |
+| [模型降级](#模型降级) | Claude Code / Hermes / Codex / OpenClaw 降级配置 |
+| [故障排除](#故障排除) | 常见问题：锁、预算、verdict 解析 |
+| [docs/MANUAL.md](docs/MANUAL.md) | 完整使用手册 |
+| [shared-skills](https://github.com/Xuan0629/shared-skills) | 配套项目：跨 runtime 同步 agent skill |
 
 ## 功能
 

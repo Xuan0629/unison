@@ -1,25 +1,40 @@
-# Unison · 万物一心 · wanwuyixin
+# Unison · 万物一心
 
 [中文](README_CN.md) | **English**
 
-> *"Return all 0-cost cards from the discard pile to your hand, and play them as a combo."*
-> —— *Slay the Spire*, Defect Rare Card "Unison"
+<p align="center">
+  <a href="https://github.com/Xuan0629/unison/stargazers"><img src="https://img.shields.io/github/stars/Xuan0629/unison?style=social" alt="stars"></a>
+  <a href="https://github.com/Xuan0629/unison/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Apache 2.0"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+"></a>
+  <a href="https://github.com/Xuan0629/unison/actions"><img src="https://img.shields.io/badge/tests-1056%20passed-brightgreen" alt="1056 tests"></a>
+</p>
 
-**Unison（万物一心）** is a local-first, filesystem-driven multi-agent collaboration bridge.
-Zero dependencies on LangChain / CrewAI / AutoGen. Self-built, Apache 2.0 licensed.
+> **Stop prompting. Design the loop. Unison does the rest.**
 
-| Platform | Status |
-|----------|--------|
-| Linux | ✅ Full support (primary dev environment) |
-| macOS | ✅ Tested — works with polling fallback |
-| Windows (WSL) | ⚠️ Untested — expected to work, SIGTERM missing |
+Unison is a **Loop Engineering pipeline** — not a prompt library, not an agent framework. You define what to build. Unison runs the Planner → Discuss → Developer → Reviewer loop until it passes. Zero dependencies on LangChain / CrewAI / AutoGen.
 
-The name is inspired by the Defect's rare card "Unison" from *Slay the Spire* —
-it retrieves all 0-cost resources from the discard pile and chains them into a lethal combo.
-Unison does the same: lightweight, stateless, orchestrating multiple AI agents
-into collaborative pipelines with minimal resource footprint and maximum impact.
+<p align="center"><b>
+  Linux ✅ &nbsp; macOS ✅ &nbsp; Windows (WSL) ⚠️ &nbsp; | &nbsp; Apache 2.0 &nbsp; | &nbsp; First commit 2026-06-18
+</b></p>
 
 ---
+
+## Why Unison
+
+> *"I don't prompt Claude anymore. I have loops running that prompt Claude and figuring out what to do."*
+> — **Boris Cherny**, Head of Claude Code at Anthropic
+
+That's exactly what Unison does. Not a one-shot prompt — a **production loop**: Plan → Discuss → Develop → Review → Repeat until PASS.
+
+**Proof: Unison built Unison.** From its first commit (2026-06-18) through 5 self-modification cycles, Unison pipelines have refactored Unison's own source code — adding a PromptRegistry, SDD mode, PhaseRouter, MoA mode, and a discuss phase. Every change was designed by a Planner, implemented by a Developer, and gated by a Reviewer. 1,056 tests guard every commit.
+
+| Self-hosting cycle | What Unison built in Unison |
+|---|---|
+| P0 | PromptRegistry — unified prompt management |
+| P1 | Spec-Driven Development mode + GIVEN-WHEN-THEN gate |
+| P2 | PhaseRouter — data-driven pipeline routing |
+| P3 | Build prompt consolidation, flaky lock fix |
+| P5 | Mixture of Agents (MoA) mode — reliable multi-agent synthesis |
 
 ## Quick Start
 
@@ -118,6 +133,20 @@ unison webui --project . --port 9099
 ```
 
 ---
+
+---
+
+## Quick Links
+
+| Start here | |
+|---|---|
+| [Quick Start](#quick-start) | Clone → install → run your first pipeline |
+| [Pipeline Modes](#pipeline-modes-auto-detected) | 10 modes: code-dev, full-dev, spec-driven, moa, more |
+| [Web Dashboard](#web-dashboard) | Live view at `http://127.0.0.1:9099` |
+| [Model Fallback](#model-fallback) | Claude Code / Hermes / Codex / OpenClaw fallback config |
+| [Troubleshooting](#troubleshooting) | Common fixes for lock, budget, verdict issues |
+| [docs/MANUAL.md](docs/MANUAL.md) | Full usage manual |
+| [shared-skills](https://github.com/Xuan0629/shared-skills) | Companion: sync agent skills across runtimes |
 
 ## Features
 
