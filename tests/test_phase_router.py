@@ -163,8 +163,7 @@ class TestPhaseRouterBackwardCompat:
 
     def test_all_phase_names_are_unique_within_mode(self):
         """No mode has duplicate phase names."""
-        for mode in ["code-dev", "full-dev", "design-debate", "inspect-only",
-                      "agent-fix", "migrate", "greenfield", "spec-driven"]:
+        for mode in PhaseRouter.PHASES_BY_MODE:
             phases = PhaseRouter.get_phases(mode)
             names = [pd.name for pd in phases]
             assert len(names) == len(set(names)), (

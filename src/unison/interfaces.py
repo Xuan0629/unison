@@ -33,7 +33,9 @@ from enum import Enum
 Phase: TypeAlias = Literal[
     "init", "planning_active", "planning_review",
     "discuss_active", "discuss_review",
-    "dev_active", "dev_review", "done"
+    "dev_active", "dev_review", "done",
+    "moa_analyze",
+    "moa_synthesize",
 ]
 AgentRole: TypeAlias = str
 Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
@@ -44,12 +46,13 @@ ProjectLanguage: TypeAlias = Literal["python", "node", "rust", "go", "custom"]
 PipelineMode: TypeAlias = Literal[
     "code-dev",       # Developer ↔ Reviewer (no planner)
     "full-dev",       # Planner ↔ Reviewer → Developer ↔ Reviewer
-    "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no dev)
+    "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no planner)
     "inspect-only",   # Reviewer(s) → report (no planner, no dev)
     "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
     "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer
     "greenfield",     # New module from scratch — agent works only on specified files, no existing code
     "spec-driven",    # Planner → spec verification gate → Developer ↔ Reviewer
+    "moa",            # Mixture of Agents — parallel analyze → synthesize → rebuttal → finalize
 ]
 
 class RiskLevel(Enum):
@@ -318,6 +321,28 @@ class GreenfieldConfig:
 
 
 @dataclass
+class MoaConfig:
+    """Mixture of Agents configuration.
+
+    Attributes:
+        agents: Number of parallel analyzer agents per round (default 3).
+        rounds: Number of analyze→synthesize rounds (default 2).
+        runtime: Runtime for moa agents (default "claude").
+        model: Model for moa agents (default "deepseek-v4-pro").
+    """
+    agents: int = 3
+    rounds: int = 2
+    runtime: str = "claude"
+    model: str = "deepseek-v4-pro"
+
+    def __post_init__(self):
+        if self.agents < 1:
+            raise ValueError(f"moa.agents must be >= 1, got {self.agents}")
+        if self.rounds < 1:
+            raise ValueError(f"moa.rounds must be >= 1, got {self.rounds}")
+
+
+@dataclass
 class WebUiConfig:
     """Web dashboard auto-start configuration.
 
@@ -361,6 +386,7 @@ class PipelineSpec:
     who_can_run: list[str] = field(default_factory=lambda: ["cli"])  # "cli", "discord:channel_id", "hermes:session_id"
     self_heal: SelfHealConfig = field(default_factory=lambda: SelfHealConfig())  # self-heal auto-fix
     greenfield: GreenfieldConfig | None = None  # greenfield mode: isolated new module dev
+    moa: MoaConfig | None = None  # moa mode: mixture of agents parallel analysis
     webui: WebUiConfig = field(default_factory=lambda: WebUiConfig())  # auto-start web dashboard
 
     def get(self, role: AgentRole) -> AgentSpec:

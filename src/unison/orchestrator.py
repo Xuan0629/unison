@@ -20,7 +20,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from unison.interfaces import AgentResult, PipelineSpec, ReviewVerdict, VerdictParseError
+from unison.interfaces import AgentResult, MoaConfig, PipelineSpec, ReviewVerdict, VerdictParseError
 from unison.phase_router import PhaseRouter
 from unison.pipeline import PipelineValidationError
 from unison.prompt_registry import PromptRegistry
@@ -309,6 +309,8 @@ class Orchestrator:
                 self._run_discussion_loop()
             elif pd.name == "review":
                 self._run_review_only()
+            elif pd.name.startswith("moa-"):
+                self._run_moa_phase(pd)
             elif pd.active_phase == "dev_active" and self.spec.dag is not None:
                 self._run_dag_development()
             else:
@@ -348,6 +350,255 @@ class Orchestrator:
             self._invoke_multi_reviewer(1, "dev_review", agent_specs=reviewer_agents)
         else:
             self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
+
+    # ==================================================================
+    # MoA (Mixture of Agents) handlers
+    # ==================================================================
+
+    def _run_moa_phase(self, pd) -> None:
+        """Route moa sub-phases to their handler methods.
+
+        Called from :meth:`_run_state_machine` for each moa PhaseDef.
+        Tracks current round on ``self._moa_current_round``, incremented
+        after each synthesize/finalize phase.
+        """
+        if self._state.halt_signal:
+            return
+
+        # Initialize round counter on first moa phase (lazy — avoids
+        # coupling __init__ to moa)
+        if not hasattr(self, '_moa_current_round'):
+            self._moa_current_round = 1
+
+        round_n = self._moa_current_round
+        moa_config = self.spec.moa or MoaConfig()
+
+        # Publish phase event for observability
+        self._state.transition(
+            pd.active_phase, "orchestrator",
+            iter_n=round_n,
+            note=f"moa {pd.name} round {round_n}",
+        )
+        self._publish_phase_event(pd.active_phase, note=f"moa {pd.name} round {round_n}")
+        self._save_checkpoint(round_n)
+
+        if pd.name in ("moa-analyze", "moa-rebuttal"):
+            self._run_moa_analyze(round_n, moa_config)
+        elif pd.name in ("moa-synthesize", "moa-finalize"):
+            self._run_moa_synthesis(round_n, moa_config)
+
+        # Advance round after synthesis/finalize (prepare for next analyze round)
+        if pd.name in ("moa-synthesize", "moa-finalize"):
+            self._moa_current_round += 1
+
+    def _run_moa_analyze(self, round_n: int, moa_config) -> None:
+        """Run N analyzer agents in parallel for MoA round *round_n*.
+
+        Each agent writes to ``reviews/moa-{agent_label}-round{N}.md``.
+        Uses :meth:`_invoke_agents_parallel` pattern (ThreadPoolExecutor).
+
+        When *round_n* > 1 (rebuttal mode), the synthesis from the
+        previous round is prepended to each agent's prompt as context.
+        """
+        from unison.interfaces import MoaConfig, AgentSpec
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        if self._state.halt_signal:
+            return
+
+        world = self.spec.world
+        reviews_dir = world.reviews_dir
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate dynamic agent specs
+        agent_specs: list[AgentSpec] = []
+        for i in range(1, moa_config.agents + 1):
+            role = f"moa-agent{i}"
+            agent_specs.append(AgentSpec(
+                role=role,
+                runtime=moa_config.runtime,  # type: ignore[arg-type]
+                model=moa_config.model,
+                system_prompt_path=Path("prompts/moa-analyzer.md"),
+                pipeline_role="analyzer",
+            ))
+
+        # Read previous synthesis for rebuttal context
+        synthesis_context = ""
+        if round_n > 1:
+            prev_synthesis = reviews_dir / f"moa-synthesis-round{round_n - 1}.md"
+            if prev_synthesis.exists():
+                raw = prev_synthesis.read_text(encoding="utf-8")
+                # Truncate to 8KB to avoid context bloat
+                synthesis_context = raw[:8192]
+                if len(raw) > 8192:
+                    synthesis_context += "\n...[synthesis truncated]"
+
+        def invoke_one(spec: AgentSpec) -> None:
+            runner = self._runners.get(spec.runtime)
+            if runner is None:
+                return
+
+            output_file = reviews_dir / f"moa-{spec.role}-round{round_n}.md"
+
+            # Build task instruction via registry
+            task = self._registry.task_for(
+                "moa-analyzer", round_n,
+                review_file=str(output_file),
+                mode=self.spec.mode,
+            )
+
+            # Build system prompt via registry
+            sp_path = world.root / spec.system_prompt_path
+            system_prompt = self._registry.resolve(
+                "moa-analyzer", sp_path, mode=self.spec.mode,
+            )
+
+            # Build prompt
+            prompt_parts = [
+                f"=== MoA Analyzer: {spec.role} (Round {round_n}) ===",
+                task,
+            ]
+            if synthesis_context:
+                prompt_parts.append(
+                    f"\n## Previous Round Synthesis\n{synthesis_context}"
+                )
+            prompt_parts.append(
+                f"\nWrite your analysis to: {output_file}"
+            )
+
+            full_prompt = system_prompt + "\n\n" + "\n".join(prompt_parts)
+
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            log_path = world.agent_log(
+                spec.role, round_n,  # type: ignore[arg-type]
+                timestamp,
+            )
+
+            runner.run(
+                spec=spec,
+                prompt=full_prompt,
+                workdir=world.root,
+                timeout=self.spec.per_agent_timeout,
+                log_path=log_path,
+            )
+
+            # Budget tracking
+            tracker = self._get_budget_tracker("analyzer")
+            estimated_tokens = max(1, len(full_prompt) // 4)
+            tracker.add_usage(
+                estimated_tokens,
+                phase=f"moa_analyze_{spec.role}",
+                iter_n=round_n,
+            )
+
+        with ThreadPoolExecutor(max_workers=len(agent_specs)) as executor:
+            futures = [executor.submit(invoke_one, s) for s in agent_specs]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    pass  # per-agent failures are non-fatal
+
+    def _run_moa_synthesis(self, round_n: int, moa_config) -> None:
+        """Run a single synthesizer agent to merge MoA analyses.
+
+        Reads all ``reviews/moa-*-round{N}.md`` files and writes a
+        consolidated synthesis to ``reviews/moa-synthesis-round{N}.md``.
+        """
+        if self._state.halt_signal:
+            return
+
+        world = self.spec.world
+        reviews_dir = world.reviews_dir
+
+        # Discover analysis files for this round
+        analysis_files = sorted(reviews_dir.glob(f"moa-*-round{round_n}.md"))
+        # Filter out synthesis files (only agent analyses)
+        analysis_files = [
+            f for f in analysis_files
+            if not f.name.startswith("moa-synthesis-")
+        ]
+
+        if not analysis_files:
+            # No analyses to synthesize — log and skip
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "moa synthesis round %d: no analysis files found in %s",
+                round_n, reviews_dir,
+            )
+            return
+
+        # Read all analysis files (truncate each to 8KB)
+        analyses_text = ""
+        for af in analysis_files:
+            raw = af.read_text(encoding="utf-8")
+            analyses_text += f"\n### {af.name}\n"
+            analyses_text += raw[:8192]
+            if len(raw) > 8192:
+                analyses_text += "\n...[truncated]"
+            analyses_text += "\n"
+
+        # Build synthesizer agent spec
+        from unison.interfaces import AgentSpec
+        synth_spec = AgentSpec(
+            role="moa-synthesizer",
+            runtime=moa_config.runtime,  # type: ignore[arg-type]
+            model=moa_config.model,
+            system_prompt_path=Path("prompts/moa-synthesizer.md"),
+            pipeline_role="synthesizer",
+        )
+
+        output_file = reviews_dir / f"moa-synthesis-round{round_n}.md"
+
+        # Build task instruction via registry
+        task = self._registry.task_for(
+            "moa-synthesizer", round_n,
+            review_file=str(output_file),
+            mode=self.spec.mode,
+        )
+
+        # Build system prompt via registry
+        sp_path = world.root / synth_spec.system_prompt_path
+        system_prompt = self._registry.resolve(
+            synth_spec.role, sp_path, mode=self.spec.mode,
+        )
+
+        full_prompt = (
+            f"{system_prompt}\n\n"
+            f"=== MoA Synthesizer (Round {round_n}) ===\n"
+            f"{task}\n\n"
+            f"## Agent Analyses (Round {round_n})\n"
+            f"{analyses_text}\n\n"
+            f"Write your consolidated synthesis to: {output_file}"
+        )
+
+        runner = self._runners.get(synth_spec.runtime)
+        if runner is None:
+            return
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        log_path = world.agent_log(
+            "moa-synthesizer", round_n,  # type: ignore[arg-type]
+            timestamp,
+        )
+
+        runner.run(
+            spec=synth_spec,
+            prompt=full_prompt,
+            workdir=world.root,
+            timeout=self.spec.per_agent_timeout,
+            log_path=log_path,
+        )
+
+        # Budget tracking
+        tracker = self._get_budget_tracker("synthesizer")
+        estimated_tokens = max(1, len(full_prompt) // 4)
+        tracker.add_usage(
+            estimated_tokens,
+            phase="moa_synthesize",
+            iter_n=round_n,
+        )
 
     def _run_discussion_loop(self) -> None:
         """Pre-implementation discussion: Developer proposes approach, Reviewer critiques.

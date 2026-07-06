@@ -134,6 +134,37 @@ class PromptRegistry:
             "- Find at least 1 improvement (mark [RARE: NO_FINDINGS] if truly none)\n"
             "- Same issue repeated across iterations → escalate severity\n"
         ),
+        "moa-analyzer": (
+            "# MoA Analyzer Prompt\n\n"
+            "You are an analyzer agent in the Unison MoA (Mixture of Agents) pipeline.\n\n"
+            "## Responsibilities\n"
+            "1. Read the task context (PRD, tech-design, and any previous synthesis)\n"
+            "2. Produce an independent, thorough analysis\n"
+            "3. Cover: approach, risks, edge cases, assumptions, and trade-offs\n"
+            "4. Be opinionated — your unique perspective is valuable for synthesis\n"
+            "5. Do NOT read other agents' analyses (this preserves independence)\n\n"
+            "## Output\n"
+            "Write your analysis to the specified output file in reviews/.\n"
+            "Structure it clearly so the synthesizer can extract key points.\n"
+        ),
+        "moa-synthesizer": (
+            "# MoA Synthesizer Prompt\n\n"
+            "You are a synthesizer agent in the Unison MoA (Mixture of Agents) pipeline.\n\n"
+            "## Responsibilities\n"
+            "1. Read ALL agent analysis files for the current round\n"
+            "2. Identify agreements (all agents concur)\n"
+            "3. Identify disagreements (conflicting views — surface them explicitly)\n"
+            "4. Identify unique insights (only one agent noticed — flag these)\n"
+            "5. Assign confidence levels to conclusions\n"
+            "6. Write a consolidated synthesis to the specified output file\n\n"
+            "## Output Format\n"
+            "Structure your synthesis with clear sections:\n"
+            "- Agreements\n"
+            "- Disagreements (with agent positions)\n"
+            "- Unique Insights\n"
+            "- Confidence Assessment\n"
+            "- Recommended Approach\n"
+        ),
     }
 
     # ------------------------------------------------------------------
@@ -200,6 +231,22 @@ class PromptRegistry:
             "4. Write review to {review_file} with YAML frontmatter\n"
             "5. Append findings to reviews/findings.md for cross-iteration tracking\n"
             "6. Do NOT modify src/ or dev-proposal.md"
+        ),
+        "moa-analyzer": (
+            "Iteration {iteration} — MoA Analyzer Operational Constraints:\n"
+            "- Analyze the task described in prd/PRD.md and prd/tech-design.md\n"
+            "- Write your independent analysis to {review_file}\n"
+            "- Focus on: approach, risks, edge cases, assumptions, and trade-offs\n"
+            "- Be opinionated — surface disagreements later phases will reconcile\n"
+            "- Do NOT read other agents' analyses (this is an independent analysis round)"
+        ),
+        "moa-synthesizer": (
+            "Iteration {iteration} — MoA Synthesizer Operational Constraints:\n"
+            "- Read all agent analysis files in reviews/moa-*-round{iteration}.md\n"
+            "- Write a consolidated synthesis to {review_file}\n"
+            "- Identify: agreements (all agents concur), disagreements (conflicting views),\n"
+            "  unique insights (only one agent noticed), and confidence levels\n"
+            "- Be concise but comprehensive — the next round's agents will read this"
         ),
     }
 

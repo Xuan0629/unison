@@ -96,6 +96,36 @@ class PhaseRouter:
             PhaseDef("dev", "dev_active", "dev_review", "developer",
                      "code + tests"),
         ],
+        "moa": [
+            PhaseDef(
+                name="moa-analyze",
+                active_phase="moa_analyze",
+                review_phase="",
+                role="analyzer",
+                review_of="task",
+            ),
+            PhaseDef(
+                name="moa-synthesize",
+                active_phase="moa_synthesize",
+                review_phase="",
+                role="synthesizer",
+                review_of="analyses",
+            ),
+            PhaseDef(
+                name="moa-rebuttal",
+                active_phase="moa_analyze",
+                review_phase="",
+                role="analyzer",
+                review_of="task + synthesis",
+            ),
+            PhaseDef(
+                name="moa-finalize",
+                active_phase="moa_synthesize",
+                review_phase="",
+                role="synthesizer",
+                review_of="rebuttals",
+            ),
+        ],
     }
 
     @classmethod

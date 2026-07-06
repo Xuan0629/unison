@@ -43,6 +43,7 @@ from unison.interfaces import (
     BootstrapConfig,
     BudgetConfig,
     GreenfieldConfig,
+    MoaConfig,
     PipelineMode,
     PipelineSpec,
     ProjectConfig,
@@ -203,6 +204,7 @@ class PipelineLoader:
             agent_log_retention_hours=raw.get("agent_log_retention_hours", 168),
             self_heal=self._build_self_heal(raw.get("self_heal")),
             greenfield=self._build_greenfield(raw.get("greenfield")),
+            moa=self._build_moa(raw.get("moa")),
             webui=self._build_webui(raw.get("webui")),
         )
 
@@ -535,6 +537,18 @@ class PipelineLoader:
             files=raw.get("files", []),
             task=raw.get("task", ""),
             skeleton=raw.get("skeleton"),
+        )
+
+    @staticmethod
+    def _build_moa(raw: dict[str, Any] | None) -> MoaConfig | None:
+        """Build MoaConfig from raw YAML, returns None if not set."""
+        if not raw:
+            return None
+        return MoaConfig(
+            agents=raw.get("agents", 3),
+            rounds=raw.get("rounds", 2),
+            runtime=raw.get("runtime", "claude"),
+            model=raw.get("model", "deepseek-v4-pro"),
         )
 
     @staticmethod
