@@ -31,15 +31,14 @@ Unison 同样如此：轻量、无状态，将多个 AI Agent 编排为协作流
 
 这正是 Unison 做的事。不是一次性提示词——而是一个**生产级循环**：规划 → 讨论 → 开发 → 审查 → 重复直到通过。
 
-**自举验证：Unison 用 Unison 开发了自己。** 从首次提交（2026-06-18）起，经过 5 次自我修改循环，Unison 管道重构了 Unison 自身的源代码——添加了 PromptRegistry、SDD 模式、PhaseRouter、MoA 模式和讨论阶段。每一次改动都由 Planner 设计、Developer 实现、Reviewer 把关。1,056 个测试守护每一次提交。
+**自举验证：Unison 用 Unison 开发了自己。** 从首次提交（2026-06-18）起，经过 20+ 次自我修改循环，Unison 管道设计、实现并审查了 Unison 自身的源代码——从 PromptRegistry 和 SDD 模式到 PhaseRouter、MoA 模式和讨论阶段。每一次改动：Planner 设计，Developer 编码，Reviewer 把关。1,056 个测试守护每一次提交。
 
-| 自举循环 | Unison 在 Unison 中构建了什么 |
+| 自举亮点 | Unison 在 Unison 中构建了什么 |
 |---|---|
-| P0 | PromptRegistry — 统一 prompt 模板管理 |
-| P1 | 规范驱动开发（SDD）模式 + GIVEN-WHEN-THEN 门禁 |
-| P2 | PhaseRouter — 数据驱动的管道路由 |
-| P3 | Build prompt 整合，flaky 锁修复 |
-| P5 | MoA 模式 — 可靠的多 agent 合成 |
+| V1 架构（6月18日） | 14 个核心模块——状态机、runner、风险引擎、observer |
+| V2 阶段（6月19日） | 7 个高级特性——DAG、并行 agent、多 reviewer |
+| Pipeline A+B（6月21日） | 6 种命名模式 + 多 agent 并行 |
+| P0–P5（7月6日） | PromptRegistry、SDD、PhaseRouter、MoA、讨论阶段 |
 
 ## 快速开始
 

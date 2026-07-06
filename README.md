@@ -26,15 +26,14 @@ Unison is a **Loop Engineering pipeline** — not a prompt library, not an agent
 
 That's exactly what Unison does. Not a one-shot prompt — a **production loop**: Plan → Discuss → Develop → Review → Repeat until PASS.
 
-**Proof: Unison built Unison.** From its first commit (2026-06-18) through 5 self-modification cycles, Unison pipelines have refactored Unison's own source code — adding a PromptRegistry, SDD mode, PhaseRouter, MoA mode, and a discuss phase. Every change was designed by a Planner, implemented by a Developer, and gated by a Reviewer. 1,056 tests guard every commit.
+**Proof: Unison built Unison.** From its first commit (2026-06-18) through 20+ self-modification cycles, Unison pipelines have designed, implemented, and reviewed Unison's own source code — adding everything from the PromptRegistry and SDD mode to the PhaseRouter, MoA mode, and discuss phase. Every change: Planner designed it, Developer coded it, Reviewer gated it. 1,056 tests guard every commit.
 
-| Self-hosting cycle | What Unison built in Unison |
+| Self-hosting highlights | What Unison built in Unison |
 |---|---|
-| P0 | PromptRegistry — unified prompt management |
-| P1 | Spec-Driven Development mode + GIVEN-WHEN-THEN gate |
-| P2 | PhaseRouter — data-driven pipeline routing |
-| P3 | Build prompt consolidation, flaky lock fix |
-| P5 | Mixture of Agents (MoA) mode — reliable multi-agent synthesis |
+| V1 Architecture (Jun 18) | 14 core modules — state machine, runners, risk engine, observer |
+| V2 Phases (Jun 19) | 7 advanced features — DAG, parallel agents, multi-reviewer |
+| Pipeline A+B (Jun 21) | 6 named modes + multi-agent parallel |
+| P0–P5 (Jul 6) | PromptRegistry, SDD, PhaseRouter, MoA, discuss phase |
 
 ## Quick Start
 
