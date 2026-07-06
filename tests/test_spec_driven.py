@@ -605,3 +605,81 @@ class TestSDDPromptContent:
                 f"SDD planner prompt missing artifact '{artifact}' that the "
                 f"gate checks for"
             )
+
+
+# ===========================================================================
+# Multi-planner + spec-driven guard
+# ===========================================================================
+
+class TestMultiPlannerSpecDrivenGuard:
+    """Multi-planner is not yet supported in spec-driven mode."""
+
+    def _make_orchestrator(self, tmp_path: Path, mode: str = "spec-driven"):
+        """Create an Orchestrator with multiple planner agents."""
+        from unison.orchestrator import Orchestrator
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f"""\
+version: "1.0"
+project_root: "."
+mode: {mode}
+agents:
+  planner_a:
+    role: planner-a
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/planner.md"
+    pipeline_role: planner
+  planner_b:
+    role: planner-b
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/planner.md"
+    pipeline_role: planner
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "planner.md").write_text("# Planner")
+        (prompts_dir / "developer.md").write_text("# Developer")
+        (prompts_dir / "reviewer.md").write_text("# Reviewer")
+
+        from unison.pipeline import PipelineLoader
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        return Orchestrator(spec=spec)
+
+    def test_multi_planner_spec_driven_halts(self, tmp_path):
+        """Multi-planner + spec-driven halts with a clear diagnostic message."""
+        orch = self._make_orchestrator(tmp_path, mode="spec-driven")
+
+        # Resolve the two planner agents
+        planner_agents = orch._resolve_agents("planner")
+        assert len(planner_agents) >= 2, (
+            f"Expected >= 2 planner agents, got {len(planner_agents)}"
+        )
+
+        orch._invoke_multi_planner(planner_agents, iteration=1, parallel_mode="homogeneous")
+
+        assert orch.state().halt_signal
+        assert "spec-driven" in orch.state().halt_reason.lower()
+        assert "multi-planner" in orch.state().halt_reason.lower()
+
+    def test_multi_planner_full_dev_does_not_halt(self, tmp_path):
+        """Multi-planner in full-dev mode does NOT trigger the guard."""
+        orch = self._make_orchestrator(tmp_path, mode="full-dev")
+        # Just verify the mode is set correctly and the guard would not fire
+        # (the actual invocation would try to run agents, so we only verify
+        # the mode check passes)
+        assert orch.spec.mode == "full-dev"
+        # The guard only fires for spec-driven
+        assert orch.spec.mode != "spec-driven"

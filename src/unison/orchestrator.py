@@ -893,7 +893,25 @@ class Orchestrator:
 
         After all complete, the first planner's PRD is symlinked as the
         canonical ``prd/PRD.md`` for downstream consumption.
+
+        **spec-driven mode**: Multi-planner is not yet supported for SDD
+        because the 4-artifact format (proposal.md, design.md, specs/*.md,
+        tasks.md) has no defined merge/selection strategy across multiple
+        planners.  The pipeline halts with a diagnostic message.
         """
+        # Guard: spec-driven + multi-planner is not yet defined
+        if self.spec.mode == "spec-driven":
+            self.halt(
+                "Multi-planner is not supported in spec-driven mode. "
+                "The SDD 4-artifact format (proposal.md, design.md, "
+                "specs/*.md, tasks.md) has no defined merge/selection "
+                "strategy across multiple planners. Use a single planner "
+                "agent for spec-driven pipelines, or define a multi-planner "
+                "SDD flow (e.g. one planner per artifact, or round-robin "
+                "merge)."
+            )
+            return
+
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         world = self.spec.world
