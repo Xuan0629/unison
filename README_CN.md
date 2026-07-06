@@ -120,14 +120,15 @@ unison webui --project . --port 9099
 | 模式 | 流程 | 场景 |
 |------|------|------|
 | `code-dev` | Developer ↔ Reviewer | 代码开发（PRD 预写） |
-| `full-dev` | Planner ↔ Reviewer → Developer ↔ Reviewer | 全流程开发 |
+| `full-dev` | Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer | 全流程开发 |
 | `design-debate` | Multi-Planner ↔ Multi-Reviewer | 设计讨论会 |
 | `inspect-only` | Reviewer(s) → 报告 | 审计/审查 |
 | `agent-fix` | Multi-Developer → Multi-Reviewer | Agent 修复/优化 |
-| `migrate` | Planner ↔ Reviewer → Developer ↔ Reviewer | 跨项目迁移 |
+| `migrate` | Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer | 跨项目迁移 |
 | `a2a-debate` | 多 Agent 异步文件系统辩论 | Agent 间设计审查 |
 | `greenfield` | Developer ↔ Reviewer（隔离新模块） | 从零构建新功能，不碰已有代码 |
-| `spec-driven` | Planner → Spec Gate → Developer ↔ Reviewer | 规范驱动开发，强制 GIVEN-WHEN-THEN 规范 |
+| `spec-driven` | Planner → Spec Gate → Discuss → Developer ↔ Reviewer | 规范驱动开发，强制 GIVEN-WHEN-THEN 规范 |
+| `moa` | N Agent 并行 → 合成 → 辩论 → 终稿 | MoA 模式 — Hermes delegate_task 不稳定时的可靠替代 |
 
 ### 自定义角色
 
@@ -277,6 +278,7 @@ Unison Orchestrator（状态机）
 ├── PhaseRouter         （数据驱动 pipeline 模式路由）
 ├── Planner Agent    ⇄  Reviewer Agent   ← 规划循环
 ├── Developer Agent  ⇄  Reviewer Agent   ← 开发循环
+├── MoA Mode            （N Agent 并行 → 合成）
 ├── Spec-Driven Mode    （GIVEN-WHEN-THEN 规范门禁）
 ├── A2A Debate Mode  （多 agent 文件系统辩论）
 ├── FileLockManager     （O_CREAT|O_EXCL）

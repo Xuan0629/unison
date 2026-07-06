@@ -120,14 +120,15 @@ unison webui --project . --port 9099
 | Mode | Flow | Use Case |
 |------|------|----------|
 | `code-dev` | Developer ↔ Reviewer | Code development (PRD pre-written) |
-| `full-dev` | Planner ↔ Reviewer → Developer ↔ Reviewer | Full workflow |
+| `full-dev` | Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer | Full workflow |
 | `design-debate` | Multi-Planner ↔ Multi-Reviewer | Design discussions |
 | `a2a-debate` | Multi-Agent asynchronous debate via filesystem | Agent-to-agent design reviews |
 | `inspect-only` | Reviewer(s) → report | Audits / inspections |
 | `agent-fix` | Multi-Developer → Multi-Reviewer | Agent repair / optimization |
 | `migrate` | Planner ↔ Reviewer → Developer ↔ Reviewer | Cross-project migration |
 | `greenfield` | Developer ↔ Reviewer (isolated new module) | New feature from scratch, no existing code access |
-| `spec-driven` | Planner → Spec Gate → Developer ↔ Reviewer | Spec-driven development with mandatory GIVEN-WHEN-THEN specs |
+| `spec-driven` | Planner → Spec Gate → Discuss → Developer ↔ Reviewer | Spec-driven development with mandatory GIVEN-WHEN-THEN specs |
+| `moa` | N-Agent parallel → Synthesizer → Rebuttal → Final | Mixture of Agents — reliable where Hermes delegate_task isn't |
 
 ### Custom Roles
 
@@ -282,6 +283,7 @@ Unison Orchestrator (state machine)
 ├── PhaseRouter         (data-driven pipeline modes)
 ├── Planner Agent    ⇄  Reviewer Agent   ← planning loop
 ├── Developer Agent  ⇄  Reviewer Agent   ← dev loop
+├── MoA Mode            (N-agent parallel → Synthesizer)
 ├── Spec-Driven Mode    (GIVEN-WHEN-THEN spec gate)
 ├── A2A Debate Mode  (multi-agent filesystem debate)
 ├── FileLockManager     (O_CREAT|O_EXCL)
