@@ -13,15 +13,13 @@ import sys
 from pathlib import Path
 
 from unison.pipeline_generator import (
-    _DEVELOPER_PROMPT,
     _MODE_AGENT_TEMPLATES,
-    _PLANNER_PROMPT,
-    _REVIEWER_PROMPT,
     _VALID_RUNTIMES,
     _build_pipeline_yaml,
     _write_prompt_file,
     detect_mode,
 )
+from unison.prompt_registry import PromptRegistry
 
 # Re-export for convenience
 RUNTIMES = list(_VALID_RUNTIMES)
@@ -201,10 +199,22 @@ class InitWizard:
         # Write prompts/
         prompts_dir = self.root / "prompts"
         prompts_dir.mkdir(parents=True, exist_ok=True)
-        _write_prompt_file(prompts_dir / "developer.md", _DEVELOPER_PROMPT, description)
-        _write_prompt_file(prompts_dir / "reviewer.md", _REVIEWER_PROMPT, description)
+        _write_prompt_file(
+            prompts_dir / "developer.md",
+            PromptRegistry.DEFAULT_PROMPTS["developer"],
+            description,
+        )
+        _write_prompt_file(
+            prompts_dir / "reviewer.md",
+            PromptRegistry.DEFAULT_PROMPTS["reviewer"],
+            description,
+        )
         if mode in ("full-dev", "design-debate"):
-            _write_prompt_file(prompts_dir / "planner.md", _PLANNER_PROMPT, description)
+            _write_prompt_file(
+                prompts_dir / "planner.md",
+                PromptRegistry.DEFAULT_PROMPTS["planner"],
+                description,
+            )
 
         # Write pipeline.yaml
         yaml_content = _build_pipeline_yaml(
