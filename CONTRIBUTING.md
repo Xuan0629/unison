@@ -1,49 +1,17 @@
 # Contributing to Unison
 
-Thank you for your interest in contributing to Unison (万物一心).
+Thanks for your interest in contributing to Unison (万物一心)!
 
-## License
+Unison is licensed under [Apache License 2.0](LICENSE). By contributing, you agree that your contributions will be licensed under the same terms.
 
-Unison is licensed under the [Business Source License 1.1](LICENSE). By contributing to this project, you agree that your contributions will be licensed under the same terms.
+## Ways to Contribute
 
-## Contributor License Agreement (CLA)
-
-Before we can accept your contribution, you must sign a Contributor License Agreement (CLA). The CLA clarifies that:
-
-1. You own the copyright to your contribution
-2. You grant the project maintainer a perpetual, worldwide, non-exclusive license to use your contribution under the project's license terms
-3. You are not violating any third-party rights or obligations
-
-To sign the CLA, open a pull request and reply to the CLA bot with:
-```
-I have read the CLA and agree to its terms.
-```
-
-Alternatively, for larger contributions, a formal CLA document can be provided upon request.
-
-## How to Contribute
-
-### Reporting Bugs
-- Open an issue with: steps to reproduce, expected vs actual behavior, Unison version, Python version, OS
-- Include relevant `state.json` or log snippets (redact API keys)
-
-### Suggesting Features
-- Open an issue with the `enhancement` label
-- Describe the use case and expected behavior
-
-### Pull Requests
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes (follow existing code style)
-4. Add tests for new functionality
-5. Run `pytest tests/` and ensure all pass
-6. Open a PR with a clear description
-
-### Code Style
-- Follow PEP 8
-- Use type hints
-- Match existing module patterns (see `src/unison/` for examples)
-- Docstrings for public functions
+- **Bug reports** — Open an issue with steps to reproduce
+- **Feature requests** — Open an issue describing the use case
+- **Code contributions** — Fork → branch → PR (see below)
+- **Documentation** — Fix typos, improve README, translate
+- **Test coverage** — Write tests for untested code paths
+- **Platform testing** — Test on macOS / Windows WSL and report results
 
 ## Development Setup
 
@@ -51,8 +19,35 @@ Alternatively, for larger contributions, a formal CLA document can be provided u
 git clone https://github.com/Xuan0629/unison.git
 cd unison
 pip install -e .
-PYTHONPATH=$PWD:$PWD/src pytest tests/
+pytest tests/ -v    # Should pass
 ```
 
-## Communication
-Open a GitHub issue for questions or reach out via Discord.
+## Pull Request Process
+
+1. Fork the repo and create a feature branch
+2. Write or update tests for your changes
+3. Run `pytest tests/ -v` — all tests must pass
+4. Keep diffs minimal — no reformatting of unrelated code
+5. Open a PR with a clear description of what and why
+
+## Code Style
+
+- Match existing patterns in the codebase
+- Use `pathlib.Path` for all path operations
+- Use `dataclass` for configuration objects
+- Follow Python naming conventions (snake_case)
+
+## Running with Unison Itself
+
+Unison is self-hosting — you can use Unison pipelines to develop Unison:
+
+```bash
+# Write a PRD to prd/PRD.md, then:
+unison run --pipeline my-unison-fix.yaml
+```
+
+See `docs/MANUAL.md` for pipeline configuration details.
+
+## Questions?
+
+Open a [GitHub Discussion](https://github.com/Xuan0629/unison/discussions) or an issue.

@@ -6,7 +6,13 @@
 > ——《Slay the Spire》故障机器人金卡"万物一心"
 
 **Unison（万物一心）** 是一个本地优先、文件驱动的 Multi-Agent 自动化协作桥梁。
-不依赖 LangChain / CrewAI / AutoGen，自建 BSL 1.1 许可（2030-07-01 转为 GPLv3）。
+不依赖 LangChain / CrewAI / AutoGen，自建 Apache 2.0 许可。
+
+| 平台 | 状态 |
+|------|------|
+| Linux | ✅ 完整支持（主力开发环境） |
+| macOS | ✅ 初步测试通过 — polling fallback 可用 |
+| Windows (WSL) | ⚠️ 待测试 — 预期可用，SIGTERM 缺失 |
 
 命名灵感来自《Slay the Spire》中"故障机器人"的金卡"万物一心"——
 打出后从弃牌堆中回收所有 0 费资源，复用优质卡组成combo。
@@ -433,4 +439,4 @@ Unison 提供协作框架，你的 Agent 配置决定协作质量——Agent 的
 
 ## 许可证
 
-[Business Source License 1.1](LICENSE) — 2030-07-01 转为 GPLv3。
+[Apache License 2.0](LICENSE) — 宽松许可，专利保护，商业友好。

@@ -6,7 +6,13 @@
 > —— *Slay the Spire*, Defect Rare Card "Unison"
 
 **Unison（万物一心）** is a local-first, filesystem-driven multi-agent collaboration bridge.
-Zero dependencies on LangChain / CrewAI / AutoGen. Self-built, BSL 1.1 licensed (converts to GPLv3 after 2030-07-01).
+Zero dependencies on LangChain / CrewAI / AutoGen. Self-built, Apache 2.0 licensed.
+
+| Platform | Status |
+|----------|--------|
+| Linux | ✅ Full support (primary dev environment) |
+| macOS | ✅ Tested — works with polling fallback |
+| Windows (WSL) | ⚠️ Untested — expected to work, SIGTERM missing |
 
 The name is inspired by the Defect's rare card "Unison" from *Slay the Spire* —
 it retrieves all 0-cost resources from the discard pile and chains them into a lethal combo.
@@ -434,4 +440,4 @@ Recommended for any Unison user running pipelines with 2+ agents.
 
 ## License
 
-[Business Source License 1.1](LICENSE) — converts to GPLv3 on 2030-07-01.
+[Apache License 2.0](LICENSE) — permissive, patent-protected, commercial-friendly.
