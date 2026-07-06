@@ -26,14 +26,15 @@ Unison is a **Loop Engineering pipeline** — not a prompt library, not an agent
 
 That's exactly what Unison does. Not a one-shot prompt — a **production loop**: Plan → Discuss → Develop → Review → Repeat until PASS.
 
-**Proof: Unison built Unison.** From its first commit (2026-06-18) through 20+ self-modification cycles, Unison pipelines have designed, implemented, and reviewed Unison's own source code — adding everything from the PromptRegistry and SDD mode to the PhaseRouter, MoA mode, and discuss phase. Every change: Planner designed it, Developer coded it, Reviewer gated it. 1,056 tests guard every commit.
+**Proof: Unison built Unison.** After SEAN wrote the initial 14 core modules (Jun 18), Unison took over — 20+ self-modification cycles later, every feature added since has been designed by a Planner, implemented by a Developer, and gated by a Reviewer. 1,056 tests guard every commit.
 
-| Self-hosting highlights | What Unison built in Unison |
+| Self-hosting milestone | What Unison built in Unison |
 |---|---|
-| V1 Architecture (Jun 18) | 14 core modules — state machine, runners, risk engine, observer |
-| V2 Phases (Jun 19) | 7 advanced features — DAG, parallel agents, multi-reviewer |
-| Pipeline A+B (Jun 21) | 6 named modes + multi-agent parallel |
-| P0–P5 (Jul 6) | PromptRegistry, SDD, PhaseRouter, MoA, discuss phase |
+| Core Upgrade (Jun 19) | SQLite channel, DAG scheduler, 4-agent mode, parallel dev, multi-reviewer |
+| Production Hardening (Jun 20) | Atomic O_CREAT\|O_EXCL locking, graceful shutdown, secret masking, streaming logs |
+| Pipeline System (Jun 21) | 6 named modes, multi-agent parallel orchestration |
+| Introspection (Jun 27–Jul 5) | Self-heal auto-fix, Web UI dashboard, supervisor, retry engine |
+| Self-Improvement (Jul 6) | PromptRegistry, SDD mode, PhaseRouter, MoA, discuss phase |
 
 ## Quick Start
 
