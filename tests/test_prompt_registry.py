@@ -68,14 +68,14 @@ class TestPromptRegistry:
         assert result != registry.DEFAULT_PROMPTS["developer"]
 
     def test_resolve_spec_verifier_role(self):
-        """resolve() returns proper system prompt for spec-verifier role.
+        """resolve() returns the built-in system prompt for spec-verifier role.
 
-        spec-verifier is a known role referenced in the tech-design. Since it's
-        not in DEFAULT_PROMPTS, it should get the generic fallback.
+        spec-verifier is registered in DEFAULT_PROMPTS (PRD deliverable 2).
         """
         registry = PromptRegistry()
         result = registry.resolve("spec-verifier", None)
-        assert "spec-verifier" in result
+        assert "Spec Verifier" in result
+        assert result == registry.DEFAULT_PROMPTS["spec-verifier"]
 
     # ------------------------------------------------------------------
     # task_for()
