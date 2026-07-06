@@ -1347,7 +1347,7 @@ class Orchestrator:
 
         # Read system prompt via registry (file > built-in > fallback)
         sp_path = world.root / agent_spec.system_prompt_path
-        system_prompt = self._registry.resolve(agent_spec.role, sp_path)
+        system_prompt = self._registry.resolve(role, sp_path)
 
         # Read PRD + tech-design content for context assembly
         prd_content = ""
