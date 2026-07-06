@@ -84,23 +84,25 @@
       <div id="pipeline-config"></div>
     </div>
 
-    <div class="sidebar__section">
-      <h3 class="sidebar__heading sidebar__heading--collapsible" id="token-settings-heading-toggle" onclick="toggleSection('token-settings')" role="button" tabindex="0" aria-expanded="false">
-        <span class="sidebar__heading-arrow">&#9654;</span>
-        <span id="token-settings-heading">TOKEN SETTINGS</span>
+    <!-- Token settings disabled — estimates too inaccurate
+    <div class=\"sidebar__section\">
+      <h3 class=\"sidebar__heading sidebar__heading--collapsible\" id=\"token-settings-heading-toggle\" onclick=\"toggleSection('token-settings')\" role=\"button\" tabindex=\"0\" aria-expanded=\"false\">
+        <span class=\"sidebar__heading-arrow\">&#9654;</span>
+        <span id=\"token-settings-heading\">TOKEN SETTINGS</span>
       </h3>
-      <div id="token-settings" class="sidebar__collapsible u-hidden">
-        <div class="token-settings__field">
-          <input class="token-settings__input" id="daily-limit-input" type="number" placeholder="&infin;" step="1000" min="0" onchange="onTokenSettingChange()" aria-label="Daily token limit">
-          <div class="token-settings__hint" id="daily-limit-hint">Daily Limit</div>
+      <div id=\"token-settings\" class=\"sidebar__collapsible u-hidden\">
+        <div class=\"token-settings__field\">
+          <input class=\"token-settings__input\" id=\"daily-limit-input\" type=\"number\" placeholder=\"&infin;\" step=\"1000\" min=\"0\" onchange=\"onTokenSettingChange()\" aria-label=\"Daily token limit\">
+          <div class=\"token-settings__hint\" id=\"daily-limit-hint\">Daily Limit</div>
         </div>
-        <div class="token-settings__field">
-          <input class="token-settings__input" id="task-limit-input" type="number" placeholder="&infin;" step="1000" min="0" onchange="onTokenSettingChange()" aria-label="Per-task token limit">
-          <div class="token-settings__hint" id="task-limit-hint">Per-Task Limit</div>
+        <div class=\"token-settings__field\">
+          <input class=\"token-settings__input\" id=\"task-limit-input\" type=\"number\" placeholder=\"&infin;\" step=\"1000\" min=\"0\" onchange=\"onTokenSettingChange()\" aria-label=\"Per-task token limit\">
+          <div class=\"token-settings__hint\" id=\"task-limit-hint\">Per-Task Limit</div>
         </div>
-        <div class="token-settings__hint" id="settings-hint">Configure in pipeline.yaml budget field for persistence</div>
+        <div class=\"token-settings__hint\" id=\"settings-hint\">Configure in pipeline.yaml budget field for persistence</div>
       </div>
     </div>
+    -->
   </nav>
 
   <!-- ================================================================== -->
@@ -137,10 +139,11 @@
     <h3 class="card__title">Pipeline Progress</h3>
     <div id="pipeline-flow" class="card pipeline-flow" aria-label="Pipeline flow diagram"></div>
 
-    <!-- Token gauge dashboard (dynamically created per agent) -->
+    <!-- Token gauge dashboard (disabled — estimates too inaccurate)
     <div id="gauge-dashboard" class="card">
       <div class="gauge-row" id="gauge-row"></div>
     </div>
+    -->
 
     <!-- Timeline -->
     <div id="timeline" class="card" aria-label="Phase timeline"></div>

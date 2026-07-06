@@ -362,7 +362,7 @@ function patchAll(s) {
   patchTitle(s);
   patchPhaseBadge(s);
   patchStatusCards(s);
-  patchGauges(s);
+  // patchGauges(s);  // disabled — token estimates inaccurate
   patchVerdict(s);
   patchActive(s);
   patchPipelineFlow(s);
@@ -397,10 +397,11 @@ function diffPatch(prev, next) {
     prev.budget.daily_limit     !== next.budget.daily_limit ||
     prev.budget.per_task_used   !== next.budget.per_task_used ||
     prev.budget.per_task_limit  !== next.budget.per_task_limit;
-  if (budgetChanged) patchGauges(next);
+  // Disabled — token estimates inaccurate
+  // if (budgetChanged) patchGauges(next);
 
   if (!arraysEqual(prev.tasks,       next.tasks))       patchTasks(next);
-  if (!arraysEqual(prev.agents,      next.agents))      { patchAgents(next); patchPipelineConfig(next); patchEmptyState(next); patchGauges(next); }
+  if (!arraysEqual(prev.agents,      next.agents))      { patchAgents(next); patchPipelineConfig(next); patchEmptyState(next); /* patchGauges disabled */ }
   if (!arraysEqual(prev.transitions, next.transitions)) { patchTimeline(next); patchTasks(next); patchLog(next); patchEmptyState(next); }
 
   // Detect phase transition to "done" or "halt" for history save
@@ -789,7 +790,8 @@ function patchEmptyState(s) {
     if (log)      log.classList.remove("u-hidden");
     if (status)   status.classList.remove("u-hidden");
     if (flow)     flow.classList.remove("u-hidden");
-    if (gauges)   gauges.classList.remove("u-hidden");
+    // gauges disabled — token estimates inaccurate
+    if (gauges)   gauges.classList.add("u-hidden");
   }
 }
 
@@ -910,8 +912,8 @@ function onTokenSettingChange() {
     localStorage.removeItem("unison-task-limit");
   }
 
-  // Re-render gauges with new limits
-  if (_prev) patchGauges(_prev);
+  // Re-render gauges with new limits (disabled — token estimates inaccurate)
+  // if (_prev) patchGauges(_prev);
 }
 
 // Restore token settings inputs from localStorage
