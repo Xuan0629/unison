@@ -553,17 +553,19 @@ class Orchestrator:
             )
 
         with ThreadPoolExecutor(max_workers=len(agent_specs)) as executor:
-            futures = [executor.submit(invoke_one, s) for s in agent_specs]
-            for future in as_completed(futures):
+            future_map = {executor.submit(invoke_one, s): s for s in agent_specs}
+            for future in as_completed(future_map):
+                spec = future_map[future]
                 try:
                     future.result()
                 except Exception as exc:
                     import logging
                     _log = logging.getLogger(__name__)
                     _log.warning(
-                        "MoA analyze round %d: agent raised: %s",
-                        round_n, exc,
+                        "MoA analyze round %d: agent %s raised: %s",
+                        round_n, spec.role, exc,
                     )
+                    failed_agents.append(spec.role)
 
         if failed_agents:
             self.halt(
