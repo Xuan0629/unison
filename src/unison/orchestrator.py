@@ -792,26 +792,27 @@ class Orchestrator:
             if runner is None:
                 return
 
-            # Build prompt instructing the planner to write to role-specific files
+            # Build prompt via registry with role-specific output paths
+            task = self._registry.task_for(
+                "planner", iteration,
+                test_command=self.spec.project.test_command,
+            )
             prompt = (
                 f"=== Multi-Planner: {spec.role} ===\n"
-                f"Iteration {iteration}\n"
                 f"Role: {spec.role} (pipeline_role: planner)\n"
-                f"1. Read the project requirements\n"
-                f"2. Write PRD to prd/PRD-{spec.role}.md\n"
-                f"3. Write tech-design to prd/tech-design-{spec.role}.md\n"
-                f"4. Do NOT modify src/ or tests/"
+                f"{task}\n"
+                f"- Write PRD to prd/PRD-{spec.role}.md\n"
+                f"- Write tech-design to prd/tech-design-{spec.role}.md\n"
+                f"- Do NOT modify src/ or tests/"
             )
             # If agent has a task_instruction, prepend it
             if spec.task_instruction:
                 prompt = f"{spec.task_instruction}\n\n{prompt}"
 
-            # Read system prompt
+            # Resolve system prompt via registry (file > built-in > fallback)
             sp_path = world.root / spec.system_prompt_path
-            if sp_path.exists():
-                full_prompt = sp_path.read_text(encoding="utf-8") + "\n\n" + prompt
-            else:
-                full_prompt = prompt
+            system_prompt = self._registry.resolve(spec.role, sp_path)
+            full_prompt = system_prompt + "\n\n" + prompt
 
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             log_path = world.agent_log(
@@ -927,17 +928,22 @@ class Orchestrator:
                 self.halt("budget overflow: developer")
                 return
 
+            # Resolve system prompt via registry
+            sp_path = world.root / spec.system_prompt_path
+            system_prompt = self._registry.resolve(spec.role, sp_path)
+
+            # Build task via registry with worktree-specific header
+            task = self._registry.task_for(
+                "developer", iteration,
+                test_command=self.spec.project.test_command,
+            )
             prompt = (
                 f"=== Parallel Developer: {spec.role} ===\n"
-                f"Iteration {iteration}\n"
                 f"Role: {spec.role}\n"
                 f"Worktree: {info.path}\n"
-                f"1. Read prd/PRD.md and prd/tech-design.md\n"
-                f"2. Implement changes in src/\n"
-                f"3. Write tests in tests/\n"
-                f"4. Run: {self.spec.project.test_command}\n"
-                f"5. Commit with: git add -A && git commit -m '{spec.role}: ...'"
+                f"{task}"
             )
+            full_prompt = system_prompt + "\n\n" + prompt
 
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             log_path = world.agent_log(
@@ -947,13 +953,13 @@ class Orchestrator:
 
             runner.run(
                 spec=spec,
-                prompt=prompt,
+                prompt=full_prompt,
                 workdir=info.path,
                 timeout=self.spec.per_agent_timeout,
                 log_path=log_path,
             )
 
-            estimated_tokens = max(1, len(prompt) // 4)
+            estimated_tokens = max(1, len(full_prompt) // 4)
             tracker.add_usage(
                 estimated_tokens, phase=f"developer_{spec.role}", iter_n=iteration,
             )
@@ -1040,25 +1046,28 @@ class Orchestrator:
                 self.halt("budget overflow: developer")
                 return
 
-            # Build feature-specific prompt
+            # Build feature-specific prompt via registry
+            sp_path = world.root / effective_spec.system_prompt_path
+            system_prompt = self._registry.resolve(effective_spec.role, sp_path)
+
+            task = self._registry.task_for(
+                "developer", iteration,
+                test_command=self.spec.project.test_command,
+            )
             prompt = (
                 f"=== Parallel Developer: {feature_name} ===\n"
-                f"Iteration {iteration}\n"
                 f"Feature: {feature_name}\n"
                 f"Worktree: {info.path}\n"
-                f"1. Read prd/PRD.md and prd/tech-design.md\n"
-                f"2. Implement {feature_name} in src/\n"
-                f"3. Write tests in tests/\n"
-                f"4. Run: {self.spec.project.test_command}\n"
-                f"5. Commit with: git add -A && git commit -m '{feature_name}: ...'"
+                f"{task}"
             )
+            full_prompt = system_prompt + "\n\n" + prompt
 
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             log_path = world.agent_log("developer", iteration, f"{timestamp}_{feature_name}")  # type: ignore[arg-type]
 
             runner.run(
                 spec=effective_spec,
-                prompt=prompt,
+                prompt=full_prompt,
                 workdir=info.path,
                 timeout=self.spec.per_agent_timeout,
                 log_path=log_path,
@@ -1070,7 +1079,7 @@ class Orchestrator:
                 break
 
             # Track token usage
-            estimated_tokens = max(1, len(prompt) // 4)
+            estimated_tokens = max(1, len(full_prompt) // 4)
             tracker.add_usage(estimated_tokens, phase=f"developer_{feature_name}", iter_n=iteration)
 
             # Completion detection
@@ -1176,7 +1185,7 @@ class Orchestrator:
                     raw_path=review_path,
                 )
 
-            # Build reviewer-specific prompt
+            # Build reviewer-specific prompt via registry
             if spec.task_instruction:
                 focus = spec.task_instruction
             elif use_heterogeneous:
@@ -1184,28 +1193,26 @@ class Orchestrator:
             else:
                 focus = ""
 
-            prompt = (
-                f"=== Review Iteration {iteration} "
-                f"(Reviewer {idx + 1} of {reviewer_count}) ===\n"
-                f"{focus}\n"
-                f"1. Run tests: {self.spec.project.test_command}\n"
-                f"2. Write review to reviews/iter-{iteration}-R{idx}.md\n"
-                f"3. Use YAML frontmatter format:\n"
-                f"   ---\n"
-                f"   verdict: PASS | REQUEST_CHANGES\n"
-                f"   summary: ...\n"
-                f"   findings:\n"
-                f"     - [severity] description\n"
-                f"   ---\n"
-                f"4. Do NOT modify src/"
+            review_file = str(world.reviews_dir / f"iter-{iteration}-R{idx}.md")
+            task = self._registry.task_for(
+                "reviewer", iteration,
+                test_command=self.spec.project.test_command,
+                review_file=review_file,
             )
 
-            # Read system prompt for the specific agent
-            sp_path = world.root / spec.system_prompt_path
-            if sp_path.exists():
-                full_prompt = sp_path.read_text(encoding="utf-8") + "\n\n" + prompt
+            header = (
+                f"=== Review Iteration {iteration} "
+                f"(Reviewer {idx + 1} of {reviewer_count}) ==="
+            )
+            if focus:
+                prompt = f"{header}\n{focus}\n\n{task}"
             else:
-                full_prompt = prompt
+                prompt = f"{header}\n\n{task}"
+
+            # Resolve system prompt via registry (file > built-in > fallback)
+            sp_path = world.root / spec.system_prompt_path
+            system_prompt = self._registry.resolve(spec.role, sp_path)
+            full_prompt = system_prompt + "\n\n" + prompt
 
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             log_path = world.agent_log(
