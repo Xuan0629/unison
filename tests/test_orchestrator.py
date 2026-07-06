@@ -332,8 +332,8 @@ agents:
             agents=orch.spec.agents,
             project=orch.spec.project,
             budget=type(orch.spec.budget)(
-                daily_token_limit=50,  # very tiny limit
-                per_task_limit=50,
+                daily_token_limit=200,  # enough for system prompt + task (~75 tokens)
+                per_task_limit=200,
             ),
         )
         orch._budget_tracker = None  # force re-creation with new spec

@@ -20,6 +20,7 @@ from pathlib import Path
 import yaml
 
 from unison.interfaces import PipelineMode
+from unison.prompt_registry import PromptRegistry
 
 # ────────────────────────────────────────────────────────────────
 # Keyword patterns for auto-detecting pipeline mode
@@ -134,89 +135,6 @@ _VALID_RUNTIMES = ("claude", "codex", "hermes", "openclaw")
 _DEFAULT_TEST_COMMAND = "pytest tests/ -v"
 _DEFAULT_MAX_ITERATIONS = 5
 _DEFAULT_PER_AGENT_TIMEOUT = 600
-
-
-# ────────────────────────────────────────────────────────────────
-# Prompt templates (generic, customizable by user later)
-# ────────────────────────────────────────────────────────────────
-
-_DEVELOPER_PROMPT = """# Developer Prompt — {description}
-
-You are a developer agent in the Unison multi-agent pipeline.
-
-## Task
-{description}
-
-## Workflow
-1. Read the relevant specification files (PRD, tech-design, existing code)
-2. Write code in `src/`, tests in `tests/`
-3. Run the test command to verify your work
-4. Commit your changes: `git add -A && git commit -m "<message>"`
-5. Await reviewer feedback
-
-## If Reviewer Returns REQUEST_CHANGES
-- Only fix the specific issues raised
-- Do not change unrelated code
-- Re-run tests after fixing
-- Commit again
-
-## Constraints
-- Match existing code patterns and style
-- Minimal diffs — no reformatting
-- No unrelated refactors
-"""
-
-_REVIEWER_PROMPT = """# Reviewer Prompt — {description}
-
-You are a reviewer agent in the Unison multi-agent pipeline.
-
-## Task
-Review the developer's changes against the task goal: "{description}"
-
-## Review Checklist
-1. **Correctness** — Does the code do what was asked?
-2. **Minimality** — No unrelated changes, no reformatting?
-3. **Pattern-match** — Does it follow existing project conventions?
-4. **Edge cases** — Are errors and edge cases handled?
-5. **Tests** — Are tests present and passing?
-
-## Output Format (MUST follow)
-```yaml
----
-verdict: PASS | REQUEST_CHANGES
-summary: <one-sentence summary>
-findings:
-  - [severity: critical/major/minor] <description + fix suggestion>
----
-```
-
-## Rules
-- Do NOT modify src/ or tests/
-- Find at least 1 improvement (mark [RARE: NO_FINDINGS] if truly none)
-- Same issue repeated across iterations → escalate severity
-"""
-
-_PLANNER_PROMPT = """# Planner Prompt — {description}
-
-You are a planner agent in the Unison multi-agent pipeline.
-
-## Task
-{description}
-
-## Responsibilities
-1. Read the project context (PRD, tech-design, existing code)
-2. Break the task into clear, ordered steps
-3. Write a plan the developer can execute
-4. After developer completes, review the plan execution
-5. Adjust plan if reviewer finds issues
-
-## Output Format
-Produce a structured plan with:
-- Phase breakdown
-- Files to create or modify
-- Success criteria for each phase
-- Dependencies between phases
-"""
 
 
 # ────────────────────────────────────────────────────────────────
@@ -400,10 +318,23 @@ def generate(
     prompts_dir = output_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
 
-    _write_prompt_file(prompts_dir / "developer.md", _DEVELOPER_PROMPT, description)
-    _write_prompt_file(prompts_dir / "reviewer.md", _REVIEWER_PROMPT, description)
+    registry = PromptRegistry()
+    _write_prompt_file(
+        prompts_dir / "developer.md",
+        registry.DEFAULT_PROMPTS["developer"],
+        description,
+    )
+    _write_prompt_file(
+        prompts_dir / "reviewer.md",
+        registry.DEFAULT_PROMPTS["reviewer"],
+        description,
+    )
     if mode in ("full-dev", "design-debate"):
-        _write_prompt_file(prompts_dir / "planner.md", _PLANNER_PROMPT, description)
+        _write_prompt_file(
+            prompts_dir / "planner.md",
+            registry.DEFAULT_PROMPTS["planner"],
+            description,
+        )
 
     # --- write pipeline.yaml ---
     pipeline_yaml = _build_pipeline_yaml(
@@ -429,7 +360,7 @@ def generate(
     return pipeline_path
 
 
-def _write_prompt_file(path: Path, template: str, description: str) -> None:
-    """Format a prompt template with the description and write to disk."""
-    content = template.format(description=description)
-    path.write_text(content, encoding="utf-8")
+def _write_prompt_file(path: Path, content: str, description: str) -> None:
+    """Prepend a description header and write the prompt content to disk."""
+    header = f"# Task: {description}\n\n"
+    path.write_text(header + content, encoding="utf-8")

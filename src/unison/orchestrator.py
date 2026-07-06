@@ -21,6 +21,7 @@ from pathlib import Path
 
 from unison.interfaces import AgentResult, PipelineSpec, ReviewVerdict, VerdictParseError
 from unison.pipeline import PipelineValidationError
+from unison.prompt_registry import PromptRegistry
 from unison.state import State
 from unison.lock import FileLockManager
 from unison.checkpoint import FileCheckpointManager
@@ -92,6 +93,9 @@ class Orchestrator:
             "hermes": HermesRunner(),
             "openclaw": OpenClawRunner(),
         }
+
+        # -- prompt registry (unified prompt/task template management) ----------
+        self._registry = PromptRegistry()
 
         # -- completion detection + verdict parsing ----------------------------
         self._detector = GitCompletionDetector()
@@ -1334,13 +1338,9 @@ class Orchestrator:
         world = self.spec.world
         tracker = self._get_budget_tracker(role)
 
-        # Read system prompt from the agent's configured path
+        # Read system prompt via registry (file > built-in > fallback)
         sp_path = world.root / agent_spec.system_prompt_path
-        system_prompt = (
-            sp_path.read_text(encoding="utf-8")
-            if sp_path.exists()
-            else f"You are the {agent_spec.role} agent."
-        )
+        system_prompt = self._registry.resolve(agent_spec.role, sp_path)
 
         # Read PRD + tech-design content for context assembly
         prd_content = ""
@@ -1374,34 +1374,19 @@ class Orchestrator:
         # Build role-specific task instruction
         if agent_spec.task_instruction:
             task = agent_spec.task_instruction
-        elif role == "planner":
-            task = (
-                "Write the Product Requirements Document to prd/PRD.md "
-                "and the technical design to prd/tech-design.md."
-            )
-        elif role == "developer":
-            task = (
-                f"Iteration {iteration} — Developer Operational Constraints:\n"
-                f"- Read prd/PRD.md and prd/tech-design.md for requirements context\n"
-                f"- Run tests after changes: {self.spec.project.test_command}\n"
-                f"- Commit with: git add -A && git commit -m '<descriptive message>'\n"
-                f"- Follow the Developer Instructions below for your specific task"
-            )
-        elif role == "reviewer":
-            review_file = self._review_file_for_phase(review_phase, iteration)
-            task = (
-                f"Review Iteration {iteration}: "
-                f"1. Run tests: {self.spec.project.test_command} "
-                f"2. Write review to {review_file} "
-                f"3. Use YAML frontmatter: verdict, summary, findings, metrics "
-                f"4. Do NOT modify src/"
-            )
-            # A2: Anti-sycophancy reminder for reviewers with high PASS rates
-            syco_note = self._anti_sycophancy_reminder()
-            if syco_note:
-                task += f"\n{syco_note}"
         else:
-            task = f"Perform {role} duties for iteration {iteration}."
+            if role == "reviewer":
+                review_file = str(self._review_file_for_phase(review_phase, iteration))
+                syco_note = self._anti_sycophancy_reminder()
+            else:
+                review_file = ""
+                syco_note = ""
+            task = self._registry.task_for(
+                role, iteration, review_phase,
+                test_command=self.spec.project.test_command,
+                review_file=review_file,
+                anti_sycophancy_note=syco_note,
+            )
 
         full_system = f"{task}\n\n{system_prompt}"
 
@@ -1430,13 +1415,9 @@ class Orchestrator:
         agent_spec = self._resolve_agent(role)
         tracker = self._get_budget_tracker(role)
 
-        # Read system prompt from the agent's configured path
+        # Read system prompt via registry (file > built-in > fallback)
         sp_path = world.root / agent_spec.system_prompt_path if agent_spec else None
-        system_prompt = (
-            sp_path.read_text(encoding="utf-8")
-            if sp_path and sp_path.exists()
-            else f"You are the {role} agent."
-        )
+        system_prompt = self._registry.resolve(role, sp_path)
 
         # Read PRD + tech-design content for context assembly (max 8KB each)
         prd_content = ""
@@ -1491,34 +1472,19 @@ class Orchestrator:
         # Build role-specific task instruction
         if agent_spec and agent_spec.task_instruction:
             task = agent_spec.task_instruction
-        elif role == "planner":
-            task = (
-                "Write the Product Requirements Document to prd/PRD.md "
-                "and the technical design to prd/tech-design.md."
-            )
-        elif role == "developer":
-            task = (
-                f"Iteration {iteration} — Developer Operational Constraints:\n"
-                f"- Read prd/PRD.md and prd/tech-design.md for requirements context\n"
-                f"- Run tests after changes: {self.spec.project.test_command}\n"
-                f"- Commit with: git add -A && git commit -m '<descriptive message>'\n"
-                f"- Follow the Developer Instructions below for your specific task"
-            )
-        elif role == "reviewer":
-            review_file = self._review_file_for_phase(review_phase, iteration)
-            task = (
-                f"Review Iteration {iteration}: "
-                f"1. Run tests: {self.spec.project.test_command} "
-                f"2. Write review to {review_file} "
-                f"3. Use YAML frontmatter: verdict, summary, findings, metrics "
-                f"4. Do NOT modify src/"
-            )
-            # A2: Anti-sycophancy reminder for reviewers with high PASS rates
-            syco_note = self._anti_sycophancy_reminder()
-            if syco_note:
-                task += f"\n{syco_note}"
         else:
-            task = f"Perform {role} duties for iteration {iteration}."
+            if role == "reviewer":
+                review_file = str(self._review_file_for_phase(review_phase, iteration))
+                syco_note = self._anti_sycophancy_reminder()
+            else:
+                review_file = ""
+                syco_note = ""
+            task = self._registry.task_for(
+                role, iteration, review_phase,
+                test_command=self.spec.project.test_command,
+                review_file=review_file,
+                anti_sycophancy_note=syco_note,
+            )
 
         # Prepend the task to system_prompt so the LLM sees it first
         full_system = f"{task}\n\n{system_prompt}"
