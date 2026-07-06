@@ -764,6 +764,80 @@ agents:
         assert not dag_called, "DAG path should NOT be called when spec.dag is None"
         assert loop_called, "_run_loop should be called when spec.dag is None"
 
+    @pytest.mark.parametrize("mode", [
+        "code-dev", "full-dev", "agent-fix", "migrate", "greenfield",
+    ])
+    def test_freeze_acceptance_criteria_called_for_non_dag_dev_modes(
+        self, tmp_path, monkeypatch, mode,
+    ):
+        """Regression: PhaseRouter refactor must preserve _freeze_acceptance_criteria().
+
+        Before the PhaseRouter refactor, _run_linear_development() called
+        _freeze_acceptance_criteria() for all non-DAG dev phases.  After the
+        refactor, _run_state_machine() routes directly to _run_loop() — we
+        must ensure the freeze still happens.
+        """
+        world_root = tmp_path / "project"
+        world_root.mkdir()
+        (world_root / "prd").mkdir()
+        (world_root / "reviews").mkdir()
+        (world_root / ".unison").mkdir(parents=True, exist_ok=True)
+        (world_root / "prompts").mkdir()
+        (world_root / "prd" / "PRD.md").write_text("# PRD")
+        (world_root / "prd" / "tech-design.md").write_text("# Design")
+        (world_root / "prompts" / "developer.md").write_text("Dev prompt")
+        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+        (world_root / "prompts" / "planner.md").write_text("Planner prompt")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f"""
+version: "1.0"
+project_root: "{world_root}"
+mode: "{mode}"
+agents:
+  planner:
+    role: planner
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/planner.md"
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/reviewer.md"
+""")
+
+        from unison.pipeline import PipelineLoader
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        orch = Orchestrator(spec=spec)
+
+        freeze_called = []
+        monkeypatch.setattr(
+            orch, "_freeze_acceptance_criteria",
+            lambda: freeze_called.append(True),
+        )
+        monkeypatch.setattr(orch, "_run_loop", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_archive_reviews", lambda: None)
+        # Stub _run_spec_verification in case mode has spec-check (e.g.
+        # future modes — not the parametrized ones, but safer).
+        monkeypatch.setattr(orch, "_run_spec_verification", lambda: None)
+
+        orch._run_state_machine()
+
+        assert freeze_called, (
+            f"_freeze_acceptance_criteria() was NOT called for mode={mode}. "
+            f"The PhaseRouter refactor must preserve the freeze behaviour "
+            f"from the old _run_linear_development() path."
+        )
+
 
 # ============================================================================
 # Dashboard control — _check_control_files + _generate_control_report

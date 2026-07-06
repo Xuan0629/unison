@@ -304,6 +304,19 @@ class Orchestrator:
             elif pd.active_phase == "dev_active" and self.spec.dag is not None:
                 self._run_dag_development()
             else:
+                # Non-DAG dev phase: freeze acceptance criteria before
+                # entering the active→review loop, matching the old
+                # _run_linear_development() behaviour.
+                if pd.active_phase == "dev_active":
+                    self._state.transition(
+                        "dev_active", "orchestrator",
+                        iter_n=1, note="starting development loop",
+                    )
+                    self._publish_phase_event(
+                        "dev_active", note="starting development loop",
+                    )
+                    self._freeze_acceptance_criteria()
+                    self._save_checkpoint()
                 self._run_loop(pd.active_phase, pd.review_phase,
                                pd.review_of, role=pd.role)
 
