@@ -1082,4 +1082,3 @@ function patchHistory() {
     _pollId = setInterval(poll, 3000);
   }
 })();
-</script>
