@@ -145,20 +145,33 @@ class TestFileLockManager:
 
 
     def test_concurrent_acquire(self, tmp_path):
-        """Two processes race to acquire the same lock — only one wins."""
+        """Two processes race to acquire the same lock — only one wins.
+
+        Uses a multiprocessing.Event to prevent the winner from exiting
+        before the loser has checked the lock.  Without this, the winner
+        may exit and its PID disappear from /proc, causing the loser to
+        treat the lock as stale and re-acquire it (True/True bug).
+        """
         lock_dir = tmp_path / "locks"
 
-        def try_acquire(path_str, project, queue):
+        def try_acquire(path_str, project, queue, checked_event):
             lm = FileLockManager(lock_dir=Path(path_str))
             ok = lm.acquire(project)
+            if ok:
+                # Winner: stay alive until the loser has confirmed the lock
+                checked_event.wait(timeout=10)
+            else:
+                # Loser: signal that we inspected the lock and saw it held
+                checked_event.set()
             queue.put(ok)
 
         results = multiprocessing.Queue()
+        checked = multiprocessing.Event()
         p1 = multiprocessing.Process(
-            target=try_acquire, args=(str(lock_dir), "concurrent", results)
+            target=try_acquire, args=(str(lock_dir), "concurrent", results, checked)
         )
         p2 = multiprocessing.Process(
-            target=try_acquire, args=(str(lock_dir), "concurrent", results)
+            target=try_acquire, args=(str(lock_dir), "concurrent", results, checked)
         )
 
         p1.start()

@@ -513,13 +513,35 @@ class Orchestrator:
                 timestamp,
             )
 
-            runner.run(
+            result = runner.run(
                 spec=spec,
                 prompt=full_prompt,
                 workdir=world.root,
                 timeout=self.spec.per_agent_timeout,
                 log_path=log_path,
             )
+
+            if not result.success:
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "MoA analyze round %d: %s exited %d: %s",
+                    round_n, spec.role, result.exit_code, result.error,
+                )
+                failed_agents.append(spec.role)
+                return
+
+            # Verify output file was written (runner can exit 0 without
+            # producing the file).
+            if not output_file.exists():
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "MoA analyze round %d: %s exited 0 but %s not created",
+                    round_n, spec.role, output_file,
+                )
+                failed_agents.append(spec.role)
+                return
 
             # Budget tracking
             tracker = self._get_budget_tracker("analyzer")
@@ -544,13 +566,12 @@ class Orchestrator:
                     )
 
         if failed_agents:
-            import logging
-            _log = logging.getLogger(__name__)
-            _log.warning(
-                "MoA analyze round %d: %d/%d agents skipped or failed: %s",
-                round_n, len(failed_agents), len(agent_specs),
-                ", ".join(failed_agents),
+            self.halt(
+                f"MoA analyze round {round_n}: {len(failed_agents)}/{len(agent_specs)} "
+                f"agents failed — cannot synthesize with incomplete analysis. "
+                f"Failed: {', '.join(failed_agents)}"
             )
+            return
 
     def _run_moa_synthesis(self, round_n: int, moa_config) -> None:
         """Run a single synthesizer agent to merge MoA analyses.
@@ -652,6 +673,17 @@ class Orchestrator:
             self.halt(
                 f"MoA synthesis round {round_n} failed: "
                 f"exit_code={result.exit_code}, error={result.error}"
+            )
+            return
+
+        # Verify synthesis file was actually written.  A runner can exit 0
+        # without producing the output file (e.g. model refused, empty
+        # response, or output went to stdout instead).
+        if not output_file.exists():
+            self.halt(
+                f"MoA synthesis round {round_n}: runner exited 0 but "
+                f"output file {output_file} was not created — "
+                f"synthesis artifact is missing"
             )
             return
 
