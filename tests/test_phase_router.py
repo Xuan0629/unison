@@ -47,13 +47,13 @@ class TestPhaseRouterKnownModes:
 
     @pytest.mark.parametrize("mode,expected_names", [
         ("code-dev",      ["dev"]),
-        ("full-dev",      ["planning", "dev"]),
+        ("full-dev",      ["planning", "discuss", "dev"]),
         ("design-debate", ["planning"]),
         ("inspect-only",  ["review"]),
         ("agent-fix",     ["dev"]),
-        ("migrate",       ["planning", "dev"]),
+        ("migrate",       ["planning", "discuss", "dev"]),
         ("greenfield",    ["dev"]),
-        ("spec-driven",   ["planning", "spec-check", "dev"]),
+        ("spec-driven",   ["planning", "spec-check", "discuss", "dev"]),
     ])
     def test_mode_phase_sequence(self, mode, expected_names):
         """Each mode returns the expected ordered phase names."""
@@ -65,13 +65,13 @@ class TestPhaseRouterKnownModes:
 
     @pytest.mark.parametrize("mode,expected_active_phases", [
         ("code-dev",      ["dev_active"]),
-        ("full-dev",      ["planning_active", "dev_active"]),
+        ("full-dev",      ["planning_active", "discuss_active", "dev_active"]),
         ("design-debate", ["planning_active"]),
         ("inspect-only",  ["dev_review"]),
         ("agent-fix",     ["dev_active"]),
-        ("migrate",       ["planning_active", "dev_active"]),
+        ("migrate",       ["planning_active", "discuss_active", "dev_active"]),
         ("greenfield",    ["dev_active"]),
-        ("spec-driven",   ["planning_active", "spec-check", "dev_active"]),
+        ("spec-driven",   ["planning_active", "spec-check", "discuss_active", "dev_active"]),
     ])
     def test_mode_active_phases(self, mode, expected_active_phases):
         """Each mode returns the expected active_phase values."""
@@ -112,12 +112,13 @@ class TestPhaseRouterBackwardCompat:
         assert len(phases) == 1
         assert phases[0].name == "dev"
 
-    def test_full_dev_has_planning_then_dev(self):
-        """full-dev: planning then dev (old: _run_planning_loop + _run_dev_loop)."""
+    def test_full_dev_has_planning_then_discuss_then_dev(self):
+        """full-dev: planning → discuss → dev."""
         phases = PhaseRouter.get_phases("full-dev")
-        assert len(phases) == 2
+        assert len(phases) == 3
         assert phases[0].name == "planning"
-        assert phases[1].name == "dev"
+        assert phases[1].name == "discuss"
+        assert phases[2].name == "dev"
 
     def test_design_debate_has_only_planning(self):
         """design-debate: only planning (old: _run_planning_loop)."""
@@ -133,13 +134,14 @@ class TestPhaseRouterBackwardCompat:
         assert phases[0].active_phase == "dev_review"
         assert phases[0].role == "reviewer"
 
-    def test_spec_driven_has_three_phases(self):
-        """spec-driven: planning → spec-check → dev (old: _run_spec_driven)."""
+    def test_spec_driven_has_four_phases(self):
+        """spec-driven: planning → spec-check → discuss → dev."""
         phases = PhaseRouter.get_phases("spec-driven")
-        assert len(phases) == 3
+        assert len(phases) == 4
         assert phases[0].name == "planning"
         assert phases[1].name == "spec-check"
-        assert phases[2].name == "dev"
+        assert phases[2].name == "discuss"
+        assert phases[3].name == "dev"
 
     def test_spec_check_phase_has_spec_check_active_phase(self):
         """spec-check phase uses 'spec-check' as its active_phase for routing."""

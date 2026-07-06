@@ -171,12 +171,35 @@ class PromptRegistry:
             "- Commit with: git add -A && git commit -m '<descriptive message>'\n"
             "- Follow the Developer Instructions below for your specific task"
         ),
+        "developer::discuss": (
+            "Iteration {iteration} — Discussion Phase: Proposal\n"
+            "You are in the PRE-IMPLEMENTATION discussion phase. Do NOT write code yet.\n"
+            "- Read prd/PRD.md and prd/tech-design.md\n"
+            "- Write your implementation proposal to reviews/dev-proposal.md\n"
+            "  covering: scope + files to modify + tech approach + boundaries + test plan\n"
+            "- Do NOT modify src/ or tests/ — this is a proposal review, not implementation"
+        ),
+        "developer::discuss-revise": (
+            "Iteration {iteration} — Discussion Phase: Revise Proposal\n"
+            "Review the findings in reviews/findings.md. Revise reviews/dev-proposal.md\n"
+            "to address each finding. Do NOT write code — this is still the proposal phase."
+        ),
         "reviewer": (
             "Review Iteration {iteration}: "
             "1. Run tests: {test_command} "
             "2. Write review to {review_file} "
             "3. Use YAML frontmatter: verdict, summary, findings, metrics "
             "4. Do NOT modify src/"
+        ),
+        "reviewer::discuss": (
+            "Discussion Review Iteration {iteration}: "
+            "1. Read prd/PRD.md and prd/tech-design.md for context\n"
+            "2. Read reviews/dev-proposal.md — the Developer's implementation plan\n"
+            "3. Critique: scope correct? files right? tech approach reasonable? "
+            "boundaries clear? test plan adequate?\n"
+            "4. Write review to {review_file} with YAML frontmatter\n"
+            "5. Append findings to reviews/findings.md for cross-iteration tracking\n"
+            "6. Do NOT modify src/ or dev-proposal.md"
         ),
     }
 
@@ -232,39 +255,44 @@ class PromptRegistry:
     ) -> str:
         """Return a role-specific task instruction with variables substituted.
 
-        When *mode* is set, the registry first tries the mode-specific key
-        ``"{role}::{mode}"`` in :attr:`DEFAULT_TASKS`, falling back to the
-        generic *role* key.
+        Resolution order:
+        1. Mode-specific key: ``"{role}::{mode}"`` (e.g. ``"developer::spec-driven"``)
+        2. Phase-specific key: derived from *review_phase*
+           (e.g. ``"developer::discuss"`` when phase starts with "discuss")
+        3. Generic role key (e.g. ``"developer"``)
+        4. Fallback
 
         Args:
             role: Agent role (``"planner"``, ``"developer"``, ``"reviewer"``).
             iteration: Current iteration number.
-            review_phase: ``"planning_review"`` or ``"dev_review"`` (unused in
-                template substitution; kept for call-site compatibility).
-            test_command: Project test command (substituted into template).
-            review_file: Path to the review output file (substituted into
-                the reviewer template).
-            anti_sycophancy_note: Optional anti-sycophancy reminder appended
-                after the task instruction (reviewer only).
-            carry_forward: Optional finding carry-forward block (developer
-                only).  Appended after the task instruction.
-            mode: Optional pipeline mode (e.g. ``"spec-driven"``) for
-                mode-specific task lookup.
+            review_phase: ``"planning_review"``, ``"discuss_review"``,
+                ``"dev_review"``, etc.
+            test_command: Project test command.
+            review_file: Path to the review output file.
+            anti_sycophancy_note: Optional anti-sycophancy reminder.
+            carry_forward: Optional finding carry-forward block.
+            mode: Optional pipeline mode (e.g. ``"spec-driven"``).
 
         Returns:
             The formatted task instruction string.
         """
+        template = None
+
         # Priority 1: mode-specific key (e.g. "developer::spec-driven")
         if mode is not None:
             mode_key = f"{role}::{mode}"
             if mode_key in self.DEFAULT_TASKS:
                 template = self.DEFAULT_TASKS[mode_key]
-            else:
-                template = self.DEFAULT_TASKS.get(
-                    role,
-                    "Perform {role} duties for iteration {iteration}.",
-                )
-        else:
+
+        # Priority 2: phase-specific key (e.g. "developer::discuss")
+        if template is None and review_phase:
+            phase = review_phase.replace("_review", "").replace("_active", "")
+            phase_key = f"{role}::{phase}"
+            if phase_key in self.DEFAULT_TASKS:
+                template = self.DEFAULT_TASKS[phase_key]
+
+        # Priority 3: generic role key
+        if template is None:
             template = self.DEFAULT_TASKS.get(
                 role,
                 "Perform {role} duties for iteration {iteration}.",

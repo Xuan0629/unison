@@ -32,6 +32,7 @@ from enum import Enum
 
 Phase: TypeAlias = Literal[
     "init", "planning_active", "planning_review",
+    "discuss_active", "discuss_review",
     "dev_active", "dev_review", "done"
 ]
 AgentRole: TypeAlias = str
@@ -132,6 +133,16 @@ class World:
 
     def review_file(self, iter_n: int) -> Path:
         return self.reviews_dir / f"iter-{iter_n}.md"
+
+    @property
+    def findings_file(self) -> Path:
+        """Cumulative reviewer findings persisted across iterations."""
+        return self.reviews_dir / "findings.md"
+
+    @property
+    def dev_proposal_file(self) -> Path:
+        """Developer pre-implementation proposal for discussion phase."""
+        return self.reviews_dir / "dev-proposal.md"
 
     def halt_signal(self) -> Path:
         return self.unison_dir / "HALT"

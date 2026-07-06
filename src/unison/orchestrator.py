@@ -305,6 +305,8 @@ class Orchestrator:
 
             if pd.active_phase == "spec-check":
                 self._run_spec_verification()
+            elif pd.name == "discuss":
+                self._run_discussion_loop()
             elif pd.name == "review":
                 self._run_review_only()
             elif pd.active_phase == "dev_active" and self.spec.dag is not None:
@@ -346,6 +348,46 @@ class Orchestrator:
             self._invoke_multi_reviewer(1, "dev_review", agent_specs=reviewer_agents)
         else:
             self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
+
+    def _run_discussion_loop(self) -> None:
+        """Pre-implementation discussion: Developer proposes approach, Reviewer critiques.
+
+        Developer writes ``reviews/dev-proposal.md`` describing scope, files,
+        tech approach, boundaries, and test plan.  Reviewer critiques against
+        PRD + tech-design, writing findings to ``reviews/findings.md``
+        (cumulative).  Loop continues until Reviewer PASS.
+
+        This prevents the common failure mode where the Developer rushes into
+        coding with a misaligned plan — the discussion phase catches direction
+        errors before any code is written.
+        """
+        if self._state.halt_signal:
+            return
+        world = self.spec.world
+
+        # Ensure findings.md starts fresh for this pipeline
+        findings = world.findings_file
+        findings.parent.mkdir(parents=True, exist_ok=True)
+        if not findings.exists():
+            findings.write_text(
+                "# Reviewer Findings (cumulative)\n\n"
+                "Findings persist across iterations for the Reviewer to track "
+                "resolution status.\n\n",
+                encoding="utf-8",
+            )
+
+        self._state.transition(
+            "discuss_active", "orchestrator",
+            iter_n=1, note="starting discussion loop",
+        )
+        self._publish_phase_event("discuss_active", note="starting discussion loop")
+        self._save_checkpoint(1)
+
+        self._run_loop(
+            "discuss_active", "discuss_review",
+            "implementation proposal",
+            role="developer",
+        )
 
     def _run_spec_verification(self) -> None:
         """Validate all 4 SDD artifacts exist and have substance.

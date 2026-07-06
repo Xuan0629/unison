@@ -22,14 +22,15 @@ class PhaseDef:
     Each phase either runs as a standard active→review loop via
     ``Orchestrator._run_loop()``, or is handled as a special-case phase
     (``name == "review"`` → ``_run_review_only``, ``active_phase ==
-    "spec-check"`` → ``_run_spec_verification``).
+    "spec-check"`` → ``_run_spec_verification``, ``name == "discuss"``
+    → ``_run_discussion_loop``).
     """
 
-    name: str           # "planning", "dev", "review", "spec-check"
-    active_phase: str   # "planning_active", "dev_active", "dev_review", "spec-check"
-    review_phase: str   # "planning_review", "dev_review", ""
+    name: str           # "planning", "dev", "discuss", "review", "spec-check"
+    active_phase: str   # "planning_active", "dev_active", "discuss_active", ...
+    review_phase: str   # "planning_review", "dev_review", "discuss_review", ""
     role: str           # "planner", "developer", "reviewer"
-    review_of: str      # "PRD + tech-design", "code + tests", "codebase"
+    review_of: str      # "PRD + tech-design", "code + tests", "implementation proposal", ...
 
 
 # ============================================================================
@@ -58,6 +59,8 @@ class PhaseRouter:
         "full-dev": [
             PhaseDef("planning", "planning_active", "planning_review",
                      "planner", "PRD + tech-design"),
+            PhaseDef("discuss", "discuss_active", "discuss_review",
+                     "developer", "implementation proposal"),
             PhaseDef("dev", "dev_active", "dev_review", "developer",
                      "code + tests"),
         ],
@@ -75,6 +78,8 @@ class PhaseRouter:
         "migrate": [
             PhaseDef("planning", "planning_active", "planning_review",
                      "planner", "PRD + tech-design"),
+            PhaseDef("discuss", "discuss_active", "discuss_review",
+                     "developer", "implementation proposal"),
             PhaseDef("dev", "dev_active", "dev_review", "developer",
                      "code + tests"),
         ],
@@ -86,6 +91,8 @@ class PhaseRouter:
             PhaseDef("planning", "planning_active", "planning_review",
                      "planner", "PRD + tech-design"),
             PhaseDef("spec-check", "spec-check", "", "", ""),
+            PhaseDef("discuss", "discuss_active", "discuss_review",
+                     "developer", "implementation proposal"),
             PhaseDef("dev", "dev_active", "dev_review", "developer",
                      "code + tests"),
         ],

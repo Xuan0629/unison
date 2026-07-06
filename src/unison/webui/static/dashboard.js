@@ -1064,5 +1064,15 @@ function patchHistory() {
   if (!startSSE()) {
     poll();
     _pollId = setInterval(poll, 3000);
+  } else {
+    // If SSE connects but never delivers data within 5 s, fall back to polling.
+    // This handles proxy / network setups where EventSource opens but buffers data.
+    setTimeout(function () {
+      if (_prev === null) {
+        _sseActive = false;  // stop SSE from double-initialising on error
+        poll();
+        _pollId = setInterval(poll, 3000);
+      }
+    }, 5000);
   }
 })();

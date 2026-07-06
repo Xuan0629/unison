@@ -15,6 +15,7 @@ from typing import Literal
 
 Phase = Literal[
     "init", "planning_active", "planning_review",
+    "discuss_active", "discuss_review",
     "dev_active", "dev_review", "done"
 ]
 Actor = Literal["planner", "developer", "reviewer", "orchestrator", "observer", "harness_optimizer", "sean"]
@@ -22,6 +23,7 @@ Verdict = Literal["PASS", "REQUEST_CHANGES"]
 
 VALID_PHASES: frozenset[str] = frozenset({
     "init", "planning_active", "planning_review",
+    "discuss_active", "discuss_review",
     "dev_active", "dev_review", "done",
 })
 

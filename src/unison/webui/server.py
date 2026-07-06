@@ -356,6 +356,8 @@ def _derive_active_agent(phase: str) -> str | None:
         return None
     if phase.endswith("_review"):
         return "reviewer"
+    if "discuss" in phase:
+        return "developer"
     if "planning" in phase:
         return "planner"
     if "dev" in phase:
@@ -445,6 +447,8 @@ def _task_label(base: str, suffix: str) -> str:
 
 def _phase_agent(phase: str) -> str:
     """Map a phase string to its responsible agent role."""
+    if "discuss" in phase:
+        return "developer"
     if "planning" in phase:
         return "planner"
     if "dev" in phase:
