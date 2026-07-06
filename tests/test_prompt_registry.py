@@ -185,6 +185,54 @@ class TestPromptRegistry:
         result = template.format(**self._ALL_FORMAT_KWARGS)
         assert result.strip(), f"Formatted template for '{role}' is empty"
 
+    # ------------------------------------------------------------------
+    # Placeholder contract — each role's template carries only the
+    # placeholder tokens it genuinely needs.  Planner does not receive
+    # a test_command at runtime; developer does not write review files.
+    # Using the same format() kwargs for every role keeps call sites
+    # uniform, so templates must tolerate extra kwargs — but the tokens
+    # that ARE in the template must match role expectations.
+    # ------------------------------------------------------------------
+
+    # role → set of placeholder tokens that MUST appear in the template
+    _REQUIRED_PLACEHOLDERS: dict[str, set[str]] = {
+        "planner":   {"{iteration}"},
+        "developer": {"{iteration}", "{test_command}"},
+        "reviewer":  {"{iteration}", "{test_command}", "{review_file}"},
+    }
+
+    # role → set of placeholder tokens that MUST NOT appear
+    # (avoids silent drift where a token is added but call sites don't
+    # pass a meaningful value for that role)
+    _FORBIDDEN_PLACEHOLDERS: dict[str, set[str]] = {
+        "planner":   {"{test_command}", "{review_file}"},
+        "developer": {"{review_file}"},
+        "reviewer":  set(),
+    }
+
+    @pytest.mark.parametrize("role", ["planner", "developer", "reviewer"])
+    def test_task_template_contains_required_placeholders(self, role):
+        """Each DEFAULT_TASKS template contains its role-appropriate tokens."""
+        registry = PromptRegistry()
+        template = registry.DEFAULT_TASKS[role]
+        required = self._REQUIRED_PLACEHOLDERS.get(role, set())
+        for token in required:
+            assert token in template, (
+                f"DEFAULT_TASKS['{role}'] missing required placeholder {token}"
+            )
+
+    @pytest.mark.parametrize("role", ["planner", "developer", "reviewer"])
+    def test_task_template_avoids_forbidden_placeholders(self, role):
+        """Each DEFAULT_TASKS template does NOT contain role-inappropriate tokens."""
+        registry = PromptRegistry()
+        template = registry.DEFAULT_TASKS[role]
+        forbidden = self._FORBIDDEN_PLACEHOLDERS.get(role, set())
+        for token in forbidden:
+            assert token not in template, (
+                f"DEFAULT_TASKS['{role}'] contains placeholder {token} "
+                f"which is not appropriate for this role"
+            )
+
     @pytest.mark.parametrize("role", ["planner", "developer", "reviewer"])
     def test_task_for_includes_iteration_for_all_roles(self, role):
         """task_for() output includes iteration number for every known role."""
