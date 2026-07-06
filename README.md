@@ -26,7 +26,7 @@ Unison is a **Loop Engineering pipeline** — not a prompt library, not an agent
 
 That's exactly what Unison does. Not a one-shot prompt — a **production loop**: Plan → Discuss → Develop → Review → Repeat until PASS.
 
-**Proof: Unison built Unison.** After SEAN wrote the initial 14 core modules (Jun 18), Unison took over — 20+ self-modification cycles later, every feature added since has been designed by a Planner, implemented by a Developer, and gated by a Reviewer. 1,056 tests guard every commit.
+**Proof: Unison built Unison.** The project owner (@Xuan0629) developed the initial 14 core modules (Jun 18). From there, the loop took over: every feature since has started with a requirement → Planner designed it → Developer coded it → Reviewer gated it. 20+ self-modification cycles later, 1,056 tests guard every commit.
 
 | Self-hosting milestone | What Unison built in Unison |
 |---|---|
