@@ -13,6 +13,7 @@ import os
 import shlex
 import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import replace
@@ -245,7 +246,12 @@ class Orchestrator:
 
         try:
             # ------------------------------------------------------------------
-            # 3. Bootstrap (§12)
+            # 3. Auto-start Web UI (§webui config)
+            # ------------------------------------------------------------------
+            self._auto_start_webui()
+
+            # ------------------------------------------------------------------
+            # 4. Bootstrap (§12)
             # ------------------------------------------------------------------
             self._run_bootstrap()
 
@@ -1912,6 +1918,48 @@ class Orchestrator:
         ):
             return self.spec.reviewer_config.count
         return int(os.environ.get("UNISON_REVIEWER_COUNT", "1"))
+
+    def _auto_start_webui(self) -> None:
+        """Auto-start Web UI if configured and not already running.
+
+        Reads ``self.spec.webui`` (WebUiConfig).  When ``auto_start``
+        is True, checks whether a server is listening on the configured
+        port via a quick TCP connect.  If nothing is listening, spawns a
+        background ``unison webui`` process pointing at the current
+        project root.
+
+        Does NOT halt on failure — the dashboard is best-effort.
+        """
+        cfg = self.spec.webui
+        if not cfg.auto_start:
+            return
+
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        try:
+            s.connect(("127.0.0.1", cfg.port))
+            s.close()
+            return  # already running
+        except (socket.timeout, ConnectionRefusedError, OSError):
+            pass
+        finally:
+            s.close()
+
+        # Not running — spawn background process
+        try:
+            subprocess.Popen(
+                [
+                    sys.executable, "-m", "unison.cli", "webui",
+                    "--project", str(self.spec.world.root),
+                    "--port", str(cfg.port),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            pass  # best-effort
 
     def _run_bootstrap(self) -> None:
         """Execute bootstrap commands in local shell (§12).

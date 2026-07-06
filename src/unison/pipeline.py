@@ -51,6 +51,7 @@ from unison.interfaces import (
     SelfHealConfig,
     SnapshotConfig,
     Stage,
+    WebUiConfig,
     WorktreeConfig,
     World,
 )
@@ -202,6 +203,7 @@ class PipelineLoader:
             agent_log_retention_hours=raw.get("agent_log_retention_hours", 168),
             self_heal=self._build_self_heal(raw.get("self_heal")),
             greenfield=self._build_greenfield(raw.get("greenfield")),
+            webui=self._build_webui(raw.get("webui")),
         )
 
     # ------------------------------------------------------------------
@@ -533,6 +535,16 @@ class PipelineLoader:
             files=raw.get("files", []),
             task=raw.get("task", ""),
             skeleton=raw.get("skeleton"),
+        )
+
+    @staticmethod
+    def _build_webui(raw: dict[str, Any] | None) -> WebUiConfig:
+        """Build WebUiConfig from raw YAML, returns defaults if not set."""
+        if not raw:
+            return WebUiConfig()
+        return WebUiConfig(
+            auto_start=raw.get("auto_start", True),
+            port=raw.get("port", 9099),
         )
 
 

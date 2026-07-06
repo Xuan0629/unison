@@ -302,6 +302,25 @@ class GreenfieldConfig:
 
 
 @dataclass
+class WebUiConfig:
+    """Web dashboard auto-start configuration.
+
+    When ``auto_start`` is True (default), the Orchestrator checks
+    whether a Web UI server is already listening on *port* before
+    launching the pipeline.  If no server is detected, a background
+    ``unison webui`` process is spawned automatically so the user can
+    monitor progress at ``http://127.0.0.1:<port>`` without a separate
+    terminal.
+
+    Set ``auto_start: false`` in ``pipeline.yaml`` to disable this
+    behaviour when running headless pipelines or when the dashboard
+    is not needed.
+    """
+    auto_start: bool = True
+    port: int = 9099
+
+
+@dataclass
 class PipelineSpec:
     """一次 pipeline 运行的全部配置（不可变）。"""
     version: str  # "1.0"
@@ -326,6 +345,7 @@ class PipelineSpec:
     who_can_run: list[str] = field(default_factory=lambda: ["cli"])  # "cli", "discord:channel_id", "hermes:session_id"
     self_heal: SelfHealConfig = field(default_factory=lambda: SelfHealConfig())  # self-heal auto-fix
     greenfield: GreenfieldConfig | None = None  # greenfield mode: isolated new module dev
+    webui: WebUiConfig = field(default_factory=lambda: WebUiConfig())  # auto-start web dashboard
 
     def get(self, role: AgentRole) -> AgentSpec:
         if role not in self.agents:
