@@ -171,7 +171,9 @@ function phaseCategory(phase) {
   if (!phase) return "init";
   if (phase === "done")  return "done";
   if (phase === "halt")  return "halt";
+  if (phase.indexOf("moa") === 0)       return "moa";
   if (phase.indexOf("planning") === 0) return "planning";
+  if (phase.indexOf("discuss") === 0)  return "discuss";
   if (phase.indexOf("dev") === 0)      return "dev";
   if (phase.indexOf("review") === 0)   return "review";
   return "init";
@@ -806,7 +808,7 @@ function patchPipelineFlow(s) {
   var cat = phaseCategory(s.halt_signal ? "halt" : phase);
 
   // Map phase category to flow stage index (0=init, 1=planning, 2=dev, 3=done)
-  var stageMap = {init: 0, planning: 1, dev: 2, review: 2, done: 3, halt: -1};
+  var stageMap = {init: 0, planning: 1, moa: 2, discuss: 2, dev: 2, review: 2, done: 3, halt: -1};
   var activeIdx = stageMap.hasOwnProperty(cat) ? stageMap[cat] : -1;
 
   var phases = [

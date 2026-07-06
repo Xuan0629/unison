@@ -356,6 +356,8 @@ def _derive_active_agent(phase: str) -> str | None:
         return None
     if phase.endswith("_review"):
         return "reviewer"
+    if "moa" in phase:
+        return "moa-analyzer"
     if "discuss" in phase:
         return "developer"
     if "planning" in phase:
@@ -382,11 +384,14 @@ def _derive_tasks(history: list) -> list[dict]:
         to_phase = t.get("to_phase") or ""
         verdict = t.get("verdict")
 
-        from_base = from_phase.replace("_active", "").replace("_review", "")
-        to_base = to_phase.replace("_active", "").replace("_review", "")
+        from_base = (from_phase.replace("_active", "").replace("_review", "")
+                     .replace("_analyze", "").replace("_synthesize", ""))
+        to_base = (to_phase.replace("_active", "").replace("_review", "")
+                   .replace("_analyze", "").replace("_synthesize", ""))
 
-        # active → review  : work done, review begins
-        if from_phase.endswith("_active") and to_phase.endswith("_review"):
+        # active/analyze → review/synthesize  : work done, review begins
+        if ((from_phase.endswith("_active") or from_phase.endswith("_analyze"))
+                and (to_phase.endswith("_review") or to_phase.endswith("_synthesize"))):
             found = _mark_last_status(tasks, "active", "done")
             if not found:
                 tasks.append({
@@ -402,8 +407,9 @@ def _derive_tasks(history: list) -> list[dict]:
                 "agent": "reviewer",
             })
 
-        # review → active  : review done (REQUEST_CHANGES), new work starts
-        elif from_phase.endswith("_review") and to_phase.endswith("_active"):
+        # review/synthesize → active/analyze  : review done (REQUEST_CHANGES), new work starts
+        elif ((from_phase.endswith("_review") or from_phase.endswith("_synthesize"))
+              and (to_phase.endswith("_active") or to_phase.endswith("_analyze"))):
             _mark_last_status(tasks, "review", "done", verdict)
             tasks.append({
                 "id": str(len(tasks) + 1),
@@ -412,8 +418,8 @@ def _derive_tasks(history: list) -> list[dict]:
                 "agent": _phase_agent(to_phase),
             })
 
-        # review → done    : last review complete (PASS)
-        elif from_phase.endswith("_review") and to_phase == "done":
+        # review/synthesize → done    : last review/synthesis complete (PASS)
+        elif (from_phase.endswith("_review") or from_phase.endswith("_synthesize")) and to_phase == "done":
             _mark_last_status(tasks, "review", "done", verdict)
 
     return tasks
@@ -447,6 +453,8 @@ def _task_label(base: str, suffix: str) -> str:
 
 def _phase_agent(phase: str) -> str:
     """Map a phase string to its responsible agent role."""
+    if "moa" in phase:
+        return "moa-analyzer"
     if "discuss" in phase:
         return "developer"
     if "planning" in phase:
