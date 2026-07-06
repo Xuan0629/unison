@@ -7,7 +7,7 @@ name = "unison"
 version = "1.0.0"
 description = "万物一心 — 本地优先、文件驱动的 Multi-Agent 自动化协作桥梁"
 requires-python = ">=3.11"
-dependencies = ["pyyaml>=6.0"]
+dependencies = ["pyyaml>=6.0", "pytest-timeout>=2.0"]
 
 [project.scripts]
 unison = "unison.cli:main"
