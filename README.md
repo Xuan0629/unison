@@ -25,7 +25,7 @@ pip install -e .
 # 2-agent mode: Developer ↔ Reviewer (PRD pre-written)
 unison run --pipeline my-project.yaml
 
-# 4-agent mode: Planner ↔ Reviewer → Developer ↔ Reviewer
+# 4-agent mode: Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer
 unison run --pipeline full-dev.yaml
 
 # Check pipeline mode
@@ -125,7 +125,7 @@ unison webui --project . --port 9099
 | `a2a-debate` | Multi-Agent asynchronous debate via filesystem | Agent-to-agent design reviews |
 | `inspect-only` | Reviewer(s) → report | Audits / inspections |
 | `agent-fix` | Multi-Developer → Multi-Reviewer | Agent repair / optimization |
-| `migrate` | Planner ↔ Reviewer → Developer ↔ Reviewer | Cross-project migration |
+| `migrate` | Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer | Cross-project migration |
 | `greenfield` | Developer ↔ Reviewer (isolated new module) | New feature from scratch, no existing code access |
 | `spec-driven` | Planner → Spec Gate → Discuss → Developer ↔ Reviewer | Spec-driven development with mandatory GIVEN-WHEN-THEN specs |
 | `moa` | N-Agent parallel → Synthesizer → Rebuttal → Final | Mixture of Agents — reliable where Hermes delegate_task isn't |
@@ -282,6 +282,7 @@ Unison Orchestrator (state machine)
 ├── PromptRegistry      (unified prompt templates)
 ├── PhaseRouter         (data-driven pipeline modes)
 ├── Planner Agent    ⇄  Reviewer Agent   ← planning loop
+├── Discuss Phase       (pre-implementation proposal review)
 ├── Developer Agent  ⇄  Reviewer Agent   ← dev loop
 ├── MoA Mode            (N-agent parallel → Synthesizer)
 ├── Spec-Driven Mode    (GIVEN-WHEN-THEN spec gate)
@@ -298,7 +299,8 @@ Observer (independent process, 60s poll)
 
 World (shared filesystem)
 ├── prd/PRD.md, tech-design.md
-├── reviews/iter-N.md, acceptance-criteria.md
+├── reviews/iter-N.md, dev-proposal.md, findings.md, dev-notes.md, acceptance-criteria.md
+├── reviews/moa-*-roundN.md, moa-synthesis.md
 ├── inbox/ outbox/ (A2A debate messages)
 ├── observer/ logs/ reports/
 └── .unison/ state, lock, checkpoints, budget

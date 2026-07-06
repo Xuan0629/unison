@@ -25,7 +25,7 @@ pip install -e .
 # 2-agent 模式：Developer ↔ Reviewer（PRD 预先写好）
 unison run --pipeline my-pipeline.yaml
 
-# 4-agent 模式：Planner ↔ Reviewer → Developer ↔ Reviewer
+# 4-agent 模式：Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer
 unison run --pipeline full-dev.yaml
 
 # 查看 pipeline 模式
@@ -277,6 +277,7 @@ Unison Orchestrator（状态机）
 ├── PromptRegistry      （统一 prompt 模板管理）
 ├── PhaseRouter         （数据驱动 pipeline 模式路由）
 ├── Planner Agent    ⇄  Reviewer Agent   ← 规划循环
+├── Discuss 阶段         （编码前提案审查）
 ├── Developer Agent  ⇄  Reviewer Agent   ← 开发循环
 ├── MoA Mode            （N Agent 并行 → 合成）
 ├── Spec-Driven Mode    （GIVEN-WHEN-THEN 规范门禁）
@@ -293,7 +294,8 @@ Observer（独立进程，60s 轮询）
 
 World（共享文件系统）
 ├── prd/PRD.md、tech-design.md
-├── reviews/iter-N.md、acceptance-criteria.md
+├── reviews/iter-N.md、dev-proposal.md、findings.md、dev-notes.md、acceptance-criteria.md
+├── reviews/moa-*-roundN.md、moa-synthesis.md
 ├── inbox/ outbox/（A2A 辩论消息）
 ├── observer/ logs/ reports/
 └── .unison/ state、lock、checkpoints、budget
