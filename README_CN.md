@@ -365,25 +365,29 @@ agents:
 
 ### 模型降级
 
-为你的 Agent 配置降级路径，避免单模型意外挂掉导致整个流程停滞：
+所有支持的 runtime 均提供原生模型降级，配置好备用模型避免单模型挂掉导致流程停滞：
+
+| Runtime | 降级机制 | 示例 |
+|---------|---------|------|
+| Claude Code | `--fallback-model <model>` | `deepseek-v4-pro` → `MiniMax-M3` |
+| Hermes | `hermes fallback` 配置 | `deepseek-v4-pro` → `qwen3.7-plus` |
+| Codex | CLI `-m` 每次调用指定 | `gpt-5.5` → `gpt-5.4` |
+| OpenClaw | `model_fallback` in AGENTS.md | 原生支持 |
 
 ```yaml
-# pipeline.yaml
-budget:
-  overflow_action: downgrade
-  downgrade_map:
-    reviewer: { from: codex, to: claude }   # Codex 挂 → 自动切 Claude
-    developer: { from: claude, to: hermes }  # Claude 挂 → 回退 Hermes
+# pipeline.yaml — 每个 agent 的模型降级
+agents:
+  developer:
+    runtime: claude
+    model: deepseek-v4-pro
+    # Claude Code 在模型不可达时自动降级
+  reviewer:
+    runtime: hermes
+    model: deepseek-v4-pro
+    # Hermes fallback provider 处理模型切换
 ```
 
-Unison BudgetTracker 在日 token 预算超 80% 或模型不可达时自动切换 runtime。配合 `per_agent_timeout` 避免卡在慢模型上。
-
-| 场景 | 行为 |
-|------|------|
-| API 限流 / 429 | 降级到备用模型 |
-| 模型不可达（超时） | 降级到备用模型 |
-| 日预算 > 80% | Reviewer 降级到 claude（更便宜） |
-| 日预算 > 100% | Halt + Discord 通知 |
+如需 runtime 级别降级（所有模型都挂时切换整个 agent 到另一个 runtime），使用 Unison 的 `budget.downgrade_map`。
 
 ### Agent 质量决定协作质量
 

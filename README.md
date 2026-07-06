@@ -369,25 +369,29 @@ agents:
 
 ### Model Fallback
 
-Configure downgrade paths so a single model outage doesn't stall your pipeline:
+Configure model-level downgrade paths so a single model outage doesn't stall your pipeline. All supported runtimes offer native model fallback:
+
+| Runtime | Fallback mechanism | Example |
+|---------|-------------------|---------|
+| Claude Code | `--fallback-model <model>` | `deepseek-v4-pro` → `MiniMax-M3` |
+| Hermes | `hermes fallback` config | `deepseek-v4-pro` → `qwen3.7-plus` |
+| Codex | CLI `-m` per-invocation | `gpt-5.5` → `gpt-5.4` |
+| OpenClaw | `model_fallback` in AGENTS.md | native support |
 
 ```yaml
-# pipeline.yaml
-budget:
-  overflow_action: downgrade
-  downgrade_map:
-    reviewer: { from: codex, to: claude }   # Codex down → auto-switch to Claude
-    developer: { from: claude, to: hermes }  # Claude down → fall back to Hermes
+# pipeline.yaml — model fallback per agent
+agents:
+  developer:
+    runtime: claude
+    model: deepseek-v4-pro
+    # Claude Code auto-falls back when model is unreachable
+  reviewer:
+    runtime: hermes
+    model: deepseek-v4-pro
+    # Hermes fallback provider handles model switching
 ```
 
-Unison BudgetTracker automatically switches runtimes when the daily token budget exceeds 80% or a model becomes unreachable. Pair with `per_agent_timeout` to avoid hanging on slow models.
-
-| Scenario | Behavior |
-|----------|----------|
-| API rate limit / 429 | Downgrade to fallback model |
-| Model unreachable (timeout) | Downgrade to fallback model |
-| Budget > 80% daily | Reviewer downgrades to claude (cheaper) |
-| Budget > 100% daily | Halt + Discord notification |
+For runtime-level downgrade (switching the entire agent to a different runtime when all its models fail), use Unison's `budget.downgrade_map`.
 
 ### Agent Quality Matters
 
