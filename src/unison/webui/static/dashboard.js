@@ -916,12 +916,14 @@ function onTokenSettingChange() {
   // if (_prev) patchGauges(_prev);
 }
 
-// Restore token settings inputs from localStorage
+// Restore token settings inputs from localStorage (no-op if elements missing)
 function restoreTokenSettings() {
   var daily = localStorage.getItem("unison-daily-limit");
   var task  = localStorage.getItem("unison-task-limit");
-  if (daily) document.getElementById("daily-limit-input").value = daily;
-  if (task)  document.getElementById("task-limit-input").value  = task;
+  var dailyEl = document.getElementById("daily-limit-input");
+  var taskEl  = document.getElementById("task-limit-input");
+  if (daily && dailyEl) dailyEl.value = daily;
+  if (task  && taskEl)  taskEl.value  = task;
 }
 
 
