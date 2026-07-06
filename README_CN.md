@@ -127,6 +127,7 @@ unison webui --project . --port 9099
 | `migrate` | Planner ↔ Reviewer → Developer ↔ Reviewer | 跨项目迁移 |
 | `a2a-debate` | 多 Agent 异步文件系统辩论 | Agent 间设计审查 |
 | `greenfield` | Developer ↔ Reviewer（隔离新模块） | 从零构建新功能，不碰已有代码 |
+| `spec-driven` | Planner → Spec Gate → Developer ↔ Reviewer | 规范驱动开发，强制 GIVEN-WHEN-THEN 规范 |
 
 ### 自定义角色
 
@@ -167,7 +168,7 @@ agents:
 
 | 功能 | 说明 |
 |------|------|
-| `fcntl.flock` | 内核级互斥锁，无 TOCTOU 竞态 |
+| `O_CREAT\|O_EXCL` | 内核级原子锁，无 TOCTOU 竞态 |
 | 风险矩阵 | operation × path × command 三元组规则引擎（L0–L3） |
 | 快照安全网 | Agent 修改文件前自动备份 |
 | API Key 脱敏 | 日志自动替换 `sk-...`、`Bearer`、`_API_KEY=***` 为 `***` |
@@ -272,10 +273,13 @@ unison init --preset code-dev         # 非交互：跳过向导
 
 ```
 Unison Orchestrator（状态机）
+├── PromptRegistry      （统一 prompt 模板管理）
+├── PhaseRouter         （数据驱动 pipeline 模式路由）
 ├── Planner Agent    ⇄  Reviewer Agent   ← 规划循环
 ├── Developer Agent  ⇄  Reviewer Agent   ← 开发循环
+├── Spec-Driven Mode    （GIVEN-WHEN-THEN 规范门禁）
 ├── A2A Debate Mode  （多 agent 文件系统辩论）
-├── FileLockManager     （fcntl.flock）
+├── FileLockManager     （O_CREAT|O_EXCL）
 ├── SnapshotManager     （~/.unison/snapshots/）
 ├── RiskEvaluator       （三元组规则）
 ├── BudgetTracker       （token 限制）

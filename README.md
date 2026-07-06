@@ -127,6 +127,7 @@ unison webui --project . --port 9099
 | `agent-fix` | Multi-Developer → Multi-Reviewer | Agent repair / optimization |
 | `migrate` | Planner ↔ Reviewer → Developer ↔ Reviewer | Cross-project migration |
 | `greenfield` | Developer ↔ Reviewer (isolated new module) | New feature from scratch, no existing code access |
+| `spec-driven` | Planner → Spec Gate → Developer ↔ Reviewer | Spec-driven development with mandatory GIVEN-WHEN-THEN specs |
 
 ### Custom Roles
 
@@ -167,7 +168,7 @@ Works for all roles (Planner, Developer, Reviewer), not just Reviewer.
 
 | Feature | Description |
 |---------|-------------|
-| `fcntl.flock` | Kernel-enforced exclusive lock — no TOCTOU races |
+| `O_CREAT\|O_EXCL` | Kernel-enforced atomic lock — no TOCTOU races |
 | Risk Matrix | operation × path × command rule engine (L0–L3) |
 | Snapshot Safety Net | Auto-backup before agent modifications |
 | API Key Masking | Logs auto-redact `sk-...`, `Bearer`, `_API_KEY=` |
@@ -277,10 +278,13 @@ unison init --preset code-dev         # non-interactive: skip wizard
 
 ```
 Unison Orchestrator (state machine)
+├── PromptRegistry      (unified prompt templates)
+├── PhaseRouter         (data-driven pipeline modes)
 ├── Planner Agent    ⇄  Reviewer Agent   ← planning loop
 ├── Developer Agent  ⇄  Reviewer Agent   ← dev loop
+├── Spec-Driven Mode    (GIVEN-WHEN-THEN spec gate)
 ├── A2A Debate Mode  (multi-agent filesystem debate)
-├── FileLockManager     (fcntl.flock)
+├── FileLockManager     (O_CREAT|O_EXCL)
 ├── SnapshotManager     (~/.unison/snapshots/)
 ├── RiskEvaluator       (3-tuple rules)
 ├── BudgetTracker       (token limits)
