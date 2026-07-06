@@ -100,7 +100,7 @@ unison run --pipeline my.yaml --switch reviewer:claude --save-pref
 启动后访问 `http://127.0.0.1:9099`，实时查看：
 
 - 当前 pipeline 阶段和迭代
-- 环形 token 消耗仪表盘（每 agent 一个）
+- Pipeline 进度流程图（Init → Planning → Dev → Done）
 - Agent 任务清单和状态
 - Phase 时间线
 - 运行历史记录
@@ -362,6 +362,28 @@ agents:
 
 - 避免同一 Agent 实例在同一 pipeline 中同时扮演上游和下游角色
 - 多 Reviewer 模式能发现单个 Reviewer 会遗漏的问题
+
+### 模型降级
+
+为你的 Agent 配置降级路径，避免单模型意外挂掉导致整个流程停滞：
+
+```yaml
+# pipeline.yaml
+budget:
+  overflow_action: downgrade
+  downgrade_map:
+    reviewer: { from: codex, to: claude }   # Codex 挂 → 自动切 Claude
+    developer: { from: claude, to: hermes }  # Claude 挂 → 回退 Hermes
+```
+
+Unison BudgetTracker 在日 token 预算超 80% 或模型不可达时自动切换 runtime。配合 `per_agent_timeout` 避免卡在慢模型上。
+
+| 场景 | 行为 |
+|------|------|
+| API 限流 / 429 | 降级到备用模型 |
+| 模型不可达（超时） | 降级到备用模型 |
+| 日预算 > 80% | Reviewer 降级到 claude（更便宜） |
+| 日预算 > 100% | Halt + Discord 通知 |
 
 ### Agent 质量决定协作质量
 

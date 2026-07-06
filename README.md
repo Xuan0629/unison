@@ -100,7 +100,7 @@ unison run --pipeline my.yaml --switch reviewer:claude --save-pref
 Start the server and open `http://127.0.0.1:9099` for a live view of:
 
 - Current pipeline phase and iteration
-- Ring-gauge token consumption per agent
+- Pipeline progress flow diagram (Init → Planning → Dev → Done)
 - Task list with status indicators
 - Phase timeline
 - Run history
@@ -366,6 +366,28 @@ agents:
 
 - Avoid using the same agent instance for upstream and downstream roles in the same pipeline
 - Multi-reviewer mode catches issues a single reviewer would miss
+
+### Model Fallback
+
+Configure downgrade paths so a single model outage doesn't stall your pipeline:
+
+```yaml
+# pipeline.yaml
+budget:
+  overflow_action: downgrade
+  downgrade_map:
+    reviewer: { from: codex, to: claude }   # Codex down → auto-switch to Claude
+    developer: { from: claude, to: hermes }  # Claude down → fall back to Hermes
+```
+
+Unison BudgetTracker automatically switches runtimes when the daily token budget exceeds 80% or a model becomes unreachable. Pair with `per_agent_timeout` to avoid hanging on slow models.
+
+| Scenario | Behavior |
+|----------|----------|
+| API rate limit / 429 | Downgrade to fallback model |
+| Model unreachable (timeout) | Downgrade to fallback model |
+| Budget > 80% daily | Reviewer downgrades to claude (cheaper) |
+| Budget > 100% daily | Halt + Discord notification |
 
 ### Agent Quality Matters
 
