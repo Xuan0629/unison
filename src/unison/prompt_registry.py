@@ -227,6 +227,7 @@ class PromptRegistry:
         test_command: str = "",
         review_file: str = "",
         anti_sycophancy_note: str = "",
+        carry_forward: str = "",
         mode: str | None = None,
     ) -> str:
         """Return a role-specific task instruction with variables substituted.
@@ -245,6 +246,8 @@ class PromptRegistry:
                 the reviewer template).
             anti_sycophancy_note: Optional anti-sycophancy reminder appended
                 after the task instruction (reviewer only).
+            carry_forward: Optional finding carry-forward block (developer
+                only).  Appended after the task instruction.
             mode: Optional pipeline mode (e.g. ``"spec-driven"``) for
                 mode-specific task lookup.
 
@@ -276,5 +279,8 @@ class PromptRegistry:
 
         if anti_sycophancy_note:
             result += f"\n{anti_sycophancy_note}"
+
+        if carry_forward:
+            result += f"\n\n{carry_forward}"
 
         return result

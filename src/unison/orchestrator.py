@@ -305,8 +305,7 @@ class Orchestrator:
                 self._run_dag_development()
             else:
                 # Non-DAG dev phase: freeze acceptance criteria before
-                # entering the active→review loop, matching the old
-                # _run_linear_development() behaviour.
+                # entering the active→review loop.
                 if pd.active_phase == "dev_active":
                     self._state.transition(
                         "dev_active", "orchestrator",
@@ -327,29 +326,6 @@ class Orchestrator:
             self._archive_reviews()
             self._save_checkpoint()
 
-    def _run_planning_loop(self) -> None:
-        """Run Planning ↔ Review loop (planner phase)."""
-        if self._state.halt_signal:
-            return
-        self._state.transition("planning_active", "orchestrator",
-                               iter_n=1, note="starting planning loop")
-        self._publish_phase_event("planning_active", note="starting planning loop")
-        self._save_checkpoint()
-        self._run_loop(
-            active_phase="planning_active",
-            review_phase="planning_review",
-            review_of="PRD + tech-design",
-        )
-
-    def _run_dev_loop(self) -> None:
-        """Run Developer ↔ Reviewer loop."""
-        if self._state.halt_signal:
-            return
-        if self.spec.dag is not None:
-            self._run_dag_development()
-        else:
-            self._run_linear_development()
-
     def _run_review_only(self) -> None:
         """inspect-only mode: Reviewer(s) → report (no planner, no dev)."""
         if self._state.halt_signal:
@@ -364,28 +340,6 @@ class Orchestrator:
             self._invoke_multi_reviewer(1, "dev_review", agent_specs=reviewer_agents)
         else:
             self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
-
-    def _run_spec_driven(self) -> None:
-        """spec-driven mode: Planning → Spec Verification Gate → Development.
-
-        Flow:
-        1. Run planning loop (planner writes 4 SDD artifacts)
-        2. Run spec verification gate (pure Python, validates all artifacts)
-        3. Gate passes → run dev loop
-        4. Gate fails → halt with diagnostic message
-        """
-        # 1. Planning loop
-        self._run_planning_loop()
-        if self._state.halt_signal:
-            return
-
-        # 2. Spec verification gate
-        self._run_spec_verification()
-        if self._state.halt_signal:
-            return
-
-        # 3. Development loop
-        self._run_dev_loop()
 
     def _run_spec_verification(self) -> None:
         """Validate all 4 SDD artifacts exist and have substance.
@@ -522,24 +476,6 @@ class Orchestrator:
             return invoked and self._state.last_dev_commit is not None
 
         scheduler.execute_parallel(executor=exec_stage, max_workers=4)
-
-    def _run_linear_development(self) -> None:
-        """Run the standard linear dev_active ↔ dev_review loop (V1 mode)."""
-        self._state.transition("dev_active", "orchestrator",
-                               iter_n=1, note="starting development loop")
-        self._publish_phase_event("dev_active", note="starting development loop")
-
-        # === architect-loop pattern: freeze acceptance criteria before dev ===
-        self._freeze_acceptance_criteria()
-        # === end architect-loop pattern ===
-
-        self._save_checkpoint()
-
-        self._run_loop(
-            active_phase="dev_active",
-            review_phase="dev_review",
-            review_of="code + tests",
-        )
 
     def _run_loop(
         self,
@@ -874,8 +810,8 @@ class Orchestrator:
             runner = self._runners.get(spec.runtime)
             if runner is None:
                 return
-            prompt = self._build_prompt_for_agent(
-                spec, pipeline_role, iteration, review_phase,
+            prompt = self._build_prompt(
+                pipeline_role, iteration, review_phase, agent_spec=spec,
             )
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             log_path = world.agent_log(
@@ -1490,102 +1426,32 @@ class Orchestrator:
         self._state.last_review_verdict = final.verdict
         self._state.last_review_path = review_path
 
-    def _build_prompt_for_agent(
-        self, agent_spec: AgentSpec, role: str, iteration: int,
-        review_phase: str = "dev_review",
-    ) -> str:
-        """Build a prompt for a specific *agent_spec* (Pipeline B parallel).
-
-        Unlike :meth:`_build_prompt` which resolves the agent spec by
-        role, this method accepts an explicit ``AgentSpec`` — needed when
-        multiple agents share the same ``pipeline_role`` but have different
-        system prompts, task instructions, or runtimes.
-
-        Args:
-            agent_spec: The specific agent to build a prompt for.
-            role: Pipeline role (used for task selection + budget tracking).
-            iteration: Current iteration.
-            review_phase: ``"planning_review"`` or ``"dev_review"``.
-        """
-        world = self.spec.world
-        tracker = self._get_budget_tracker(role)
-
-        # Read system prompt via registry (file > built-in > fallback)
-        sp_path = world.root / agent_spec.system_prompt_path
-        system_prompt = self._registry.resolve(role, sp_path, mode=self.spec.mode)
-
-        # Read PRD + tech-design content for context assembly
-        prd_content = ""
-        design_content = ""
-        _MAX_CONTEXT_CHARS = 8192
-        if world.prd.exists():
-            raw = world.prd.read_text(encoding="utf-8")
-            prd_content = raw[:_MAX_CONTEXT_CHARS] + ("\n...[truncated]" if len(raw) > _MAX_CONTEXT_CHARS else "")
-        if world.tech_design.exists():
-            raw = world.tech_design.read_text(encoding="utf-8")
-            design_content = raw[:_MAX_CONTEXT_CHARS] + ("\n...[truncated]" if len(raw) > _MAX_CONTEXT_CHARS else "")
-
-        # Extract top findings from the previous review
-        top_findings = ""
-        if iteration > 1:
-            prev_review_kind = (
-                "dev_review" if role == "developer" else "planning_review"
-            )
-            prev = self._review_file_for_phase(prev_review_kind, iteration - 1)
-            if prev.exists():
-                top_findings = extract_top_findings(
-                    prev.read_text(encoding="utf-8"), limit=3
-                )
-
-        diff = self._recent_diff()
-
-        daily_remaining = tracker.daily_limit - tracker.current_usage
-        per_task_remaining = tracker.per_task_limit - tracker._per_task_used
-        remaining = max(1, min(daily_remaining, per_task_remaining))
-
-        # Build role-specific task instruction
-        if agent_spec.task_instruction:
-            task = agent_spec.task_instruction
-        else:
-            if role == "reviewer":
-                review_file = str(self._review_file_for_phase(review_phase, iteration))
-                syco_note = self._anti_sycophancy_reminder()
-            else:
-                review_file = ""
-                syco_note = ""
-            task = self._registry.task_for(
-                role, iteration, review_phase,
-                test_command=self.spec.project.test_command,
-                review_file=review_file,
-                anti_sycophancy_note=syco_note,
-                mode=self.spec.mode,
-            )
-
-        full_system = f"{task}\n\n{system_prompt}"
-
-        assembled = assemble_context(
-            system_prompt=full_system,
-            prd_content=prd_content,
-            design_content=design_content,
-            last_review_findings=top_findings,
-            git_diff=diff,
-            token_budget=remaining,
-        )
-        return assembled.prompt
-
-    def _build_prompt(self, role: str, iteration: int, review_phase: str = "dev_review") -> str:
+    def _build_prompt(self, role: str, iteration: int, review_phase: str = "dev_review",
+                      agent_spec: AgentSpec | None = None) -> str:
         """Build the agent prompt for *role* at *iteration*.
 
-        V2: uses :func:`assemble_context` for token-budgeted prompt assembly
-        with smart diff truncation and top-findings extraction.
+        When *agent_spec* is ``None`` (the common case), the spec is resolved
+        by *role* via :meth:`_resolve_agent`.  Pass an explicit spec when
+        multiple agents share the same pipeline role (Pipeline B parallel).
+
+        Uses :func:`assemble_context` for token-budgeted prompt assembly
+        with smart diff truncation, top-findings extraction, cumulative
+        diff, content dedup, carry-forward, and phase summary.
 
         Args:
-            role: Agent role.
+            role: Agent pipeline role (``"planner"``, ``"developer"``,
+                ``"reviewer"``).
             iteration: Current iteration.
-            review_phase: "planning_review" or "dev_review" — for correct review path.
+            review_phase: ``"planning_review"`` or ``"dev_review"``.
+            agent_spec: Optional explicit ``AgentSpec`` for parallel mode.
+                When ``None``, resolved by *role*.
         """
         world = self.spec.world
-        agent_spec = self._resolve_agent(role)
+
+        # Resolve agent spec if not explicitly provided
+        if agent_spec is None:
+            agent_spec = self._resolve_agent(role)
+
         tracker = self._get_budget_tracker(role)
 
         # Read system prompt via registry (file > built-in > fallback)
@@ -1657,8 +1523,12 @@ class Orchestrator:
                 test_command=self.spec.project.test_command,
                 review_file=review_file,
                 anti_sycophancy_note=syco_note,
+                carry_forward=carry_forward,
                 mode=self.spec.mode,
             )
+            # carry_forward already embedded in task via registry — clear
+            # so it isn't appended again after assemble_context
+            carry_forward = ""
 
         # Prepend the task to system_prompt so the LLM sees it first
         full_system = f"{task}\n\n{system_prompt}"
@@ -1683,6 +1553,8 @@ class Orchestrator:
             token_budget=remaining,
         )
         prompt = assembled.prompt
+        # carry_forward appended only when custom task_instruction bypassed
+        # the registry (so it wasn't embedded in task)
         if carry_forward:
             prompt += "\n\n" + carry_forward
         return prompt
