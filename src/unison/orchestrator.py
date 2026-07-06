@@ -280,6 +280,7 @@ class Orchestrator:
         "agent-fix":     lambda self: self._run_dev_loop(),
         "migrate":       lambda self: (self._run_planning_loop(), self._run_dev_loop()),
         "greenfield":    lambda self: self._run_dev_loop(),  # same as code-dev, greenfield template injected in AgentRunner
+        "spec-driven":   lambda self: self._run_spec_driven(),
     }
 
     def _run_state_machine(self) -> None:
@@ -339,6 +340,118 @@ class Orchestrator:
             self._invoke_multi_reviewer(1, "dev_review", agent_specs=reviewer_agents)
         else:
             self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
+
+    def _run_spec_driven(self) -> None:
+        """spec-driven mode: Planning → Spec Verification Gate → Development.
+
+        Flow:
+        1. Run planning loop (planner writes 4 SDD artifacts)
+        2. Run spec verification gate (pure Python, validates all artifacts)
+        3. Gate passes → run dev loop
+        4. Gate fails → halt with diagnostic message
+        """
+        # 1. Planning loop
+        self._run_planning_loop()
+        if self._state.halt_signal:
+            return
+
+        # 2. Spec verification gate
+        self._run_spec_verification()
+        if self._state.halt_signal:
+            return
+
+        # 3. Development loop
+        self._run_dev_loop()
+
+    def _run_spec_verification(self) -> None:
+        """Validate all 4 SDD artifacts exist and have substance.
+
+        Pure Python — no LLM call. Checks:
+        1. prd/proposal.md exists and > 500 bytes
+        2. prd/design.md exists and > 500 bytes
+        3. prd/specs/ has ≥1 .md file with GIVEN + WHEN + THEN keywords
+        4. prd/tasks.md exists
+
+        Fails fast: the first missing or inadequate artifact halts the
+        pipeline with a diagnostic message listing what's wrong.
+        """
+        world = self.spec.world
+        root = world.root
+        missing: list[str] = []
+
+        # 1. proposal.md
+        proposal = root / "prd" / "proposal.md"
+        if not proposal.exists():
+            missing.append("prd/proposal.md (missing)")
+        elif proposal.stat().st_size <= 500:
+            missing.append(
+                f"prd/proposal.md (too small: {proposal.stat().st_size} bytes, "
+                f"need > 500)"
+            )
+
+        # 2. design.md
+        design = root / "prd" / "design.md"
+        if not design.exists():
+            missing.append("prd/design.md (missing)")
+        elif design.stat().st_size <= 500:
+            missing.append(
+                f"prd/design.md (too small: {design.stat().st_size} bytes, "
+                f"need > 500)"
+            )
+
+        # 3. spec files with GIVEN/WHEN/THEN scenarios
+        specs_dir = root / "prd" / "specs"
+        spec_files = sorted(specs_dir.glob("*.md")) if specs_dir.exists() else []
+        if not spec_files:
+            missing.append("prd/specs/*.md (no .md files found)")
+        else:
+            found_scenarios = False
+            for sf in spec_files:
+                try:
+                    content = sf.read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                # Check for GIVEN, WHEN, THEN (case-insensitive)
+                has_given = "given" in content.lower()
+                has_when = "when" in content.lower()
+                has_then = "then" in content.lower()
+                if has_given and has_when and has_then:
+                    found_scenarios = True
+                    break
+            if not found_scenarios:
+                missing.append(
+                    "prd/specs/*.md (no spec file contains GIVEN + WHEN + THEN "
+                    "scenarios)"
+                )
+
+        # 4. tasks.md
+        tasks = root / "prd" / "tasks.md"
+        if not tasks.exists():
+            missing.append("prd/tasks.md (missing)")
+
+        # Report results
+        if missing:
+            lines = "\n  - ".join(missing)
+            self.halt(
+                f"SDD spec verification FAILED:\n"
+                f"  - {lines}\n\n"
+                f"The planner must produce all 4 SDD artifacts:\n"
+                f"  1. prd/proposal.md (>500 bytes)\n"
+                f"  2. prd/design.md (>500 bytes)\n"
+                f"  3. prd/specs/*.md (≥1 file with GIVEN/WHEN/THEN scenarios)\n"
+                f"  4. prd/tasks.md\n"
+                f"Re-run the planning loop to fix these issues."
+            )
+            return
+
+        # All artifacts present — transition to dev_active
+        self._state.transition(
+            "dev_active", "orchestrator",
+            iter_n=1, note="spec verification PASSED — all 4 SDD artifacts valid"
+        )
+        self._publish_phase_event(
+            "dev_active", note="spec verification PASSED"
+        )
 
     def _run_dag_development(self) -> None:
         """Run development via DAGScheduler when spec.dag is configured."""
@@ -796,6 +909,7 @@ class Orchestrator:
             task = self._registry.task_for(
                 "planner", iteration,
                 test_command=self.spec.project.test_command,
+                mode=self.spec.mode,
             )
             prompt = (
                 f"=== Multi-Planner: {spec.role} ===\n"
@@ -811,7 +925,7 @@ class Orchestrator:
 
             # Resolve system prompt via registry (file > built-in > fallback)
             sp_path = world.root / spec.system_prompt_path
-            system_prompt = self._registry.resolve(spec.role, sp_path)
+            system_prompt = self._registry.resolve(spec.role, sp_path, mode=self.spec.mode)
             full_prompt = system_prompt + "\n\n" + prompt
 
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -930,12 +1044,13 @@ class Orchestrator:
 
             # Resolve system prompt via registry
             sp_path = world.root / spec.system_prompt_path
-            system_prompt = self._registry.resolve(spec.role, sp_path)
+            system_prompt = self._registry.resolve(spec.role, sp_path, mode=self.spec.mode)
 
             # Build task via registry with worktree-specific header
             task = self._registry.task_for(
                 "developer", iteration,
                 test_command=self.spec.project.test_command,
+                mode=self.spec.mode,
             )
             prompt = (
                 f"=== Parallel Developer: {spec.role} ===\n"
@@ -1048,11 +1163,12 @@ class Orchestrator:
 
             # Build feature-specific prompt via registry
             sp_path = world.root / effective_spec.system_prompt_path
-            system_prompt = self._registry.resolve(effective_spec.role, sp_path)
+            system_prompt = self._registry.resolve(effective_spec.role, sp_path, mode=self.spec.mode)
 
             task = self._registry.task_for(
                 "developer", iteration,
                 test_command=self.spec.project.test_command,
+                mode=self.spec.mode,
             )
             prompt = (
                 f"=== Parallel Developer: {feature_name} ===\n"
@@ -1198,6 +1314,7 @@ class Orchestrator:
                 "reviewer", iteration,
                 test_command=self.spec.project.test_command,
                 review_file=review_file,
+                mode=self.spec.mode,
             )
 
             header = (
@@ -1211,7 +1328,7 @@ class Orchestrator:
 
             # Resolve system prompt via registry (file > built-in > fallback)
             sp_path = world.root / spec.system_prompt_path
-            system_prompt = self._registry.resolve(spec.role, sp_path)
+            system_prompt = self._registry.resolve(spec.role, sp_path, mode=self.spec.mode)
             full_prompt = system_prompt + "\n\n" + prompt
 
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -1347,7 +1464,7 @@ class Orchestrator:
 
         # Read system prompt via registry (file > built-in > fallback)
         sp_path = world.root / agent_spec.system_prompt_path
-        system_prompt = self._registry.resolve(role, sp_path)
+        system_prompt = self._registry.resolve(role, sp_path, mode=self.spec.mode)
 
         # Read PRD + tech-design content for context assembly
         prd_content = ""
@@ -1393,6 +1510,7 @@ class Orchestrator:
                 test_command=self.spec.project.test_command,
                 review_file=review_file,
                 anti_sycophancy_note=syco_note,
+                mode=self.spec.mode,
             )
 
         full_system = f"{task}\n\n{system_prompt}"
@@ -1424,7 +1542,7 @@ class Orchestrator:
 
         # Read system prompt via registry (file > built-in > fallback)
         sp_path = world.root / agent_spec.system_prompt_path if agent_spec else None
-        system_prompt = self._registry.resolve(role, sp_path)
+        system_prompt = self._registry.resolve(role, sp_path, mode=self.spec.mode)
 
         # Read PRD + tech-design content for context assembly (max 8KB each)
         prd_content = ""
@@ -1491,6 +1609,7 @@ class Orchestrator:
                 test_command=self.spec.project.test_command,
                 review_file=review_file,
                 anti_sycophancy_note=syco_note,
+                mode=self.spec.mode,
             )
 
         # Prepend the task to system_prompt so the LLM sees it first

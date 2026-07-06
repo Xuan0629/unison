@@ -50,6 +50,48 @@ class PromptRegistry:
             "- Success criteria for each phase\n"
             "- Dependencies between phases\n"
         ),
+        "planner::spec-driven": (
+            "# SDD Planner Prompt\n\n"
+            "You are a planner agent in the Unison multi-agent pipeline "
+            "operating in **Spec-Driven Development (SDD)** mode.\n\n"
+            "## SDD Mode: 4 Required Artifacts\n"
+            "You MUST produce exactly these 4 artifacts. The pipeline will "
+            "verify they all exist before development begins.\n\n"
+            "### 1. prd/proposal.md\n"
+            "Problem statement, solution overview, scope, and success criteria. "
+            "Must be substantive (>500 bytes).\n\n"
+            "### 2. prd/design.md\n"
+            "Technical architecture, data flow, component design, and trade-offs. "
+            "Must be substantive (>500 bytes).\n\n"
+            "### 3. prd/specs/<feature>.md\n"
+            "One or more Gherkin-style specification files. Every spec file "
+            "MUST contain at least one scenario using **GIVEN / WHEN / THEN** "
+            "keywords. These are machine-verified before development.\n\n"
+            "### 4. prd/tasks.md\n"
+            "Ordered, concrete implementation tasks. Each task should be "
+            "small enough that a developer can complete it in one iteration.\n\n"
+            "## Workflow\n"
+            "1. Read the project context and requirements\n"
+            "2. Write proposal.md covering problem, solution, and scope\n"
+            "3. Write design.md covering architecture and technical decisions\n"
+            "4. Write specs/*.md files with Gherkin scenarios (GIVEN/WHEN/THEN)\n"
+            "5. Write tasks.md with ordered implementation steps\n\n"
+            "## Important\n"
+            "- Do NOT write PRD.md or tech-design.md — use the 4-artifact format\n"
+            "- Every spec file MUST include GIVEN/WHEN/THEN scenarios\n"
+            "- The pipeline gate will reject empty or placeholder specs\n"
+        ),
+        "spec-verifier": (
+            "# Spec Verifier Prompt\n\n"
+            "You are a spec-verifier agent in the Unison multi-agent pipeline.\n\n"
+            "## Responsibilities\n"
+            "1. Verify that all 4 SDD artifacts exist and are substantive\n"
+            "2. Check prd/proposal.md (>500 bytes)\n"
+            "3. Check prd/design.md (>500 bytes)\n"
+            "4. Check prd/specs/*.md contain GIVEN/WHEN/THEN scenarios\n"
+            "5. Check prd/tasks.md exists\n"
+            "6. Report missing or inadequate artifacts\n"
+        ),
         "developer": (
             "# Developer Prompt\n\n"
             "You are a developer agent in the Unison multi-agent pipeline.\n\n"
@@ -104,9 +146,27 @@ class PromptRegistry:
             "Write the Product Requirements Document to prd/PRD.md "
             "and the technical design to prd/tech-design.md."
         ),
+        "planner::spec-driven": (
+            "Iteration {iteration} — SDD Planner Operational Constraints:\n"
+            "Write the 4 SDD artifacts:\n"
+            "1. prd/proposal.md — Problem statement, solution, scope\n"
+            "2. prd/design.md — Technical architecture, trade-offs\n"
+            "3. prd/specs/<feature>.md — Gherkin scenarios (GIVEN/WHEN/THEN)\n"
+            "4. prd/tasks.md — Ordered implementation tasks\n"
+            "Do NOT write prd/PRD.md or prd/tech-design.md."
+        ),
         "developer": (
             "Iteration {iteration} — Developer Operational Constraints:\n"
             "- Read prd/PRD.md and prd/tech-design.md for requirements context\n"
+            "- Run tests after changes: {test_command}\n"
+            "- Commit with: git add -A && git commit -m '<descriptive message>'\n"
+            "- Follow the Developer Instructions below for your specific task"
+        ),
+        "developer::spec-driven": (
+            "Iteration {iteration} — Developer Operational Constraints:\n"
+            "- Read prd/proposal.md and prd/design.md for requirements context\n"
+            "- Read prd/specs/ for Gherkin scenario specifications\n"
+            "- Read prd/tasks.md for ordered implementation steps\n"
             "- Run tests after changes: {test_command}\n"
             "- Commit with: git add -A && git commit -m '<descriptive message>'\n"
             "- Follow the Developer Instructions below for your specific task"
@@ -124,16 +184,20 @@ class PromptRegistry:
     # Public API
     # ------------------------------------------------------------------
 
-    def resolve(self, role: str, pipeline_path: Path | None = None) -> str:
+    def resolve(self, role: str, pipeline_path: Path | None = None, mode: str | None = None) -> str:
         """Resolve a system prompt for *role* with priority:
 
         1. *pipeline_path* file content (when the file exists)
-        2. ``DEFAULT_PROMPTS[role]`` (when *role* is a known built-in)
-        3. Generic fallback ``"You are the {role} agent."``
+        2. ``DEFAULT_PROMPTS["{role}::{mode}"]`` (when *mode* is set and the
+           mode-specific key exists)
+        3. ``DEFAULT_PROMPTS[role]`` (when *role* is a known built-in)
+        4. Generic fallback ``"You are the {role} agent."``
 
         Args:
             role: Agent role name (e.g. ``"developer"``, ``"planner"``).
             pipeline_path: Path to a pipeline-specific prompt file, or ``None``.
+            mode: Optional pipeline mode (e.g. ``"spec-driven"``) for
+                mode-specific prompt lookup.
 
         Returns:
             The resolved system prompt string.
@@ -142,11 +206,17 @@ class PromptRegistry:
         if pipeline_path is not None and pipeline_path.exists():
             return pipeline_path.read_text(encoding="utf-8")
 
-        # Priority 2: built-in default for known roles
+        # Priority 2: mode-specific built-in (e.g. "planner::spec-driven")
+        if mode is not None:
+            mode_key = f"{role}::{mode}"
+            if mode_key in self.DEFAULT_PROMPTS:
+                return self.DEFAULT_PROMPTS[mode_key]
+
+        # Priority 3: built-in default for known roles
         if role in self.DEFAULT_PROMPTS:
             return self.DEFAULT_PROMPTS[role]
 
-        # Priority 3: generic fallback
+        # Priority 4: generic fallback
         return f"You are the {role} agent."
 
     def task_for(
@@ -157,8 +227,13 @@ class PromptRegistry:
         test_command: str = "",
         review_file: str = "",
         anti_sycophancy_note: str = "",
+        mode: str | None = None,
     ) -> str:
         """Return a role-specific task instruction with variables substituted.
+
+        When *mode* is set, the registry first tries the mode-specific key
+        ``"{role}::{mode}"`` in :attr:`DEFAULT_TASKS`, falling back to the
+        generic *role* key.
 
         Args:
             role: Agent role (``"planner"``, ``"developer"``, ``"reviewer"``).
@@ -170,14 +245,27 @@ class PromptRegistry:
                 the reviewer template).
             anti_sycophancy_note: Optional anti-sycophancy reminder appended
                 after the task instruction (reviewer only).
+            mode: Optional pipeline mode (e.g. ``"spec-driven"``) for
+                mode-specific task lookup.
 
         Returns:
             The formatted task instruction string.
         """
-        template = self.DEFAULT_TASKS.get(
-            role,
-            "Perform {role} duties for iteration {iteration}.",
-        )
+        # Priority 1: mode-specific key (e.g. "developer::spec-driven")
+        if mode is not None:
+            mode_key = f"{role}::{mode}"
+            if mode_key in self.DEFAULT_TASKS:
+                template = self.DEFAULT_TASKS[mode_key]
+            else:
+                template = self.DEFAULT_TASKS.get(
+                    role,
+                    "Perform {role} duties for iteration {iteration}.",
+                )
+        else:
+            template = self.DEFAULT_TASKS.get(
+                role,
+                "Perform {role} duties for iteration {iteration}.",
+            )
 
         result = template.format(
             role=role,

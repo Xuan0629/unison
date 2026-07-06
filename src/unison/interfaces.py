@@ -48,6 +48,7 @@ PipelineMode: TypeAlias = Literal[
     "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
     "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer
     "greenfield",     # New module from scratch — agent works only on specified files, no existing code
+    "spec-driven",    # Planner → spec verification gate → Developer ↔ Reviewer
 ]
 
 class RiskLevel(Enum):
