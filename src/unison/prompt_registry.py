@@ -100,6 +100,7 @@ class PromptRegistry:
 
     DEFAULT_TASKS: dict[str, str] = {
         "planner": (
+            "Iteration {iteration} — Planner Operational Constraints:\n"
             "Write the Product Requirements Document to prd/PRD.md "
             "and the technical design to prd/tech-design.md."
         ),

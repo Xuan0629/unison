@@ -161,3 +161,39 @@ class TestPromptRegistry:
         registry = PromptRegistry()
         for role, task in registry.DEFAULT_TASKS.items():
             assert task.strip(), f"DEFAULT_TASKS['{role}'] is empty"
+
+    # ------------------------------------------------------------------
+    # Placeholder contract — every role template must accept all standard
+    # kwargs without KeyError, so that _build_prompt and _build_prompt_for_agent
+    # can safely call .format(role=..., iteration=..., test_command=...,
+    # review_file=...) for every role.
+    # ------------------------------------------------------------------
+
+    _ALL_FORMAT_KWARGS = {
+        "role": "test-role",
+        "iteration": 42,
+        "test_command": "pytest tests/ -v",
+        "review_file": "reviews/iter-42.md",
+    }
+
+    @pytest.mark.parametrize("role", ["planner", "developer", "reviewer"])
+    def test_task_template_accepts_all_standard_kwargs(self, role):
+        """Each built-in task template formats without KeyError for all kwargs."""
+        registry = PromptRegistry()
+        template = registry.DEFAULT_TASKS[role]
+        # This must not raise KeyError
+        result = template.format(**self._ALL_FORMAT_KWARGS)
+        assert result.strip(), f"Formatted template for '{role}' is empty"
+
+    @pytest.mark.parametrize("role", ["planner", "developer", "reviewer"])
+    def test_task_for_includes_iteration_for_all_roles(self, role):
+        """task_for() output includes iteration number for every known role."""
+        registry = PromptRegistry()
+        task = registry.task_for(
+            role, iteration=99,
+            test_command="make test",
+            review_file="reviews/iter-99.md",
+        )
+        assert "99" in task, (
+            f"task_for('{role}') output missing iteration number"
+        )
