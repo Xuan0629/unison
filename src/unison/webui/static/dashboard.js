@@ -469,7 +469,7 @@ function patchVerdict(s) {
   var el = document.getElementById("verdict-value");
   var v = s.last_verdict;
   if (!v) {
-    el.textContent = "—";
+    el.textContent = "--";
     el.className = "status-card__value";
     return;
   }

@@ -38,10 +38,13 @@
   /* Phase palette */
   --phase-init:     hsl(0, 0%, 45%);
   --phase-planning: hsl(210, 60%, 55%);
+  --phase-discuss:  hsl(210, 60%, 55%);       /* same family as planning */
   --phase-dev:      hsl(var(--hue-primary), var(--sat-primary), 60%);
   --phase-review:   hsl(265, 55%, 58%);
   --phase-done:     hsl(120, 40%, 50%);
   --phase-halt:     hsl(0, 65%, 55%);
+  --phase-moa:      hsl(265, 55%, 58%);       /* same family as review */
+  --phase-spec:     hsl(170, 50%, 55%);        /* teal for spec-check */
 
   /* Geometry */
   --radius-sm: 6px;
@@ -313,6 +316,36 @@ body {
   color: #fff;
 }
 .badge--halt .badge__dot { background: #fff; }
+
+.badge--moa_analyze {
+  background: var(--phase-moa);
+  color: #fff;
+}
+.badge--moa_analyze .badge__dot { background: #fff; }
+
+.badge--moa_synthesize {
+  background: var(--phase-moa);
+  color: #fff;
+}
+.badge--moa_synthesize .badge__dot { background: #fff; }
+
+.badge--discuss_active {
+  background: var(--phase-discuss);
+  color: #fff;
+}
+.badge--discuss_active .badge__dot { background: #fff; }
+
+.badge--discuss_review {
+  background: var(--phase-review);
+  color: #fff;
+}
+.badge--discuss_review .badge__dot { background: #fff; }
+
+.badge--spec-check {
+  background: var(--phase-spec);
+  color: #fff;
+}
+.badge--spec-check .badge__dot { background: #fff; }
 
 /* Pulse animation on phase change */
 @keyframes badge-pulse {
