@@ -457,9 +457,11 @@ class Orchestrator:
             prev_synthesis = reviews_dir / f"moa-synthesis-round{round_n - 1}.md"
             if prev_synthesis.exists():
                 raw = prev_synthesis.read_text(encoding="utf-8")
-                # Truncate to 8KB to avoid context bloat
-                synthesis_context = raw[:8192]
-                if len(raw) > 8192:
+                # Truncate to 24KB to keep context manageable while
+                # preserving enough detail for meaningful analysis.
+                _MAX_SYNTHESIS = 24576
+                synthesis_context = raw[:_MAX_SYNTHESIS]
+                if len(raw) > _MAX_SYNTHESIS:
                     synthesis_context += "\n...[synthesis truncated]"
 
         failed_agents: list[str] = []
@@ -605,15 +607,13 @@ class Orchestrator:
             )
             return
 
-        # Read all analysis files (truncate each to 8KB)
+        # Read all analysis files — assemble_context handles budget via
+        # token-aware truncation, so we pass full content here.
         analyses_text = ""
         for af in analysis_files:
             raw = af.read_text(encoding="utf-8")
             analyses_text += f"\n### {af.name}\n"
-            analyses_text += raw[:8192]
-            if len(raw) > 8192:
-                analyses_text += "\n...[truncated]"
-            analyses_text += "\n"
+            analyses_text += raw + "\n"
 
         # Build synthesizer agent spec
         from unison.interfaces import AgentSpec
