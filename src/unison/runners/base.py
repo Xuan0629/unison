@@ -253,14 +253,19 @@ class BaseRunner:
         with open(log_path, "w", encoding="utf-8") as log_fh:
             log_fh.write(f"=== COMMAND ===\n{mask_secrets(' '.join(cmd))}\n\n=== OUTPUT ===\n")
             log_fh.flush()
-            popen_kwargs["stdout"] = log_fh
+            popen_kwargs["stdout"] = subprocess.PIPE
             try:
                 proc = subprocess.Popen(cmd, **popen_kwargs)
                 if self.use_stdin:
-                    # Feed the prompt via stdin, then close so the subprocess
-                    # sees EOF and knows input is complete.
                     proc.stdin.write(prompt)
                     proc.stdin.close()
+
+                # Stream stdout line-by-line with masking applied
+                # before each write — no raw secrets ever touch disk.
+                for line in proc.stdout:
+                    log_fh.write(mask_secrets(line))
+                    log_fh.flush()
+
                 proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
