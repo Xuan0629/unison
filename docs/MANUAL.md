@@ -49,7 +49,7 @@ unison run --pipeline pipeline.yaml
 
 ## Pipeline Modes
 
-Unison auto-detects the pipeline mode from your agent configuration. Eight modes are built-in:
+Unison auto-detects the pipeline mode from your agent configuration. Ten modes are built-in:
 
 | Mode | Flow | Use Case |
 |------|------|----------|

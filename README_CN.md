@@ -14,8 +14,10 @@
 Unison 是一个 **Loop Engineering 管道**——不是提示词库，不是 agent 框架。你定义要构建什么，Unison 运行 Plan → Discuss → Dev → Review 循环直到通过。零依赖 LangChain / CrewAI / AutoGen。
 
 <p align="center"><b>
-  Linux ✅ &nbsp; macOS ✅ &nbsp; Windows (WSL) ⚠️ &nbsp; | &nbsp; Apache 2.0 &nbsp; | &nbsp; 首次提交 2026-06-18
+  Linux ✅ &nbsp; macOS ✅ &nbsp; Windows (WSL) ⚠️ &nbsp; | &nbsp; Apache 2.0 &nbsp; | &nbsp; 首次提交 2026-06-18 &nbsp; | &nbsp; v0.6.0 (pre-1.0, 活跃开发中)
 </b></p>
+
+> ⚠️ **v0.6.0 为 pre-1.0 软件。** Unison agent 使用绕过沙箱保护的 CLI 参数运行（`--dangerously-skip-permissions`、`--yolo`）。风险矩阵、快照安全网和 diff 审计提供纵深防御，但**请务必在隔离环境中运行**——不要直接指向生产代码库，除非有人工审查。详见[安全](#safety)。
 
 ---
 

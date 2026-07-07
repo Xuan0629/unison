@@ -14,8 +14,10 @@
 Unison is a **Loop Engineering pipeline** — not a prompt library, not an agent framework. You define what to build. Unison runs the Planner → Discuss → Developer → Reviewer loop until it passes. Zero dependencies on LangChain / CrewAI / AutoGen.
 
 <p align="center"><b>
-  Linux ✅ &nbsp; macOS ✅ &nbsp; Windows (WSL) ⚠️ &nbsp; | &nbsp; Apache 2.0 &nbsp; | &nbsp; First commit 2026-06-18
+  Linux ✅ &nbsp; macOS ✅ &nbsp; Windows (WSL) ⚠️ &nbsp; | &nbsp; Apache 2.0 &nbsp; | &nbsp; First commit 2026-06-18 &nbsp; | &nbsp; v0.6.0 (pre-1.0, actively developed)
 </b></p>
+
+> ⚠️ **v0.6.0 is pre-1.0 software.** Unison agents run with CLI flags that bypass sandbox protections (`--dangerously-skip-permissions`, `--yolo`). The risk matrix, snapshot safety net, and diff audit provide defense-in-depth, but **always run in an isolated environment** — never point it at production codebases without human review. See [Safety](#safety) for details.
 
 ---
 
