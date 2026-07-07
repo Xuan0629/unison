@@ -243,100 +243,44 @@ moa:
 
 
 class TestMoaPhaseSequence:
-    """MoA phase sequence from PhaseRouter."""
+    """MoA is NOT routed through PhaseRouter — verified absence."""
 
-    def test_moa_has_four_phases(self):
-        """moa mode returns 4 PhaseDef entries."""
+    def test_moa_not_in_phaserouter(self):
+        """moa mode returns empty list — MoA bypasses PhaseRouter."""
         phases = PhaseRouter.get_phases("moa")
-        assert len(phases) == 4
+        assert phases == [], (
+            "MoA should NOT be in PhaseRouter.PHASES_BY_MODE — "
+            "it is driven by MoaConfig.rounds in _run_moa_pipeline()"
+        )
 
-    def test_moa_phase_names(self):
-        """moa phase names are correct."""
-        phases = PhaseRouter.get_phases("moa")
-        names = [pd.name for pd in phases]
-        assert names == [
-            "moa-analyze",
-            "moa-synthesize",
-            "moa-rebuttal",
-            "moa-finalize",
-        ]
-
-    def test_moa_active_phases(self):
-        """moa active_phase values are correct."""
-        phases = PhaseRouter.get_phases("moa")
-        active = [pd.active_phase for pd in phases]
-        assert active == [
-            "moa_analyze",
-            "moa_synthesize",
-            "moa_analyze",
-            "moa_synthesize",
-        ]
-
-    def test_moa_no_review_phases(self):
-        """All moa phases have empty review_phase (no reviewer loop)."""
-        phases = PhaseRouter.get_phases("moa")
-        for pd in phases:
-            assert pd.review_phase == "", (
-                f"Phase '{pd.name}' should have no review_phase"
-            )
-
-    def test_moa_roles(self):
-        """moa phase roles alternate analyzer/synthesizer."""
-        phases = PhaseRouter.get_phases("moa")
-        roles = [pd.role for pd in phases]
-        assert roles == ["analyzer", "synthesizer", "analyzer", "synthesizer"]
-
-    def test_moa_phase_names_unique(self):
-        """All moa phase names are unique."""
-        phases = PhaseRouter.get_phases("moa")
-        names = [pd.name for pd in phases]
-        assert len(names) == len(set(names))
-
-    def test_moa_review_of_values(self):
-        """moa review_of values are descriptive."""
-        phases = PhaseRouter.get_phases("moa")
-        reviews = [pd.review_of for pd in phases]
-        assert reviews == [
-            "task",
-            "analyses",
-            "task + synthesis",
-            "rebuttals",
-        ]
-
-
-# ============================================================================
-# PhaseDef — MoA-specific
-# ============================================================================
+    def test_moa_not_in_all_modes(self):
+        """No entry in PHASES_BY_MODE references moa."""
+        for mode, phases in PhaseRouter.PHASES_BY_MODE.items():
+            for pd in phases:
+                assert "moa" not in pd.name, (
+                    f"Mode '{mode}' has phase '{pd.name}' — "
+                    f"MoA should not appear in any PhaseRouter entry"
+                )
+                assert "moa" not in pd.active_phase
+                assert "moa" not in pd.review_phase
 
 
 class TestMoaPhaseDef:
-    """MoA-specific PhaseDef construction."""
+    """MoA PhaseDefs are generated dynamically, not in PhaseRouter."""
 
-    def test_moa_analyze_phasedef(self):
-        """moa-analyze phase has correct fields."""
-        phases = PhaseRouter.get_phases("moa")
-        analyze = phases[0]
-        assert analyze.name == "moa-analyze"
-        assert analyze.active_phase == "moa_analyze"
-        assert analyze.review_phase == ""
-        assert analyze.role == "analyzer"
-        assert analyze.review_of == "task"
+    def test_no_moa_phase_names_in_phaserouter(self):
+        """PhaseRouter.PHASES_BY_MODE contains no moa-related names."""
+        for mode, phases in PhaseRouter.PHASES_BY_MODE.items():
+            names = [pd.name for pd in phases]
+            for name in names:
+                assert "moa" not in name, (
+                    f"Mode '{mode}' has phase '{name}' — "
+                    f"should not exist (MoA generates phases dynamically)"
+                )
 
-    def test_moa_rebuttal_reuses_analyze_active_phase(self):
-        """moa-rebuttal reuses moa_analyze as active_phase."""
-        phases = PhaseRouter.get_phases("moa")
-        rebuttal = phases[2]
-        assert rebuttal.name == "moa-rebuttal"
-        assert rebuttal.active_phase == "moa_analyze"
-        assert rebuttal.role == "analyzer"
-
-    def test_moa_finalize_reuses_synthesize_active_phase(self):
-        """moa-finalize reuses moa_synthesize as active_phase."""
-        phases = PhaseRouter.get_phases("moa")
-        finalize = phases[3]
-        assert finalize.name == "moa-finalize"
-        assert finalize.active_phase == "moa_synthesize"
-        assert finalize.role == "synthesizer"
+    def test_get_phases_unknown_mode_returns_empty(self):
+        """Unknown mode returns empty list (consistent behavior)."""
+        assert PhaseRouter.get_phases("nonexistent") == []
 
 
 # ============================================================================
