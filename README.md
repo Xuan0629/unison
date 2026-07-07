@@ -39,6 +39,10 @@ That's exactly what Unison does. Not a one-shot prompt — a **production loop**
 ## Quick Start
 
 ```bash
+# Install via pip
+pip install unison-wanwuyixin
+
+# Or clone from source
 git clone https://github.com/Xuan0629/unison.git
 cd unison
 pip install -e .

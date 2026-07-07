@@ -44,6 +44,10 @@ Unison 同样如此：轻量、无状态，将多个 AI Agent 编排为协作流
 ## 快速开始
 
 ```bash
+# pip 安装
+pip install unison-wanwuyixin
+
+# 或克隆源码
 git clone https://github.com/Xuan0629/unison.git
 cd unison
 pip install -e .
