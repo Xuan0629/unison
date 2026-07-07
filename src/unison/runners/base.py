@@ -45,6 +45,17 @@ _SECRET_PATTERNS: list[tuple[str, str]] = [
         r"""([a-zA-Z_][a-zA-Z0-9_]*_SECRET)=([^\s"'$`]+|"[^"]*"|'[^']*')""",
         rf"\1={_REDACTED}",
     ),
+    # GitHub personal access tokens (classic): ghp_<chars>
+    (r"ghp_[a-zA-Z0-9]{36,}", _REDACTED),
+    # GitHub fine-grained tokens: github_pat_<chars>
+    (r"github_pat_[a-zA-Z0-9_]{36,}", _REDACTED),
+    # GitLab personal access tokens: glpat-<chars>
+    (r"glpat-[a-zA-Z0-9\-_]{20,}", _REDACTED),
+    # AWS access key IDs: AKIA<16 chars>
+    (r"AKIA[A-Z0-9]{16}", _REDACTED),
+    # Generic Authorization: <scheme> <credentials> header values
+    # Matches "Authorization: Bearer <token>", "Authorization: Basic <b64>", etc.
+    (r"Authorization:\s*\S+\s+\S+", f"Authorization: {_REDACTED}"),
 ]
 
 
@@ -165,6 +176,24 @@ class BaseRunner:
         )
 
     # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _mask_log_file(log_path: Path) -> None:
+        """Read *log_path*, apply :func:`mask_secrets`, rewrite if changed.
+
+        No-op if the file does not exist or cannot be read/written.
+        """
+        try:
+            content = log_path.read_text(encoding="utf-8")
+            masked = mask_secrets(content)
+            if masked != content:
+                log_path.write_text(masked, encoding="utf-8")
+        except OSError:
+            pass
+
+    # ------------------------------------------------------------------
     # run
     # ------------------------------------------------------------------
 
@@ -236,16 +265,20 @@ class BaseRunner:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
+                log_fh.close()  # close before masking so all data is flushed
+                self._mask_log_file(log_path)
                 duration = time.monotonic() - start
-                tail = self._read_log_tail(log_path, 500)
+                tail = mask_secrets(self._read_log_tail(log_path, 500))
                 return AgentResult(
                     success=False, exit_code=-1, duration=round(duration, 3),
                     stdout_tail=tail, stderr_tail="", log_path=log_path,
                     error=self._timeout_error_message(timeout, timeout),
                 )
 
+        # Post-process: mask secrets in the streamed log file before reading tail
+        self._mask_log_file(log_path)
         duration = time.monotonic() - start
-        tail = self._read_log_tail(log_path, 500)
+        tail = mask_secrets(self._read_log_tail(log_path, 500))
         success = proc.returncode == 0
         return AgentResult(
             success=success, exit_code=proc.returncode,
