@@ -6,7 +6,7 @@
   <a href="https://github.com/Xuan0629/unison/stargazers"><img src="https://img.shields.io/github/stars/Xuan0629/unison?style=social" alt="stars"></a>
   <a href="https://github.com/Xuan0629/unison/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Apache 2.0"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+"></a>
-  <a href="https://github.com/Xuan0629/unison/actions"><img src="https://img.shields.io/badge/tests-1056%20passed-brightgreen" alt="1056 tests"></a>
+  <a href="https://github.com/Xuan0629/unison/actions/workflows/ci.yml"><img src="https://github.com/Xuan0629/unison/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
 > **Stop prompting. Design the loop. Unison does the rest.**
@@ -358,6 +358,8 @@ World (shared filesystem)
 | Codex CLI | `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox` |
 | Hermes | `hermes` | `hermes chat -q --yolo` (model + engineering skills auto-loaded) |
 | OpenClaw | `openclaw` | `openclaw agent --agent <id> --session-key ... --json` |
+
+> ⚠️ **Why the scary flags?** Claude Code's `--dangerously-skip-permissions`, Codex's `--dangerously-bypass-approvals-and-sandbox`, and Hermes' `--yolo` are required for autonomous agent loops — without them, every file write and command execution would prompt for manual approval, blocking the pipeline. This is an intentional tradeoff: **bypass agent-level prompts in exchange for Unison's own defense-in-depth** (risk matrix L0–L3, snapshot safety net, post-audit diff scanning, secret masking). Run in an isolated environment — see [Safety](#safety).
 
 ### Custom Agents
 

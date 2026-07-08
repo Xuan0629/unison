@@ -6,7 +6,7 @@
   <a href="https://github.com/Xuan0629/unison/stargazers"><img src="https://img.shields.io/github/stars/Xuan0629/unison?style=social" alt="stars"></a>
   <a href="https://github.com/Xuan0629/unison/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Apache 2.0"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+"></a>
-  <a href="https://github.com/Xuan0629/unison/actions"><img src="https://img.shields.io/badge/tests-1056%20passed-brightgreen" alt="1056 tests"></a>
+  <a href="https://github.com/Xuan0629/unison/actions/workflows/ci.yml"><img src="https://github.com/Xuan0629/unison/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
 > **停止写提示词。设计循环。剩下的交给 Unison。**
@@ -358,6 +358,8 @@ World（共享文件系统）
 | Codex CLI | `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox` |
 | Hermes | `hermes` | `hermes chat -q --yolo`（自动加载 model + 工程技能） |
 | OpenClaw | `openclaw` | `openclaw agent --agent <id> --session-key ... --json` |
+
+> ⚠️ **为什么用这些高危参数？** Claude Code 的 `--dangerously-skip-permissions`、Codex 的 `--dangerously-bypass-approvals-and-sandbox`、Hermes 的 `--yolo` 是 agent 自主循环的前提——没有它们，每次文件写入和命令执行都会弹出人工确认框，管道无法自动化。这是有意为之的权衡：**绕过 agent 层的确认提示，换取 Unison 自身的纵深防御**（风险矩阵 L0–L3、快照安全网、事后 diff 审计、密钥脱敏）。请在隔离环境中运行——详见[安全](#safety)。
 
 
 ### 自定义 Agent
