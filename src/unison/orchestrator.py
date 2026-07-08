@@ -601,15 +601,30 @@ class Orchestrator:
             )
             return
 
-    def _run_chain(self) -> None:
+    def _run_chain(self, _depth: int = 0) -> None:
         """Run chained pipeline stages sequentially.
 
         Each stage in ``ChainConfig.stages`` is executed in order.
         After each stage, ``output_map`` copies upstream output files
         to downstream input locations so the next stage picks them up
         automatically.
+
+        Args:
+            _depth: Internal recursion guard — raises when chain depth
+                exceeds ``MAX_CHAIN_DEPTH`` (P0.3).
         """
         import shutil
+        import logging
+
+        _log = logging.getLogger(__name__)
+        MAX_CHAIN_DEPTH = 3
+
+        if _depth >= MAX_CHAIN_DEPTH:
+            self.halt(
+                f"chain depth {_depth} exceeds maximum {MAX_CHAIN_DEPTH} — "
+                f"recursive or excessively deep chain detected"
+            )
+            return
 
         for i, stage in enumerate(self.spec.chain.stages):
             if self._state.halt_signal:
@@ -622,21 +637,35 @@ class Orchestrator:
                 if src.exists():
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy(src, dst)
+                else:
+                    # P0.5: log missing source — non-fatal, stage may
+                    # not need it (e.g. optional upstream artefact)
+                    _log.debug(
+                        "chain stage %d output_map: source %s not found, "
+                        "skipping copy to %s", i, src_rel, dst_rel,
+                    )
 
             # Run the stage
             saved_mode = self.spec.mode
-            # Temporarily override mode for this stage
-            object.__setattr__(self.spec, "mode", stage.mode)
+            # Temporarily override mode for this stage.
+            # PipelineSpec is frozen — use dataclasses.replace() instead
+            # of object.__setattr__ (P0.2).
+            self.spec = replace(self.spec, mode=stage.mode)
             try:
                 if stage.mode == "moa":
                     self._run_moa_pipeline()
                 else:
                     self._run_state_machine()
             finally:
-                object.__setattr__(self.spec, "mode", saved_mode)
+                self.spec = replace(self.spec, mode=saved_mode)
 
-            if self._state.halt_signal and stage.halt_on_fail:
-                return
+            # Stage finished — halt behaviour depends on halt_on_fail
+            if self._state.halt_signal:
+                if stage.halt_on_fail:
+                    return
+                # P0.5: halt_on_fail=False — clear halt and continue
+                self._state.halt_signal = False
+                self._state.halt_reason = None
 
     def _run_moa_synthesis(self, round_n: int, moa_config) -> None:
         """Run a single synthesizer agent to merge MoA analyses.
@@ -2716,6 +2745,10 @@ class Orchestrator:
         Checkpoints are stored under ~/.unison/checkpoints/<project>/
         with the naming convention ckpt-<iter>-<phase>-<timestamp>.json.
 
+        Also writes state to the project's ``.unison/state.json`` so the
+        Web UI can read ``runtime_agents`` and other live state without
+        scanning the checkpoints directory (P0.4).
+
         Args:
             iteration: Explicit iter_n from the loop (L1 fix #5).
                 When ``None``, falls back to ``self._state.iteration``.
@@ -2727,3 +2760,13 @@ class Orchestrator:
             iter_n=iter_n,
             commit=self._state.last_dev_commit,
         )
+        # P0.4: Also write state to project .unison/state.json for Web UI.
+        # The checkpoint files live under ~/.unison/checkpoints/ but the
+        # Web UI reads .unison/state.json from the project root.  Writing
+        # here ensures runtime_agents (and all other live state) is
+        # immediately visible to the dashboard.
+        state_file = self.spec.world.unison_dir / "state.json"
+        try:
+            self._state.atomic_write(state_file)
+        except Exception:
+            pass  # best-effort; checkpoint is the authoritative copy

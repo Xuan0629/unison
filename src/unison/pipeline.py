@@ -570,14 +570,27 @@ class PipelineLoader:
 
     @staticmethod
     def _build_chain(raw: dict[str, Any] | None) -> ChainConfig:
-        """Build ChainConfig from raw YAML, returns empty if not set."""
+        """Build ChainConfig from raw YAML, returns empty if not set.
+
+        Raises:
+            PipelineValidationError: If any stage has mode ``"chain"``
+                (recursive chain-in-chain is forbidden — P0.3).
+        """
         if not raw or not isinstance(raw.get("stages"), list):
             return ChainConfig()
         stages = []
         for s in raw["stages"]:
+            mode = s.get("mode", "code-dev")
+            # P0.3: Recursion guard — chain mode must not include a
+            # chain stage (would allow infinite recursion)
+            if mode == "chain":
+                raise PipelineValidationError(
+                    "chain.stages cannot include a stage with mode='chain'. "
+                    "Chain-in-chain recursion is not supported."
+                )
             output_map = s.get("output_map", {}) or {}
             stages.append(ChainStage(
-                mode=s.get("mode", "code-dev"),
+                mode=mode,
                 pipeline=s.get("pipeline", ""),
                 output_map=output_map,
                 halt_on_fail=s.get("halt_on_fail", True),
