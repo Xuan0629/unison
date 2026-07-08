@@ -645,19 +645,52 @@ class Orchestrator:
                         "skipping copy to %s", i, src_rel, dst_rel,
                     )
 
-            # Run the stage
-            saved_mode = self.spec.mode
-            # Temporarily override mode for this stage.
-            # PipelineSpec is frozen — use dataclasses.replace() instead
-            # of object.__setattr__ (P0.2).
-            self.spec = replace(self.spec, mode=stage.mode)
+            # Run the stage.
+            # If the stage specifies a pipeline YAML, load it via
+            # PipelineLoader so the stage runs with its own agent/moa/
+            # project configuration rather than the top-level spec
+            # (P0 major fix).  Otherwise just switch the mode.
+            from unison.pipeline import PipelineLoader
+
+            if stage.pipeline:
+                pipeline_path = (self.spec.world.root / stage.pipeline).resolve()
+                if not pipeline_path.exists():
+                    self.halt(
+                        f"chain stage {i}: pipeline file not found: "
+                        f"{pipeline_path}"
+                    )
+                    return
+                loader = PipelineLoader()
+                try:
+                    stage_spec = loader.load(pipeline_path)
+                except Exception as exc:
+                    self.halt(
+                        f"chain stage {i}: failed to load pipeline "
+                        f"{pipeline_path}: {exc}"
+                    )
+                    return
+                # Preserve the shared world/root so output goes to the
+                # same project; apply the stage's requested mode.
+                stage_spec = replace(
+                    stage_spec, world=self.spec.world, mode=stage.mode,
+                )
+                saved_spec = self.spec
+                self.spec = stage_spec
+            else:
+                saved_spec = None
+                saved_mode = self.spec.mode
+                self.spec = replace(self.spec, mode=stage.mode)
+
             try:
-                if stage.mode == "moa":
+                if self.spec.mode == "moa":
                     self._run_moa_pipeline()
                 else:
                     self._run_state_machine()
             finally:
-                self.spec = replace(self.spec, mode=saved_mode)
+                if saved_spec is not None:
+                    self.spec = saved_spec
+                else:
+                    self.spec = replace(self.spec, mode=saved_mode)
 
             # Stage finished — halt behaviour depends on halt_on_fail
             if self._state.halt_signal:

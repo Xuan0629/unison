@@ -2,6 +2,7 @@
 
 import pytest
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from unison.interfaces import (
     ChainConfig,
@@ -10,6 +11,7 @@ from unison.interfaces import (
     PipelineSpec,
     World,
 )
+from unison.orchestrator import Orchestrator
 from unison.pipeline import PipelineLoader, PipelineValidationError
 from unison.state import State
 
@@ -513,25 +515,123 @@ class TestRuntimeAgentsInState:
 
 
 class TestChainStageModeRouting:
-    """Chain routes each stage to the correct pipeline handler."""
+    """Chain routes each stage to the correct pipeline handler.
 
-    def test_moa_stage_routes_to_moa_handler(self):
-        """mode='moa' stage → _run_moa_pipeline()."""
-        stage = ChainStage(mode="moa")
-        assert stage.mode == "moa"
-        # The orchestrator dispatches: if stage.mode == "moa" → _run_moa_pipeline()
+    These tests exercise Orchestrator._run_chain() directly with
+    monkeypatched handlers so that routing and halt behaviour are
+    verified against the real implementation.
+    """
 
-    def test_non_moa_stage_routes_to_state_machine(self):
-        """mode='code-dev' → _run_state_machine()."""
+    @staticmethod
+    def _make_orchestrator(tmp_path: Path, stages: list[ChainStage]) -> Orchestrator:
+        """Create an Orchestrator with a chain-mode PipelineSpec."""
+        # Write a minimal pipeline YAML so PipelineLoader can load it
+        pipeline_file = tmp_path / "pipeline.yaml"
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        (prompts_dir / "developer.md").write_text("# Dummy")
+        (prompts_dir / "reviewer.md").write_text("# Dummy")
+        pipeline_file.write_text("""
+version: "2.0"
+mode: chain
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        spec.chain.stages = stages
+        return Orchestrator(spec=spec)
+
+    def test_moa_stage_dispatches_to_run_moa_pipeline(self, tmp_path, monkeypatch):
+        """mode='moa' stage → _run_moa_pipeline() is called."""
+        stages = [ChainStage(mode="moa")]
+        orch = self._make_orchestrator(tmp_path, stages)
+
+        moa_called = MagicMock()
+        sm_called = MagicMock()
+        monkeypatch.setattr(orch, "_run_moa_pipeline", moa_called)
+        monkeypatch.setattr(orch, "_run_state_machine", sm_called)
+
+        orch._run_chain()
+        assert moa_called.call_count == 1
+        assert sm_called.call_count == 0
+
+    def test_non_moa_stage_dispatches_to_state_machine(self, tmp_path, monkeypatch):
+        """mode='code-dev' stage → _run_state_machine() is called."""
         for mode in ["code-dev", "full-dev", "spec-driven", "greenfield"]:
-            stage = ChainStage(mode=mode)
-            assert stage.mode == mode
-            # The orchestrator dispatches: else → _run_state_machine()
+            stages = [ChainStage(mode=mode)]
+            orch = self._make_orchestrator(tmp_path, stages)
 
-    def test_inspect_only_stage(self):
-        """mode='inspect-only' stage routes correctly."""
-        stage = ChainStage(mode="inspect-only")
-        assert stage.mode == "inspect-only"
+            moa_called = MagicMock()
+            sm_called = MagicMock()
+            monkeypatch.setattr(orch, "_run_moa_pipeline", moa_called)
+            monkeypatch.setattr(orch, "_run_state_machine", sm_called)
+
+            orch._run_chain()
+            assert moa_called.call_count == 0, f"mode={mode}"
+            assert sm_called.call_count == 1, f"mode={mode}"
+
+    def test_halt_on_fail_false_clears_halt_and_continues(
+        self, tmp_path, monkeypatch,
+    ):
+        """halt_on_fail=False clears the halt signal so next stage runs."""
+        stages = [
+            ChainStage(mode="code-dev", halt_on_fail=False),
+            ChainStage(mode="code-dev"),
+        ]
+        orch = self._make_orchestrator(tmp_path, stages)
+
+        call_count = 0
+
+        def _fake_run_state_machine():
+            nonlocal call_count
+            call_count += 1
+            orch.halt("simulated failure")
+
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", _fake_run_state_machine)
+
+        orch._run_chain()
+
+        # Both stages ran: the first halted (halt_on_fail=False → cleared),
+        # the second also halted (halt_on_fail=True → chain stopped).
+        assert call_count == 2
+        # The final halt signal is True because the second stage
+        # (halt_on_fail=True) stopped the chain.
+        assert orch.state().halt_signal is True
+
+    def test_halt_on_fail_true_stops_chain(self, tmp_path, monkeypatch):
+        """halt_on_fail=True (default) stops the chain on failure."""
+        stages = [
+            ChainStage(mode="code-dev", halt_on_fail=True),
+            ChainStage(mode="code-dev"),
+        ]
+        orch = self._make_orchestrator(tmp_path, stages)
+
+        call_count = 0
+
+        def _fake_run_state_machine():
+            nonlocal call_count
+            call_count += 1
+            orch.halt("simulated failure")
+
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", _fake_run_state_machine)
+
+        orch._run_chain()
+
+        # Second stage should NOT have run because halt_on_fail=True
+        assert call_count == 1
 
 
 # ============================================================================
@@ -540,22 +640,222 @@ class TestChainStageModeRouting:
 
 
 class TestChainDepthGuard:
-    """_run_chain should have a runtime depth guard to prevent infinite loops."""
+    """_run_chain depth guard prevents infinite recursion.
 
-    def test_chain_depth_guard_accepts_shallow(self):
-        """Depths 1-3 are allowed."""
-        # Simulated: max allowed depth = 3
-        MAX_CHAIN_DEPTH = 3
-        for depth in [1, 2, 3]:
-            assert depth <= MAX_CHAIN_DEPTH
+    These tests exercise the real Orchestrator._run_chain() depth
+    parameter to verify the guard halts at the actual boundary.
+    """
 
-    def test_chain_depth_guard_rejects_deep(self):
-        """Depths > 3 are rejected."""
-        MAX_CHAIN_DEPTH = 3
-        depth = 4
-        with pytest.raises(ValueError, match="chain depth"):
-            if depth > MAX_CHAIN_DEPTH:
-                raise ValueError(f"chain depth {depth} exceeds maximum {MAX_CHAIN_DEPTH}")
+    @staticmethod
+    def _make_orch(tmp_path: Path) -> Orchestrator:
+        """Create a minimal Orchestrator with a chain PipelineSpec."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        (prompts_dir / "developer.md").write_text("# Dummy")
+        (prompts_dir / "reviewer.md").write_text("# Dummy")
+        pipeline_file.write_text("""
+version: "2.0"
+mode: chain
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        return Orchestrator(spec=spec)
+
+    def test_depth_within_limit_runs_stages(self, tmp_path, monkeypatch):
+        """Depth 0–2 runs chain stages normally without halting."""
+        orch = self._make_orch(tmp_path)
+        orch.spec.chain.stages = [ChainStage(mode="code-dev")]
+
+        sm_called = MagicMock()
+        halt_called = MagicMock()
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", sm_called)
+        monkeypatch.setattr(orch, "halt", halt_called)
+
+        orch._run_chain(_depth=2)
+
+        # Depth 2 < MAX_CHAIN_DEPTH (3) → should run, not halt
+        assert sm_called.call_count == 1
+        halt_called.assert_not_called()
+
+    def test_depth_at_boundary_halt(self, tmp_path, monkeypatch):
+        """Depth 3 (== MAX_CHAIN_DEPTH) halts before any stage runs."""
+        orch = self._make_orch(tmp_path)
+        orch.spec.chain.stages = [ChainStage(mode="code-dev")]
+
+        sm_called = MagicMock()
+        halt_called = MagicMock()
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", sm_called)
+        monkeypatch.setattr(orch, "halt", halt_called)
+
+        orch._run_chain(_depth=3)
+
+        # Depth 3 >= MAX_CHAIN_DEPTH (3) → should halt
+        halt_called.assert_called_once()
+        assert "depth 3" in halt_called.call_args[0][0]
+        # Stages should NOT have run
+        sm_called.assert_not_called()
+
+
+# ============================================================================
+# Stage Pipeline Loading (_run_chain with stage.pipeline)
+# ============================================================================
+
+
+class TestChainStagePipelineLoading:
+    """When a chain stage specifies a pipeline YAML, _run_chain loads it
+    via PipelineLoader and runs the stage with the loaded spec."""
+
+    @staticmethod
+    def _write_minimal_pipeline(dir_: Path, name: str, mode: str = "code-dev") -> Path:
+        """Write a minimal pipeline YAML file and return its path."""
+        p = dir_ / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        prompts = dir_ / "prompts"
+        prompts.mkdir(parents=True, exist_ok=True)
+        (prompts / "developer.md").write_text("# Dummy")
+        (prompts / "reviewer.md").write_text("# Dummy")
+        p.write_text(f"""
+version: "2.0"
+mode: {mode}
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        return p
+
+    def test_stage_pipeline_loaded_and_used(self, tmp_path, monkeypatch):
+        """When stage.pipeline is set, _run_chain loads it via PipelineLoader."""
+        # Main pipeline (chain mode)
+        main_file = self._write_minimal_pipeline(tmp_path, "pipeline.yaml", "chain")
+
+        # Stage pipeline (moa mode)
+        stage_pipeline_rel = "pipelines/stage1.yaml"
+        stage_file = self._write_minimal_pipeline(
+            tmp_path, stage_pipeline_rel, "moa",
+        )
+
+        loader = PipelineLoader()
+        spec = loader.load(main_file)
+        spec.chain.stages = [
+            ChainStage(mode="moa", pipeline=stage_pipeline_rel),
+        ]
+
+        orch = Orchestrator(spec=spec)
+        moa_called = MagicMock()
+        sm_called = MagicMock()
+        monkeypatch.setattr(orch, "_run_moa_pipeline", moa_called)
+        monkeypatch.setattr(orch, "_run_state_machine", sm_called)
+
+        orch._run_chain()
+
+        # Stage mode is moa → should dispatch to _run_moa_pipeline
+        assert moa_called.call_count == 1
+        assert sm_called.call_count == 0
+
+    def test_stage_pipeline_preserves_world(self, tmp_path, monkeypatch):
+        """Loaded stage spec keeps the parent spec's World (same root)."""
+        main_file = self._write_minimal_pipeline(tmp_path, "pipeline.yaml", "chain")
+        stage_file = self._write_minimal_pipeline(
+            tmp_path, "pipelines/stage1.yaml", "moa",
+        )
+
+        loader = PipelineLoader()
+        spec = loader.load(main_file)
+        spec.chain.stages = [
+            ChainStage(mode="moa", pipeline="pipelines/stage1.yaml"),
+        ]
+
+        orch = Orchestrator(spec=spec)
+
+        captured_spec = None
+
+        def _capture_spec():
+            nonlocal captured_spec
+            captured_spec = orch.spec
+
+        monkeypatch.setattr(orch, "_run_moa_pipeline", _capture_spec)
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+
+        orch._run_chain()
+
+        assert captured_spec is not None
+        # The stage spec should use the same world/root as the parent
+        assert captured_spec.world.root == spec.world.root
+        # Mode should be overridden to the stage's mode
+        assert captured_spec.mode == "moa"
+
+    def test_stage_pipeline_restores_spec_after_run(self, tmp_path, monkeypatch):
+        """After a stage with pipeline runs, self.spec is restored."""
+        main_file = self._write_minimal_pipeline(tmp_path, "pipeline.yaml", "chain")
+        stage_file = self._write_minimal_pipeline(
+            tmp_path, "pipelines/stage1.yaml", "moa",
+        )
+
+        loader = PipelineLoader()
+        spec = loader.load(main_file)
+        spec.chain.stages = [
+            ChainStage(mode="moa", pipeline="pipelines/stage1.yaml"),
+        ]
+
+        orch = Orchestrator(spec=spec)
+        original_spec = orch.spec
+
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+
+        orch._run_chain()
+
+        # After chain completes, the spec should be the original
+        assert orch.spec is original_spec
+
+    def test_stage_missing_pipeline_halt(self, tmp_path, monkeypatch):
+        """Missing pipeline file for a stage triggers halt."""
+        main_file = self._write_minimal_pipeline(tmp_path, "pipeline.yaml", "chain")
+
+        loader = PipelineLoader()
+        spec = loader.load(main_file)
+        spec.chain.stages = [
+            ChainStage(mode="moa", pipeline="nonexistent/pipeline.yaml"),
+        ]
+
+        orch = Orchestrator(spec=spec)
+        halt_msgs = []
+
+        def _fake_halt(msg: str) -> None:
+            halt_msgs.append(msg)
+
+        monkeypatch.setattr(orch, "halt", _fake_halt)
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+
+        orch._run_chain()
+
+        assert len(halt_msgs) == 1
+        assert "pipeline file not found" in halt_msgs[0]
 
 
 # ============================================================================
