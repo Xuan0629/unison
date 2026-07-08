@@ -42,6 +42,8 @@ from unison.interfaces import (
     AgentSpec,
     BootstrapConfig,
     BudgetConfig,
+    ChainConfig,
+    ChainStage,
     GreenfieldConfig,
     MoaConfig,
     PipelineMode,
@@ -210,6 +212,7 @@ class PipelineLoader:
             greenfield=self._build_greenfield(raw.get("greenfield")),
             moa=self._build_moa(raw.get("moa")),
             webui=self._build_webui(raw.get("webui")),
+            chain=self._build_chain(raw.get("chain")),
         )
 
     # ------------------------------------------------------------------
@@ -564,6 +567,22 @@ class PipelineLoader:
             auto_start=raw.get("auto_start", True),
             port=raw.get("port", 9099),
         )
+
+    @staticmethod
+    def _build_chain(raw: dict[str, Any] | None) -> ChainConfig:
+        """Build ChainConfig from raw YAML, returns empty if not set."""
+        if not raw or not isinstance(raw.get("stages"), list):
+            return ChainConfig()
+        stages = []
+        for s in raw["stages"]:
+            output_map = s.get("output_map", {}) or {}
+            stages.append(ChainStage(
+                mode=s.get("mode", "code-dev"),
+                pipeline=s.get("pipeline", ""),
+                output_map=output_map,
+                halt_on_fail=s.get("halt_on_fail", True),
+            ))
+        return ChainConfig(stages=stages)
 
 
 # ============================================================================

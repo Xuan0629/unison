@@ -53,6 +53,7 @@ PipelineMode: TypeAlias = Literal[
     "greenfield",     # New module from scratch — agent works only on specified files, no existing code
     "spec-driven",    # Planner → spec verification gate → Developer ↔ Reviewer
     "moa",            # Mixture of Agents — parallel analyze → synthesize → rebuttal → finalize
+    "chain",          # Multi-pipeline chaining — run stages sequentially, map outputs→inputs
 ]
 
 class RiskLevel(Enum):
@@ -362,6 +363,26 @@ class WebUiConfig:
 
 
 @dataclass
+class ChainStage:
+    """A single stage in a chained pipeline.
+
+    Each stage runs one pipeline mode.  ``output_map`` maps upstream
+    output files to downstream input files (e.g. MoA synthesis →
+    PRD for full-dev).
+    """
+    mode: PipelineMode
+    pipeline: str = ""         # path to pipeline YAML for this stage
+    output_map: dict[str, str] = field(default_factory=dict)
+    halt_on_fail: bool = True
+
+
+@dataclass
+class ChainConfig:
+    """Multi-pipeline chaining configuration."""
+    stages: list[ChainStage] = field(default_factory=list)
+
+
+@dataclass
 class PipelineSpec:
     """一次 pipeline 运行的全部配置（不可变）。"""
     version: str  # "1.0"
@@ -388,6 +409,7 @@ class PipelineSpec:
     greenfield: GreenfieldConfig | None = None  # greenfield mode: isolated new module dev
     moa: MoaConfig | None = None  # moa mode: mixture of agents parallel analysis
     webui: WebUiConfig = field(default_factory=lambda: WebUiConfig())  # auto-start web dashboard
+    chain: ChainConfig = field(default_factory=lambda: ChainConfig())  # multi-pipeline chaining
 
     def get(self, role: AgentRole) -> AgentSpec:
         if role not in self.agents:

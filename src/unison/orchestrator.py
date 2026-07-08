@@ -307,6 +307,11 @@ class Orchestrator:
             self._run_moa_pipeline()
             return
 
+        # Chain mode: run stages sequentially, map outputs→inputs
+        if mode == "chain" and self.spec.chain.stages:
+            self._run_chain()
+            return
+
         phases = PhaseRouter.get_phases(mode)
         if not phases:
             self.halt(f"Unknown pipeline mode: {mode}")
@@ -595,6 +600,43 @@ class Orchestrator:
                 f"Failed: {', '.join(failed_agents)}"
             )
             return
+
+    def _run_chain(self) -> None:
+        """Run chained pipeline stages sequentially.
+
+        Each stage in ``ChainConfig.stages`` is executed in order.
+        After each stage, ``output_map`` copies upstream output files
+        to downstream input locations so the next stage picks them up
+        automatically.
+        """
+        import shutil
+
+        for i, stage in enumerate(self.spec.chain.stages):
+            if self._state.halt_signal:
+                return
+
+            # Map upstream outputs → downstream inputs
+            for src_rel, dst_rel in stage.output_map.items():
+                src = self.spec.world.root / src_rel
+                dst = self.spec.world.root / dst_rel
+                if src.exists():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy(src, dst)
+
+            # Run the stage
+            saved_mode = self.spec.mode
+            # Temporarily override mode for this stage
+            object.__setattr__(self.spec, "mode", stage.mode)
+            try:
+                if stage.mode == "moa":
+                    self._run_moa_pipeline()
+                else:
+                    self._run_state_machine()
+            finally:
+                object.__setattr__(self.spec, "mode", saved_mode)
+
+            if self._state.halt_signal and stage.halt_on_fail:
+                return
 
     def _run_moa_synthesis(self, round_n: int, moa_config) -> None:
         """Run a single synthesizer agent to merge MoA analyses.
