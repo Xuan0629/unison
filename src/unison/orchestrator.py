@@ -251,6 +251,11 @@ class Orchestrator:
             self._auto_start_webui()
 
             # ------------------------------------------------------------------
+            # 3b. Auto-start Observer (notifications → Feishu/Discord)
+            # ------------------------------------------------------------------
+            self._auto_start_observer()
+
+            # ------------------------------------------------------------------
             # 4. Bootstrap (§12)
             # ------------------------------------------------------------------
             self._run_bootstrap()
@@ -2366,6 +2371,44 @@ class Orchestrator:
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
+        except Exception:
+            pass  # best-effort
+
+    def _auto_start_observer(self) -> None:
+        """Auto-start Observer if not already running.
+
+        Checks whether an Observer process is active for this project
+        via a PID file at ``~/.unison/observer/<project>.pid``.  If no
+        live process is found, spawns a background ``unison observe``
+        process.  The Observer writes ``notifications.jsonl`` that the
+        Feishu/Discord cron job reads for pipeline event delivery.
+
+        Does NOT halt on failure — the Observer is best-effort.
+        """
+        pid_dir = Path.home() / ".unison" / "observer"
+        pid_dir.mkdir(parents=True, exist_ok=True)
+        pid_file = pid_dir / f"{self.spec.world.root.name}.pid"
+
+        # Check existing Observer
+        if pid_file.exists():
+            try:
+                existing_pid = int(pid_file.read_text().strip())
+                os.kill(existing_pid, 0)  # signal 0 = existence check
+                return  # already running
+            except (ValueError, OSError):
+                pid_file.unlink(missing_ok=True)
+
+        try:
+            proc = subprocess.Popen(
+                [
+                    sys.executable, "-m", "unison.cli", "observe",
+                    "--project", str(self.spec.world.root),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            pid_file.write_text(str(proc.pid))
         except Exception:
             pass  # best-effort
 
