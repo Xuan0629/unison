@@ -783,6 +783,143 @@ agents:
 
 
 # ============================================================================
+# Defence-in-Depth: Orchestrator-Level Path-Traversal Rejection
+# ============================================================================
+
+
+class TestChainOutputMapDefenceInDepth:
+    """Orchestrator._run_chain() rejects path traversal in output_map.
+
+    These tests verify the defence-in-depth check — even when a
+    PipelineSpec is constructed directly (bypassing
+    PipelineLoader._validate_output_map), the orchestrator must still
+    reject path traversal in output_map at run time.
+    """
+
+    @staticmethod
+    def _make_orch(tmp_path: Path, stages: list[ChainStage]) -> Orchestrator:
+        """Create an Orchestrator with a pre-loaded spec, then swap in
+        directly-constructed ChainStages (bypassing PipelineLoader validation)."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        (prompts_dir / "developer.md").write_text("# Dummy")
+        (prompts_dir / "reviewer.md").write_text("# Dummy")
+        pipeline_file.write_text("""
+version: "2.0"
+mode: chain
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        spec.chain.stages = stages
+        return Orchestrator(spec=spec)
+
+    def test_source_traversal_halted(self, tmp_path, monkeypatch):
+        """Source path with ../../ traversal triggers halt."""
+        stages = [ChainStage(
+            mode="code-dev",
+            output_map={"../../outside.md": "out.md"},
+        )]
+        orch = self._make_orch(tmp_path, stages)
+
+        halt_calls = []
+        monkeypatch.setattr(orch, "halt", lambda msg: halt_calls.append(msg))
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+
+        orch._run_chain()
+
+        assert len(halt_calls) == 1
+        assert "escapes project root" in halt_calls[0]
+        assert "../../outside.md" in halt_calls[0]
+
+    def test_destination_traversal_halted(self, tmp_path, monkeypatch):
+        """Destination path with ../../ traversal triggers halt."""
+        stages = [ChainStage(
+            mode="code-dev",
+            output_map={"src/in.md": "../../outside.md"},
+        )]
+        orch = self._make_orch(tmp_path, stages)
+
+        halt_calls = []
+        monkeypatch.setattr(orch, "halt", lambda msg: halt_calls.append(msg))
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+
+        orch._run_chain()
+
+        assert len(halt_calls) == 1
+        assert "escapes project root" in halt_calls[0]
+        assert "../../outside.md" in halt_calls[0]
+
+    def test_absolute_source_halted(self, tmp_path, monkeypatch):
+        """Absolute source path triggers halt."""
+        stages = [ChainStage(
+            mode="code-dev",
+            output_map={"/etc/passwd": "out.md"},
+        )]
+        orch = self._make_orch(tmp_path, stages)
+
+        halt_calls = []
+        monkeypatch.setattr(orch, "halt", lambda msg: halt_calls.append(msg))
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+
+        orch._run_chain()
+
+        assert len(halt_calls) == 1
+        assert "absolute" in halt_calls[0]
+
+    def test_non_string_key_halted(self, tmp_path, monkeypatch):
+        """Non-string key in output_map triggers halt."""
+        stages = [ChainStage(
+            mode="code-dev",
+            output_map={42: "out.md"},  # type: ignore[dict-item]
+        )]
+        orch = self._make_orch(tmp_path, stages)
+
+        halt_calls = []
+        monkeypatch.setattr(orch, "halt", lambda msg: halt_calls.append(msg))
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+
+        orch._run_chain()
+
+        assert len(halt_calls) == 1
+        assert "must be strings" in halt_calls[0]
+
+    def test_clean_relative_paths_accepted(self, tmp_path, monkeypatch):
+        """Normal relative paths do NOT trigger halt — defence-in-depth
+        lets valid output_map through."""
+        (tmp_path / "reviews").mkdir(parents=True)
+        (tmp_path / "reviews" / "synthesis.md").write_text("# syn")
+        stages = [ChainStage(
+            mode="code-dev",
+            output_map={"reviews/synthesis.md": "prd/PRD.md"},
+        )]
+        orch = self._make_orch(tmp_path, stages)
+
+        halt_calls = []
+        monkeypatch.setattr(orch, "halt", lambda msg: halt_calls.append(msg))
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+
+        orch._run_chain()
+
+        # No halt for valid paths
+        assert len(halt_calls) == 0
+        # The destination file should have been copied
+        assert (tmp_path / "prd" / "PRD.md").read_text() == "# syn"
+
+
+# ============================================================================
 # Runtime Depth Guard (orchestrator-level)
 # ============================================================================
 

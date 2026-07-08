@@ -631,26 +631,52 @@ class Orchestrator:
                 return
 
             # Map upstream outputs → downstream inputs
-            root = self.spec.world.root
+            root = self.spec.world.root.resolve()
             for src_rel, dst_rel in stage.output_map.items():
-                src = root / src_rel
-                dst = root / dst_rel
                 # Defence-in-depth: reject path traversal (load-time
-                # validation should already catch these, but verify
-                # again in case a PipelineSpec was constructed without
-                # going through PipelineLoader.load).
-                if src.resolve() != (root / src_rel).resolve():
+                # validation via PipelineLoader._validate_output_map
+                # should already catch these, but verify again in case
+                # a PipelineSpec was constructed without going through
+                # PipelineLoader.load).
+                if not isinstance(src_rel, str) or not isinstance(dst_rel, str):
+                    self.halt(
+                        f"chain stage {i} output_map: all keys and values "
+                        f"must be strings, got {type(src_rel).__name__!r} → "
+                        f"{type(dst_rel).__name__!r}"
+                    )
+                    return
+                if Path(src_rel).is_absolute():
+                    self.halt(
+                        f"chain stage {i} output_map: source path must be "
+                        f"relative, got absolute: {src_rel!r}"
+                    )
+                    return
+                if Path(dst_rel).is_absolute():
+                    self.halt(
+                        f"chain stage {i} output_map: destination path must "
+                        f"be relative, got absolute: {dst_rel!r}"
+                    )
+                    return
+                try:
+                    (root / src_rel).resolve().relative_to(root)
+                except ValueError:
                     self.halt(
                         f"chain stage {i} output_map source path escapes "
-                        f"project root: {src_rel!r}"
+                        f"project root: {src_rel!r} resolves to "
+                        f"{(root / src_rel).resolve()!s}"
                     )
                     return
-                if dst.resolve() != (root / dst_rel).resolve():
+                try:
+                    (root / dst_rel).resolve().relative_to(root)
+                except ValueError:
                     self.halt(
                         f"chain stage {i} output_map destination path "
-                        f"escapes project root: {dst_rel!r}"
+                        f"escapes project root: {dst_rel!r} resolves to "
+                        f"{(root / dst_rel).resolve()!s}"
                     )
                     return
+                src = root / src_rel
+                dst = root / dst_rel
                 if src.exists():
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy(src, dst)
