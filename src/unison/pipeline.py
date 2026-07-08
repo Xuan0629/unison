@@ -212,7 +212,7 @@ class PipelineLoader:
             greenfield=self._build_greenfield(raw.get("greenfield")),
             moa=self._build_moa(raw.get("moa")),
             webui=self._build_webui(raw.get("webui")),
-            chain=self._build_chain(raw.get("chain")),
+            chain=self._build_chain(raw.get("chain"), world.root),
         )
 
     # ------------------------------------------------------------------
@@ -569,17 +569,77 @@ class PipelineLoader:
         )
 
     @staticmethod
-    def _build_chain(raw: dict[str, Any] | None) -> ChainConfig:
+    def _validate_output_map(
+        output_map: dict[str, str], world_root: Path, stage_index: int
+    ) -> None:
+        """Validate output_map entries for path-traversal safety.
+
+        Every key (source) and value (destination) must:
+        - be a string
+        - NOT be an absolute path (which would replace ``world_root``
+          when joined via ``Path / abs_path``)
+        - resolve within *world_root* after ``world_root / path`` and
+          ``.resolve()`` (rejects ``../`` escapes)
+
+        Raises:
+            PipelineValidationError: On any violation.
+        """
+        for k, v in output_map.items():
+            if not isinstance(k, str) or not isinstance(v, str):
+                raise PipelineValidationError(
+                    f"chain.stages[{stage_index}].output_map: "
+                    f"all keys and values must be strings, "
+                    f"got {type(k).__name__}: {k!r} → {type(v).__name__}: {v!r}"
+                )
+            if Path(k).is_absolute():
+                raise PipelineValidationError(
+                    f"chain.stages[{stage_index}].output_map: "
+                    f"source path must be relative, got absolute: {k!r}"
+                )
+            if Path(v).is_absolute():
+                raise PipelineValidationError(
+                    f"chain.stages[{stage_index}].output_map: "
+                    f"destination path must be relative, got absolute: {v!r}"
+                )
+            resolved_src = (world_root / k).resolve()
+            resolved_dst = (world_root / v).resolve()
+            try:
+                resolved_src.relative_to(world_root)
+            except ValueError:
+                raise PipelineValidationError(
+                    f"chain.stages[{stage_index}].output_map: "
+                    f"source path escapes project root: {k!r} "
+                    f"resolves to {resolved_src!s}"
+                )
+            try:
+                resolved_dst.relative_to(world_root)
+            except ValueError:
+                raise PipelineValidationError(
+                    f"chain.stages[{stage_index}].output_map: "
+                    f"destination path escapes project root: {v!r} "
+                    f"resolves to {resolved_dst!s}"
+                )
+
+    @staticmethod
+    def _build_chain(raw: dict[str, Any] | None, world_root: Path | None = None) -> ChainConfig:
         """Build ChainConfig from raw YAML, returns empty if not set.
+
+        Args:
+            raw: Raw chain config dict from YAML.
+            world_root: Project root for output_map path containment
+                validation.  When provided, every output_map key and
+                value is validated to prevent path-traversal attacks
+                (absolute paths and ``../`` escapes are rejected).
 
         Raises:
             PipelineValidationError: If any stage has mode ``"chain"``
-                (recursive chain-in-chain is forbidden — P0.3).
+                (recursive chain-in-chain is forbidden — P0.3), or
+                output_map entries fail path containment checks.
         """
         if not raw or not isinstance(raw.get("stages"), list):
             return ChainConfig()
         stages = []
-        for s in raw["stages"]:
+        for i, s in enumerate(raw["stages"]):
             mode = s.get("mode", "code-dev")
             # P0.3: Recursion guard — chain mode must not include a
             # chain stage (would allow infinite recursion)
@@ -589,6 +649,9 @@ class PipelineLoader:
                     "Chain-in-chain recursion is not supported."
                 )
             output_map = s.get("output_map", {}) or {}
+            # Validate output_map paths for path-traversal
+            if output_map and world_root is not None:
+                PipelineLoader._validate_output_map(output_map, world_root, i)
             stages.append(ChainStage(
                 mode=mode,
                 pipeline=s.get("pipeline", ""),

@@ -157,6 +157,154 @@ class TestBuildChainParsing:
 
 
 # ============================================================================
+# output_map Path-Traversal Validation (load time)
+# ============================================================================
+
+
+class TestOutputMapPathValidation:
+    """Load-time validation rejects path traversal in output_map."""
+
+    def _root(self, tmp_path: Path) -> Path:
+        """Create and return a simulated project root."""
+        root = tmp_path / "project"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    # -- valid paths -------------------------------------------------------
+
+    def test_relative_paths_accepted(self, tmp_path):
+        """Normal relative paths pass validation."""
+        root = self._root(tmp_path)
+        raw = {
+            "stages": [{
+                "mode": "code-dev",
+                "output_map": {
+                    "reviews/synthesis.md": "prd/PRD.md",
+                    "findings.md": "specs/design.md",
+                },
+            }]
+        }
+        cfg = PipelineLoader._build_chain(raw, root)
+        assert len(cfg.stages) == 1
+        assert cfg.stages[0].output_map == {
+            "reviews/synthesis.md": "prd/PRD.md",
+            "findings.md": "specs/design.md",
+        }
+
+    def test_empty_output_map_accepted(self, tmp_path):
+        """Empty output_map passes validation with world_root set."""
+        root = self._root(tmp_path)
+        raw = {"stages": [{"mode": "code-dev", "output_map": {}}]}
+        cfg = PipelineLoader._build_chain(raw, root)
+        assert cfg.stages[0].output_map == {}
+
+    # -- absolute paths ----------------------------------------------------
+
+    def test_absolute_source_rejected(self, tmp_path):
+        """Absolute source path (e.g. /tmp/foo) is rejected."""
+        root = self._root(tmp_path)
+        raw = {
+            "stages": [{
+                "mode": "code-dev",
+                "output_map": {"/etc/passwd": "prd/out.md"},
+            }]
+        }
+        with pytest.raises(PipelineValidationError, match="source path must be relative"):
+            PipelineLoader._build_chain(raw, root)
+
+    def test_absolute_destination_rejected(self, tmp_path):
+        """Absolute destination path is rejected."""
+        root = self._root(tmp_path)
+        raw = {
+            "stages": [{
+                "mode": "code-dev",
+                "output_map": {"src/in.md": "/tmp/out.md"},
+            }]
+        }
+        with pytest.raises(PipelineValidationError, match="destination path must be relative"):
+            PipelineLoader._build_chain(raw, root)
+
+    # -- ../ traversal -----------------------------------------------------
+
+    def test_source_traversal_rejected(self, tmp_path):
+        """Source path with ../ that escapes root is rejected."""
+        root = self._root(tmp_path)
+        raw = {
+            "stages": [{
+                "mode": "code-dev",
+                "output_map": {"../../outside.md": "prd/out.md"},
+            }]
+        }
+        with pytest.raises(PipelineValidationError, match="source path escapes project root"):
+            PipelineLoader._build_chain(raw, root)
+
+    def test_destination_traversal_rejected(self, tmp_path):
+        """Destination path with ../ that escapes root is rejected."""
+        root = self._root(tmp_path)
+        raw = {
+            "stages": [{
+                "mode": "code-dev",
+                "output_map": {"src/in.md": "../../outside.md"},
+            }]
+        }
+        with pytest.raises(PipelineValidationError, match="destination path escapes project root"):
+            PipelineLoader._build_chain(raw, root)
+
+    def test_deep_traversal_rejected(self, tmp_path):
+        """Path that starts inside root but resolves outside is rejected."""
+        root = self._root(tmp_path)
+        # foo/../../outside.md resolves to <root>/../outside.md → outside
+        raw = {
+            "stages": [{
+                "mode": "code-dev",
+                "output_map": {"foo/../../outside.md": "out.md"},
+            }]
+        }
+        with pytest.raises(PipelineValidationError, match="source path escapes project root"):
+            PipelineLoader._build_chain(raw, root)
+
+    # -- non-string values -------------------------------------------------
+
+    def test_non_string_key_rejected(self, tmp_path):
+        """Non-string keys in output_map are rejected."""
+        root = self._root(tmp_path)
+        raw = {
+            "stages": [{
+                "mode": "code-dev",
+                "output_map": {42: "out.md"},
+            }]
+        }
+        with pytest.raises(PipelineValidationError, match="must be strings"):
+            PipelineLoader._build_chain(raw, root)
+
+    def test_non_string_value_rejected(self, tmp_path):
+        """Non-string values in output_map are rejected."""
+        root = self._root(tmp_path)
+        raw = {
+            "stages": [{
+                "mode": "code-dev",
+                "output_map": {"src.md": None},
+            }]
+        }
+        with pytest.raises(PipelineValidationError, match="must be strings"):
+            PipelineLoader._build_chain(raw, root)
+
+    # -- world_root=None skips validation (backward compat) ----------------
+
+    def test_no_world_root_skips_validation(self):
+        """When world_root is None, no path validation occurs (backward compat)."""
+        raw = {
+            "stages": [{
+                "mode": "code-dev",
+                "output_map": {"reviews/synthesis.md": "prd/PRD.md"},
+            }]
+        }
+        # Must not raise
+        cfg = PipelineLoader._build_chain(raw, world_root=None)
+        assert len(cfg.stages) == 1
+
+
+# ============================================================================
 # Recursion Guard
 # ============================================================================
 

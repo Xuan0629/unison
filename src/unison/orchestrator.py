@@ -631,9 +631,26 @@ class Orchestrator:
                 return
 
             # Map upstream outputs → downstream inputs
+            root = self.spec.world.root
             for src_rel, dst_rel in stage.output_map.items():
-                src = self.spec.world.root / src_rel
-                dst = self.spec.world.root / dst_rel
+                src = root / src_rel
+                dst = root / dst_rel
+                # Defence-in-depth: reject path traversal (load-time
+                # validation should already catch these, but verify
+                # again in case a PipelineSpec was constructed without
+                # going through PipelineLoader.load).
+                if src.resolve() != (root / src_rel).resolve():
+                    self.halt(
+                        f"chain stage {i} output_map source path escapes "
+                        f"project root: {src_rel!r}"
+                    )
+                    return
+                if dst.resolve() != (root / dst_rel).resolve():
+                    self.halt(
+                        f"chain stage {i} output_map destination path "
+                        f"escapes project root: {dst_rel!r}"
+                    )
+                    return
                 if src.exists():
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy(src, dst)
