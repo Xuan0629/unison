@@ -669,11 +669,11 @@ class Orchestrator:
                         f"{pipeline_path}: {exc}"
                     )
                     return
-                # Preserve the shared world/root so output goes to the
-                # same project; apply the stage's requested mode.
-                stage_spec = replace(
-                    stage_spec, world=self.spec.world, mode=stage.mode,
-                )
+                # Keep the loaded spec's own World so that prompt paths
+                # and other config-owned resources resolve relative to
+                # the stage pipeline file rather than the parent
+                # project.  Apply the stage's requested mode.
+                stage_spec = replace(stage_spec, mode=stage.mode)
                 saved_spec = self.spec
                 self.spec = stage_spec
             else:

@@ -777,7 +777,13 @@ agents:
         assert sm_called.call_count == 0
 
     def test_stage_pipeline_preserves_world(self, tmp_path, monkeypatch):
-        """Loaded stage spec keeps the parent spec's World (same root)."""
+        """Loaded stage spec keeps its own World (pipeline file's directory).
+
+        The stage pipeline is in a subdirectory and has project_root: '.',
+        so its World.root must be the stage pipeline's parent directory,
+        NOT the parent project root.  This ensures prompt paths resolve
+        relative to the stage pipeline file.
+        """
         main_file = self._write_minimal_pipeline(tmp_path, "pipeline.yaml", "chain")
         stage_file = self._write_minimal_pipeline(
             tmp_path, "pipelines/stage1.yaml", "moa",
@@ -803,8 +809,9 @@ agents:
         orch._run_chain()
 
         assert captured_spec is not None
-        # The stage spec should use the same world/root as the parent
-        assert captured_spec.world.root == spec.world.root
+        # Stage world.root must be the stage pipeline's directory
+        expected_stage_root = (tmp_path / "pipelines").resolve()
+        assert captured_spec.world.root == expected_stage_root
         # Mode should be overridden to the stage's mode
         assert captured_spec.mode == "moa"
 
@@ -856,6 +863,98 @@ agents:
 
         assert len(halt_msgs) == 1
         assert "pipeline file not found" in halt_msgs[0]
+
+    def test_stage_pipeline_resolves_own_prompts(self, tmp_path, monkeypatch):
+        """Regression: stage resolves prompt paths from its own directory.
+
+        When parent and stage have distinct prompt files, the stage must
+        resolve its prompts from the stage pipeline's directory, NOT from
+        the parent project's directory.  The previous code replaced the
+        loaded spec's World with the parent's World, causing the stage to
+        silently use the wrong (or missing) prompt files.
+        """
+        # -- parent pipeline with its own prompts --
+        parent_prompts = tmp_path / "prompts"
+        parent_prompts.mkdir(parents=True, exist_ok=True)
+        (parent_prompts / "developer.md").write_text("# Parent developer prompt")
+        (parent_prompts / "reviewer.md").write_text("# Parent reviewer prompt")
+
+        main_file = tmp_path / "pipeline.yaml"
+        main_file.write_text("""version: "2.0"
+mode: chain
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+
+        # -- stage pipeline in subdirectory with its OWN prompts --
+        stage_dir = tmp_path / "pipelines"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        stage_prompts = stage_dir / "prompts"
+        stage_prompts.mkdir(parents=True, exist_ok=True)
+        (stage_prompts / "developer.md").write_text("# Stage developer prompt")
+        (stage_prompts / "reviewer.md").write_text("# Stage reviewer prompt")
+
+        stage_file = stage_dir / "stage1.yaml"
+        stage_file.write_text("""version: "2.0"
+mode: moa
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+
+        loader = PipelineLoader()
+        spec = loader.load(main_file)
+        spec.chain.stages = [
+            ChainStage(mode="moa", pipeline="pipelines/stage1.yaml"),
+        ]
+
+        orch = Orchestrator(spec=spec)
+
+        captured_spec = None
+
+        def _capture_spec():
+            nonlocal captured_spec
+            captured_spec = orch.spec
+
+        monkeypatch.setattr(orch, "_run_moa_pipeline", _capture_spec)
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+
+        orch._run_chain()
+
+        assert captured_spec is not None
+        # Stage world.root must be the stage pipeline's directory
+        assert captured_spec.world.root == stage_dir.resolve()
+        # Resolved prompt paths must point to the stage's own prompt files
+        dev_prompt_path = (
+            captured_spec.world.root
+            / captured_spec.agents["developer"].system_prompt_path
+        )
+        assert dev_prompt_path.is_file()
+        assert dev_prompt_path.read_text() == "# Stage developer prompt"
+        # The stage must NOT resolve to the parent's prompt
+        parent_dev_path = (
+            spec.world.root / spec.agents["developer"].system_prompt_path
+        )
+        assert dev_prompt_path != parent_dev_path
 
 
 # ============================================================================
