@@ -186,35 +186,28 @@ class UnisonHandler(BaseHTTPRequestHandler):
         }
 
     def _load_agents(self) -> list[dict]:
-        """Extract agent specs from pipeline YAML config.
+        """Extract agent specs from state.runtime_agents or pipeline YAML.
 
-        For MoA mode, generates dynamic analyzer/synthesizer cards
-        from the ``moa`` config section rather than static agents.
+        The Orchestrator writes ``runtime_agents`` to state for modes
+        with dynamically-created agents (MoA, design-debate, etc.).
+        Falls back to pipeline YAML agents when runtime data is absent.
         """
         pipeline = self._load_pipeline_config()
         if not pipeline:
             return []
 
-        # MoA mode: generate dynamic agent cards from MoaConfig
-        if pipeline.get("mode") == "moa" or "moa" in pipeline:
-            moa_cfg = pipeline.get("moa", {})
-            n_agents = moa_cfg.get("agents", 3)
-            runtime = moa_cfg.get("runtime", "claude")
-            model = moa_cfg.get("model", "deepseek-v4-pro")
-            agents = []
-            for i in range(1, n_agents + 1):
-                agents.append({
-                    "role": f"moa-analyzer-{i}",
-                    "runtime": runtime,
-                    "model": model,
-                })
-            agents.append({
-                "role": "moa-synthesizer",
-                "runtime": runtime,
-                "model": model,
-            })
-            return agents
+        # Priority 1: runtime agents from state (covers MoA + any dynamic mode)
+        state = State()
+        state_file = self.project_root / ".unison" / "state.json"
+        if state_file.exists():
+            try:
+                state = State.atomic_read(state_file)
+            except Exception:
+                pass
+        if state.runtime_agents:
+            return state.runtime_agents
 
+        # Priority 2: pipeline YAML agents (static fallback)
         agents_raw = pipeline.get("agents")
         if not isinstance(agents_raw, dict):
             return []

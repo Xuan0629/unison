@@ -380,6 +380,20 @@ class Orchestrator:
         """
         moa_config = self.spec.moa or MoaConfig()
 
+        # Populate runtime_agents for Web UI display
+        self._state.runtime_agents = []
+        for i in range(1, moa_config.agents + 1):
+            self._state.runtime_agents.append({
+                "role": f"moa-analyzer-{i}",
+                "runtime": moa_config.runtime,
+                "model": moa_config.model,
+            })
+        self._state.runtime_agents.append({
+            "role": "moa-synthesizer",
+            "runtime": moa_config.runtime,
+            "model": moa_config.model,
+        })
+
         for round_n in range(1, moa_config.rounds + 1):
             if self._state.halt_signal:
                 return

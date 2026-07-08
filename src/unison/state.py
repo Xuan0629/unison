@@ -104,6 +104,7 @@ class State:
     last_activity: str | None = None  # ISO timestamp
     dag_status: dict | None = None   # V2: DAG 并行阶段状态
     reviewer_verdicts: list[dict] = field(default_factory=list)  # V2: 多 Reviewer 裁决
+    runtime_agents: list[dict] = field(default_factory=list)    # V2: 运行时 agent 列表（含 MoA 等动态 agent）
 
     def __post_init__(self) -> None:
         if self.phase not in VALID_PHASES:
@@ -133,6 +134,7 @@ class State:
             "last_activity": self.last_activity,
             "dag_status": self.dag_status,
             "reviewer_verdicts": self.reviewer_verdicts,
+            "runtime_agents": self.runtime_agents,
         }
 
     @classmethod
@@ -164,6 +166,7 @@ class State:
             last_activity=d.get("last_activity"),
             dag_status=d.get("dag_status"),
             reviewer_verdicts=d.get("reviewer_verdicts", []),
+            runtime_agents=d.get("runtime_agents", []),
         )
 
     # ---- State Machine ------------------------------------------------------
