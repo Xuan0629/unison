@@ -1852,3 +1852,274 @@ class TestObserverLanguageSupport:
             content = world.notifications_file.read_text()
             records = [_json.loads(l) for l in content.strip().split("\n") if l]
             assert any(r.get("language") == "en" for r in records)
+
+
+# ============================================================================
+# P10: Phase 2 — Stall notification cooldown
+# ============================================================================
+
+
+class TestStallCooldown:
+    """P10: _should_emit_stall() cooldown state machine."""
+
+    def test_first_stall_emits_warn(self, tmp_path):
+        """First stall in an episode should emit with severity 'warn'."""
+        from unison.world import World
+        from unison.observer import Observer
+
+        world = World(root=tmp_path)
+        observer = Observer(world=world)
+
+        should_emit, severity = observer._should_emit_stall()
+        assert should_emit is True
+        assert severity == "warn"
+        assert observer._stall_episode_active is True
+        assert observer._stall_escalation_count == 0
+
+    def test_second_stall_within_cooldown_suppressed(self, tmp_path):
+        """Stall within cooldown window (300s) should be suppressed."""
+        from unison.world import World
+        from unison.observer import Observer
+
+        world = World(root=tmp_path)
+        observer = Observer(world=world)
+
+        # First stall — emits
+        should_emit, _ = observer._should_emit_stall()
+        assert should_emit is True
+
+        # Second stall immediately — suppressed (within 300s cooldown)
+        should_emit, _ = observer._should_emit_stall()
+        assert should_emit is False, "Second stall within cooldown should be suppressed"
+
+    def test_stall_after_cooldown_emits_warn(self, tmp_path, monkeypatch):
+        """After cooldown expires, stall emits again with 'warn'."""
+        import time as _time
+        from unison.world import World
+        from unison.observer import Observer
+
+        world = World(root=tmp_path)
+        observer = Observer(world=world)
+        observer._stall_cooldown_seconds = 0.01  # tiny cooldown for testing
+
+        # First stall
+        observer._should_emit_stall()
+
+        # Simulate cooldown expiry
+        _time.sleep(0.02)
+
+        # Second stall after cooldown — should emit (still warn, escalation=1 < 2)
+        should_emit, severity = observer._should_emit_stall()
+        assert should_emit is True
+        assert severity == "warn"
+        assert observer._stall_escalation_count == 1
+
+    def test_stall_escalates_to_error(self, tmp_path, monkeypatch):
+        """After 2 cooldown cycles, stall escalates from warn to error."""
+        import time as _time
+        from unison.world import World
+        from unison.observer import Observer
+
+        world = World(root=tmp_path)
+        observer = Observer(world=world)
+        observer._stall_cooldown_seconds = 0.01
+
+        # First emission: warn, escalation=0
+        should_emit, severity = observer._should_emit_stall()
+        assert severity == "warn"
+        assert observer._stall_escalation_count == 0
+
+        # After cooldown: escalation=1, still warn
+        _time.sleep(0.02)
+        should_emit, severity = observer._should_emit_stall()
+        assert severity == "warn"
+        assert observer._stall_escalation_count == 1
+
+        # After another cooldown: escalation=2, error
+        _time.sleep(0.02)
+        should_emit, severity = observer._should_emit_stall()
+        assert severity == "error"
+        assert observer._stall_escalation_count == 2
+
+    def test_stall_resets_on_activity(self, tmp_path):
+        """_reset_stall_state clears episode and escalation count."""
+        from unison.world import World
+        from unison.observer import Observer
+
+        world = World(root=tmp_path)
+        observer = Observer(world=world)
+
+        # Start an episode
+        observer._should_emit_stall()
+        assert observer._stall_episode_active is True
+        assert observer._stall_escalation_count == 0
+
+        # Reset (activity resumes)
+        observer._reset_stall_state()
+        assert observer._stall_episode_active is False
+        assert observer._stall_escalation_count == 0
+
+    def test_new_episode_after_reset_starts_at_warn(self, tmp_path, monkeypatch):
+        """After reset, a new stall episode starts fresh at warn severity."""
+        import time as _time
+        from unison.world import World
+        from unison.observer import Observer
+
+        world = World(root=tmp_path)
+        observer = Observer(world=world)
+        observer._stall_cooldown_seconds = 0.01
+
+        # First episode: escalate to error
+        observer._should_emit_stall()           # warn
+        _time.sleep(0.02)
+        observer._should_emit_stall()           # warn (esc=1)
+        _time.sleep(0.02)
+        should_emit, severity = observer._should_emit_stall()  # error (esc=2)
+        assert severity == "error"
+
+        # Reset (activity resumes)
+        observer._reset_stall_state()
+
+        # New episode — should start at warn
+        should_emit, severity = observer._should_emit_stall()
+        assert should_emit is True
+        assert severity == "warn"
+        assert observer._stall_escalation_count == 0
+
+
+# ============================================================================
+# P10: Phase 4 — Last-iteration guard
+# ============================================================================
+
+
+class TestLastIterationGuard:
+    """P10: SKIP suppressed when iteration >= max_iter for phase."""
+
+    def test_skip_suppressed_on_last_iteration(self, tmp_path):
+        """SKIP should NOT fire when iteration >= max_dev_iterations."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State, Transition
+        import yaml
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        # Create output so minimal-satisfaction passes
+        (world.root / "prd").mkdir(parents=True, exist_ok=True)
+        (world.root / "prd" / "PRD.md").write_text("content")
+
+        # Write pipeline.yaml with max_dev_iterations=5
+        pipeline_yaml = world.root / "pipeline.yaml"
+        pipeline_yaml.write_text(yaml.dump({
+            "project": {"max_dev_iterations": 5, "test_command": ""},
+        }))
+
+        state = State(phase="dev_review", iteration=5)  # at max
+        state.history = [
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=3),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=4),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:02:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=5),
+        ]
+
+        observer = Observer(world=world)
+        observer._check_skip_intervention(state)
+
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert not skip_file.exists(), (
+            f"SKIP should be suppressed on last iteration (iter={state.iteration})"
+        )
+
+    def test_skip_allowed_before_last_iteration(self, tmp_path):
+        """SKIP should fire when iteration < max_dev_iterations."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State, Transition
+        import yaml
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        (world.root / "prd").mkdir(parents=True, exist_ok=True)
+        (world.root / "prd" / "PRD.md").write_text("content")
+
+        # Write pipeline.yaml with max_dev_iterations=5
+        pipeline_yaml = world.root / "pipeline.yaml"
+        pipeline_yaml.write_text(yaml.dump({
+            "project": {"max_dev_iterations": 5, "test_command": ""},
+        }))
+
+        state = State(phase="dev_review", iteration=4)  # before max
+        state.history = [
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=2),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=3),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:02:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=4),
+        ]
+
+        observer = Observer(world=world)
+        observer._check_skip_intervention(state)
+
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert skip_file.exists(), (
+            f"SKIP should fire when iter={state.iteration} < max=5"
+        )
+
+    def test_read_max_iterations_dev_phase(self, tmp_path):
+        """_read_max_iterations_for_phase returns max_dev_iterations for dev phases."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State
+        import yaml
+
+        world = World(root=tmp_path)
+        pipeline_yaml = world.root / "pipeline.yaml"
+        pipeline_yaml.write_text(yaml.dump({
+            "project": {"max_dev_iterations": 7},
+        }))
+
+        observer = Observer(world=world)
+        state = State(phase="dev_review")
+        result = observer._read_max_iterations_for_phase(state)
+        assert result == 7
+
+    def test_read_max_iterations_planning_phase(self, tmp_path):
+        """_read_max_iterations_for_phase returns max_planning_iterations for planning."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State
+        import yaml
+
+        world = World(root=tmp_path)
+        pipeline_yaml = world.root / "pipeline.yaml"
+        pipeline_yaml.write_text(yaml.dump({
+            "project": {"max_planning_iterations": 4},
+        }))
+
+        observer = Observer(world=world)
+        state = State(phase="planning_review")
+        result = observer._read_max_iterations_for_phase(state)
+        assert result == 4
+
+    def test_read_max_iterations_no_pipeline_yaml(self, tmp_path):
+        """_read_max_iterations_for_phase returns None when no pipeline.yaml."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State
+
+        world = World(root=tmp_path)
+        observer = Observer(world=world)
+        state = State(phase="dev_review")
+        result = observer._read_max_iterations_for_phase(state)
+        assert result is None
