@@ -349,9 +349,24 @@ class FixOrchestrator:
 
         try:
             # Push the branch first
-            subprocess.run(["git", "-C", str(self._world.root), "push", "origin",
-                            f"HEAD:auto-fix/{commit_hash[:8]}"],
-                           capture_output=True, timeout=30)
+            push_result = subprocess.run(
+                ["git", "-C", str(self._world.root), "push", "origin",
+                 f"HEAD:auto-fix/{commit_hash[:8]}"],
+                capture_output=True, timeout=30,
+            )
+            if push_result.returncode != 0:
+                # P8 MEDIUM: git push failed — gh pr create will also
+                # fail without the remote branch.  Surface the error
+                # instead of silently proceeding.
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "self-heal PR: git push failed (rc=%d). "
+                    "Skipping gh pr create. stderr: %s",
+                    push_result.returncode,
+                    push_result.stderr.decode(errors="replace")[:500],
+                )
+                return ""
 
             result = subprocess.run(
                 ["gh", "pr", "create",

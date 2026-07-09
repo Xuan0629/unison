@@ -1491,10 +1491,17 @@ class Orchestrator:
 
         # Halt on consecutive failure (ARCHITECTURE.md §3 halt conditions)
         if not detected.success:
-            # In v1, single non-zero exit does not halt — the agent
-            # may have produced useful output before crashing.
-            # Consecutive failure tracking is a V2 feature.
-            pass
+            # P8 P1.1: Log detection failure so the operator can
+            # investigate.  In v1 a single non-zero exit does not halt
+            # (the agent may have produced useful output before crashing),
+            # but it must not fail silently.
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "Completion detection failed for role=%s iteration=%s. "
+                "Agent may have produced partial output before exiting.",
+                role, iteration,
+            )
 
         # 9. Self-heal: auto-fix framework bugs (V2)
         if not result.success and not detected.success:
@@ -1508,6 +1515,18 @@ class Orchestrator:
 
         error_type = ErrorClassifier.classify(result, self.spec)
         if error_type not in ("UNISON_BUG", "CONSUMER_BUG"):
+            # P8 P1.1: Log non-code-bug failures before falling through.
+            # The agent failed AND detection failed, but the error is not
+            # a framework/consumer bug we can auto-fix.  Surface it so the
+            # operator knows why the pipeline didn't self-heal.
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "Agent %s iteration %s failed (result.success=%s, "
+                "detected.success=%s) but error type %r is not "
+                "self-healable. No automatic fix attempted.",
+                role, iteration, result.success, False, error_type,
+            )
             return  # not a code bug, let existing logic handle it
 
         fixer = FixOrchestrator(self.spec, self.spec.world)
@@ -2597,11 +2616,12 @@ class Orchestrator:
                 per_task_limit = agent_spec.context_budget
 
         # L1 fix #4: when per_task_limit changes, update the existing
-        # tracker's limit instead of discarding it (which loses all
-        # accumulated usage history).
+        # tracker's limit via the thread-safe setter instead of direct
+        # attribute mutation (P8 MEDIUM: per_task_limit mutation must
+        # happen under the tracker's lock).
         if (self._budget_tracker is not None
                 and self._budget_tracker.per_task_limit != per_task_limit):
-            self._budget_tracker.per_task_limit = per_task_limit
+            self._budget_tracker.set_per_task_limit(per_task_limit)
 
         if self._budget_tracker is not None:
             return self._budget_tracker

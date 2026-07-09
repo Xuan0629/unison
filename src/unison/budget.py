@@ -105,6 +105,21 @@ class BudgetTracker:
         return self._daily_used
 
     # ------------------------------------------------------------------
+    # set_per_task_limit — thread-safe per-task limit update
+    # ------------------------------------------------------------------
+
+    def set_per_task_limit(self, limit: int) -> None:
+        """Set a new per-task limit, under the tracker's lock.
+
+        This is the thread-safe way to update the limit mid-pipeline
+        (e.g. when switching between agents with different
+        ``context_budget`` overrides).  Direct attribute mutation
+        of ``per_task_limit`` is not safe in MoA / parallel contexts.
+        """
+        with self._lock:
+            self.per_task_limit = limit
+
+    # ------------------------------------------------------------------
     # Core methods (backward-compatible signatures)
     # ------------------------------------------------------------------
 

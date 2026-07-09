@@ -395,3 +395,42 @@ class TestDateChangeDetection:
         # add_usage should not crash either (file write will fail silently)
         tracker.add_usage(50)
         assert tracker.current_usage == 50
+
+    # ------------------------------------------------------------------
+    # P8 MEDIUM: set_per_task_limit thread safety
+    # ------------------------------------------------------------------
+
+    def test_set_per_task_limit_updates_value(self):
+        """set_per_task_limit changes per_task_limit under lock."""
+        tracker = BudgetTracker(daily_limit=10000, per_task_limit=1000)
+        assert tracker.per_task_limit == 1000
+        tracker.set_per_task_limit(500)
+        assert tracker.per_task_limit == 500
+
+    def test_set_per_task_limit_thread_safety(self):
+        """Concurrent set_per_task_limit + add_usage do not corrupt state."""
+        import threading
+        tracker = BudgetTracker(daily_limit=100000, per_task_limit=50000)
+        errors = []
+
+        def updater():
+            try:
+                for i in range(100):
+                    tracker.set_per_task_limit(50000 + i)
+            except Exception as e:
+                errors.append(e)
+
+        def consumer():
+            try:
+                for _ in range(100):
+                    tracker.add_usage(10)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=updater), threading.Thread(target=consumer)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Concurrent access raised: {errors}"

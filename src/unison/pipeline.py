@@ -189,6 +189,10 @@ class PipelineLoader:
         if mode is None:
             mode = self._detect_mode(agents)
 
+        # P8 P1.2: Build moa_config before PipelineSpec so it can also be
+        # passed to _build_chain for validation (moa mode without moa config).
+        moa_config = self._build_moa(raw.get("moa"))
+
         return PipelineSpec(
             version=version,
             world=world,
@@ -210,9 +214,9 @@ class PipelineLoader:
             agent_log_retention_hours=raw.get("agent_log_retention_hours", 168),
             self_heal=self._build_self_heal(raw.get("self_heal")),
             greenfield=self._build_greenfield(raw.get("greenfield")),
-            moa=self._build_moa(raw.get("moa")),
+            moa=moa_config,
             webui=self._build_webui(raw.get("webui")),
-            chain=self._build_chain(raw.get("chain"), world.root),
+            chain=self._build_chain(raw.get("chain"), world.root, moa_config),
         )
 
     # ------------------------------------------------------------------
@@ -621,7 +625,8 @@ class PipelineLoader:
                 )
 
     @staticmethod
-    def _build_chain(raw: dict[str, Any] | None, world_root: Path | None = None) -> ChainConfig:
+    def _build_chain(raw: dict[str, Any] | None, world_root: Path | None = None,
+                     moa_config: MoaConfig | None = None) -> ChainConfig:
         """Build ChainConfig from raw YAML, returns empty if not set.
 
         Args:
@@ -630,6 +635,9 @@ class PipelineLoader:
                 validation.  When provided, every output_map key and
                 value is validated to prevent path-traversal attacks
                 (absolute paths and ``../`` escapes are rejected).
+            moa_config: MoaConfig from the same spec, used to warn when a
+                chain stage specifies ``mode: moa`` but no ``moa:`` block
+                exists in pipeline.yaml.
 
         Raises:
             PipelineValidationError: If any stage has mode ``"chain"``
@@ -638,6 +646,17 @@ class PipelineLoader:
                 containment checks.
         """
         if not raw or not isinstance(raw.get("stages"), list):
+            return ChainConfig()
+
+        # P8 P1.2: warn when stages list is empty — the chain config is
+        # valid but will run zero stages (effectively a no-op).
+        if len(raw["stages"]) == 0:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "chain.stages is an empty list — chain will run with "
+                "zero stages (effectively a no-op)."
+            )
             return ChainConfig()
 
         # P8 S11: Build set of valid chain stage modes at load time.
@@ -665,6 +684,17 @@ class PipelineLoader:
                 raise PipelineValidationError(
                     f"chain.stages[{i}]: unknown mode {mode!r}. "
                     f"Valid modes: {sorted(_VALID_CHAIN_MODES)}"
+                )
+            # P8 P1.2: warn when mode="moa" but no moa config exists —
+            # the MoA pipeline will run with defaults but the user may
+            # have intended to configure agent count / rounds.
+            if mode == "moa" and moa_config is None:
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    f"chain.stages[{i}]: mode='moa' but no moa config "
+                    f"is set in pipeline.yaml. MoA will run with "
+                    f"defaults (agents=3, rounds=2)."
                 )
             output_map = s.get("output_map", {}) or {}
             # Validate output_map paths for path-traversal

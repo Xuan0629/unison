@@ -155,6 +155,64 @@ class TestBuildChainParsing:
         with pytest.raises(PipelineValidationError, match="unknown mode"):
             PipelineLoader._build_chain(raw)
 
+    # ------------------------------------------------------------------
+    # P8 P1.2: warnings for empty stages and moa-without-config
+    # ------------------------------------------------------------------
+
+    def test_build_chain_empty_stages_warns(self, caplog):
+        """Empty stages list emits a warning about no-op chain."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        raw = {"stages": []}
+        cfg = PipelineLoader._build_chain(raw)
+        assert isinstance(cfg, ChainConfig)
+        assert cfg.stages == []
+        assert "zero stages" in caplog.text
+
+    def test_build_chain_empty_stages_no_warn_for_none(self, caplog):
+        """None input (no chain key at all) does not warn — not an error."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        cfg = PipelineLoader._build_chain(None)
+        assert cfg.stages == []
+        assert "zero stages" not in caplog.text
+
+    def test_build_chain_empty_stages_no_warn_for_missing_key(self, caplog):
+        """Dict without 'stages' key does not warn."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        cfg = PipelineLoader._build_chain({"something": "else"})
+        assert cfg.stages == []
+        assert "zero stages" not in caplog.text
+
+    def test_build_chain_moa_without_config_warns(self, caplog):
+        """mode='moa' without MoaConfig emits a warning."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        raw = {"stages": [{"mode": "moa"}]}
+        cfg = PipelineLoader._build_chain(raw, moa_config=None)
+        assert cfg.stages[0].mode == "moa"
+        assert "no moa config" in caplog.text
+
+    def test_build_chain_moa_with_config_no_warn(self, caplog):
+        """mode='moa' with MoaConfig does NOT warn."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        raw = {"stages": [{"mode": "moa"}]}
+        moa = MoaConfig(agents=5, rounds=3)
+        cfg = PipelineLoader._build_chain(raw, moa_config=moa)
+        assert cfg.stages[0].mode == "moa"
+        assert "no moa config" not in caplog.text
+
+    def test_build_chain_non_moa_mode_no_warn(self, caplog):
+        """Non-moa modes do not trigger the moa config warning."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        raw = {"stages": [{"mode": "code-dev"}]}
+        cfg = PipelineLoader._build_chain(raw, moa_config=None)
+        assert cfg.stages[0].mode == "code-dev"
+        assert "no moa config" not in caplog.text
+
 
 # ============================================================================
 # output_map Path-Traversal Validation (load time)

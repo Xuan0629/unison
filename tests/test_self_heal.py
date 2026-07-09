@@ -647,6 +647,67 @@ class TestRunTestsNoShell:
         assert result is False
 
 
+class TestCreatePRPushCheck:
+    """P8 MEDIUM: _create_pr checks git push return code before gh pr create."""
+
+    def test_push_failure_skips_pr_returns_empty(self, tmp_path, monkeypatch):
+        """When git push fails, skip gh pr create and return empty string."""
+        import subprocess as sp
+        from unittest.mock import MagicMock
+
+        from unison.interfaces import PipelineSpec
+        from unison.self_heal import FixOrchestrator
+
+        world = minimal_spec_fixture_world(tmp_path)
+        spec = PipelineSpec(version="1.0", world=world, agents={})
+        fixer = FixOrchestrator(spec, world)
+
+        # Simulate git push failure (non-zero return code)
+        push_fail = MagicMock(returncode=1, stderr=b"remote: Permission denied")
+
+        def fake_run(cmd, **kwargs):
+            return push_fail
+
+        monkeypatch.setattr(sp, "run", fake_run)
+
+        url = fixer._create_pr(
+            "abc123def456", {"diagnosis": "test"}, "UNISON_BUG"
+        )
+        # Should return empty string when push fails
+        assert url == ""
+
+    def test_push_success_proceeds_to_pr(self, tmp_path, monkeypatch):
+        """When git push succeeds, gh pr create is attempted."""
+        import subprocess as sp
+        from unittest.mock import MagicMock
+
+        from unison.interfaces import PipelineSpec
+        from unison.self_heal import FixOrchestrator
+
+        world = minimal_spec_fixture_world(tmp_path)
+        spec = PipelineSpec(version="1.0", world=world, agents={})
+        fixer = FixOrchestrator(spec, world)
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if isinstance(cmd, list) and "push" in cmd:
+                return MagicMock(returncode=0)
+            return MagicMock(returncode=0, stdout="https://github.com/pr/42\n")
+
+        monkeypatch.setattr(sp, "run", fake_run)
+
+        url = fixer._create_pr(
+            "abc123def456", {"diagnosis": "test fix"}, "UNISON_BUG"
+        )
+
+        assert url == "https://github.com/pr/42"
+        # Both git push and gh pr create were called
+        assert any("push" in c for c in calls if isinstance(c, list))
+        assert any("gh" in c for c in calls if isinstance(c, list))
+
+
 def minimal_spec_fixture_world(tmp_path):
     """Helper to create a World in tmp_path for _run_tests tests."""
     from unison.interfaces import World
