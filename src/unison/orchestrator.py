@@ -761,6 +761,22 @@ class Orchestrator:
                     self.spec = replace(self.spec, mode=stage.mode)
 
                 try:
+                    # P0.3: Clear cross-contamination from previous stage.
+                    # runtime_agents carries MoA agents into non-MoA stages;
+                    # iteration accumulates across stages.
+                    self._state.runtime_agents = []
+                    self._state.iteration = 0
+
+                    # P0.3: Populate runtime_agents for non-MoA stages
+                    # (_run_moa_pipeline handles its own population).
+                    if self.spec.mode != "moa":
+                        for agent in self.spec.agents.values():
+                            self._state.runtime_agents.append({
+                                "role": agent.role,
+                                "runtime": agent.runtime,
+                                "model": agent.model,
+                            })
+
                     # P0.3: Thread chain depth through recursive dispatch so
                     # directly-constructed PipelineSpecs containing
                     # ChainStage(mode="chain") are caught before stack
