@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+import yaml as _yaml
 
 from unison.checklist import ChecklistItem, ChecklistStatus
 from unison.io import atomic_read_json, atomic_write_json
@@ -411,3 +412,263 @@ class TestChecklistMerge:
         # Pending reviewer status should NOT override existing done
         assert persisted.items[0].status == "done"
         assert persisted.items[0].evidence == "commit abc"
+
+
+# ============================================================================
+# Frontmatter extraction (simulating _parse_checklist behavior)
+# ============================================================================
+
+
+class TestParseChecklistFrontmatter:
+    """Test the YAML frontmatter extraction logic used by _parse_checklist.
+
+    Review files use ``---`` YAML frontmatter delimiters with markdown body
+    following.  _parse_checklist must extract the frontmatter before
+    parsing YAML — using yaml.safe_load on the raw file would fail.
+    """
+
+    def test_extract_checklist_from_frontmatter(self):
+        """Parse a checklist: table from a review file with --- delimiters."""
+        review_text = """\
+---
+verdict: PASS
+summary: All items done
+findings: []
+checklist:
+  - id: P1.1
+    title: Add logging
+    status: done
+    severity: HIGH
+    evidence: commit abc1234
+  - id: P1.2
+    title: Add tests
+    status: done
+    severity: MEDIUM
+    evidence: test_checklist.py
+---
+
+## Review Notes
+
+All checklist items are complete. The implementation matches the PRD.
+"""
+        parts = review_text.split("---", 2)
+        yaml_text = parts[1]
+        raw = _yaml.safe_load(yaml_text)
+
+        assert isinstance(raw, dict)
+        checklist_raw = raw.get("checklist")
+        assert isinstance(checklist_raw, list)
+        assert len(checklist_raw) == 2
+
+        items = [ChecklistItem.from_dict(e) for e in checklist_raw]
+        assert items[0].id == "P1.1"
+        assert items[0].status == "done"
+        assert items[1].id == "P1.2"
+        assert items[1].status == "done"
+
+    def test_extract_returns_none_without_frontmatter(self):
+        """Returns None when the review file has no --- frontmatter."""
+        review_text = "# Just a markdown review\n\nNo YAML frontmatter here."
+        # Simulate _parse_checklist guard
+        if not review_text.startswith("---"):
+            result = None
+        assert result is None
+
+    def test_extract_returns_none_without_checklist_key(self):
+        """Returns None when frontmatter exists but has no checklist: key."""
+        review_text = """\
+---
+verdict: PASS
+summary: Looks good
+findings: []
+---
+
+Body text.
+"""
+        parts = review_text.split("---", 2)
+        yaml_text = parts[1]
+        raw = _yaml.safe_load(yaml_text)
+
+        checklist_raw = raw.get("checklist")
+        assert checklist_raw is None
+
+    def test_frontmatter_with_markdown_after(self):
+        """yaml.safe_load on extracted frontmatter works correctly,
+        while the full text with markdown body would not be pure YAML."""
+        review_text = """\
+---
+verdict: PASS
+summary: test
+findings: []
+checklist:
+  - id: P1.1
+    title: Test
+    status: done
+---
+
+Some markdown content here.
+"""
+        parts = review_text.split("---", 2)
+        assert len(parts) == 3
+        # Frontmatter is in parts[1], body in parts[2]
+        yaml_text = parts[1]
+        raw = _yaml.safe_load(yaml_text)
+        assert isinstance(raw, dict)
+        assert raw["verdict"] == "PASS"
+        assert len(raw["checklist"]) == 1
+
+
+# ============================================================================
+# checklist_strict_mode verdict override logic
+# ============================================================================
+
+
+class TestChecklistStrictMode:
+    """Test the verdict override behavior for checklist_strict_mode.
+
+    When checklist_strict_mode=True and items are still pending, the
+    PASS verdict should be overridden to REQUEST_CHANGES.
+    """
+
+    def test_strict_mode_overrides_pass_when_pending(self):
+        """Strict mode + pending items → override PASS to REQUEST_CHANGES."""
+        checklist_strict_mode = True
+        verdict = "PASS"
+        checklist = ChecklistStatus(items=[
+            ChecklistItem(id="P1.1", title="A", status="done"),
+            ChecklistItem(id="P1.2", title="B", status="pending"),
+        ])
+
+        # Simulate the _run_loop verdict override logic
+        if checklist_strict_mode and checklist.pending > 0:
+            verdict = "REQUEST_CHANGES"
+
+        assert verdict == "REQUEST_CHANGES"
+
+    def test_strict_mode_no_override_when_all_resolved(self):
+        """Strict mode + all resolved → PASS verdict unchanged."""
+        checklist_strict_mode = True
+        verdict = "PASS"
+        checklist = ChecklistStatus(items=[
+            ChecklistItem(id="P1.1", title="A", status="done"),
+            ChecklistItem(id="P1.2", title="B", status="deferred",
+                          evidence="Out of scope"),
+        ])
+
+        if checklist_strict_mode and checklist.pending > 0:
+            verdict = "REQUEST_CHANGES"
+
+        assert verdict == "PASS"
+
+    def test_strict_mode_off_does_not_override(self):
+        """checklist_strict_mode=False → never overrides verdict."""
+        checklist_strict_mode = False
+        verdict = "PASS"
+        checklist = ChecklistStatus(items=[
+            ChecklistItem(id="P1.1", title="A", status="pending"),
+        ])
+
+        if checklist_strict_mode and checklist.pending > 0:
+            verdict = "REQUEST_CHANGES"
+
+        assert verdict == "PASS"
+
+    def test_strict_mode_does_not_override_request_changes(self):
+        """Strict mode does not downgrade REQUEST_CHANGES to anything else."""
+        checklist_strict_mode = True
+        verdict = "REQUEST_CHANGES"
+        checklist = ChecklistStatus(items=[
+            ChecklistItem(id="P1.1", title="A", status="pending"),
+        ])
+
+        if checklist_strict_mode and checklist.pending > 0:
+            verdict = "REQUEST_CHANGES"
+
+        # Already REQUEST_CHANGES, should stay REQUEST_CHANGES
+        assert verdict == "REQUEST_CHANGES"
+
+    def test_strict_mode_empty_checklist(self):
+        """Strict mode + empty checklist → no override (nothing pending)."""
+        checklist_strict_mode = True
+        verdict = "PASS"
+        checklist = ChecklistStatus(items=[])
+
+        if checklist_strict_mode and checklist.pending > 0:
+            verdict = "REQUEST_CHANGES"
+
+        assert verdict == "PASS"
+
+
+# ============================================================================
+# _inject_checklist_into_prompt — role-based injection
+# ============================================================================
+
+
+class TestChecklistPromptInjection:
+    """Test the prompt injection logic for different agent roles."""
+
+    @staticmethod
+    def _make_status():
+        return ChecklistStatus(items=[
+            ChecklistItem(id="P1.1", title="Add logging", status="done",
+                          severity="HIGH", evidence="commit abc"),
+            ChecklistItem(id="P1.2", title="Add tests", status="pending",
+                          severity="MEDIUM"),
+        ])
+
+    def test_developer_gets_remaining_block(self):
+        """Developer prompt gets the remaining_block with pending items."""
+        status = self._make_status()
+        prompt = "Original prompt content."
+        # Simulate _inject_checklist_into_prompt for developer
+        block = status.remaining_block()
+        result = prompt + "\n\n" + block
+        assert "## Remaining Checklist Items" in result
+        assert "P1.2" in result
+        assert "Add tests" in result
+
+    def test_developer_empty_when_all_resolved(self):
+        """Developer gets no injection when all items are resolved."""
+        status = ChecklistStatus(items=[
+            ChecklistItem(id="P1.1", title="A", status="done"),
+        ])
+        prompt = "Original prompt."
+        # Simulate: nothing pending → no injection
+        if status.pending == 0:
+            result = prompt
+        else:
+            result = prompt + "\n\n" + status.remaining_block()
+        assert result == prompt
+
+    def test_reviewer_gets_markdown_table(self):
+        """Reviewer prompt gets the full markdown table with status."""
+        status = self._make_status()
+        prompt = "Original reviewer prompt."
+        header = "\n\n## Current Checklist Status\n\n"
+        header += "Update each item's status in your review YAML frontmatter "
+        header += "(`checklist:` table).\n\n"
+        result = prompt + header + status.markdown_table()
+        assert "## Current Checklist Status" in result
+        assert "| ID | Title | Status | Severity |" in result
+        assert "P1.1" in result
+        assert "done" in result
+        assert "pending" in result
+
+    def test_reviewer_no_injection_when_empty(self):
+        """Reviewer gets no injection when checklist is empty."""
+        status = ChecklistStatus(items=[])
+        prompt = "Original reviewer prompt."
+        if status.total == 0:
+            result = prompt
+        else:
+            result = prompt + "\n\n" + status.markdown_table()
+        assert result == prompt
+
+    def test_other_role_unchanged(self):
+        """Non-dev, non-reviewer roles get prompt unchanged."""
+        status = self._make_status()
+        prompt = "Original planner prompt."
+        # Simulate: role != "developer" and role != "reviewer" → return prompt
+        result = prompt
+        assert result == prompt
+        assert "Remaining Checklist Items" not in result

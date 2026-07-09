@@ -1387,19 +1387,23 @@ class Orchestrator:
             # P9: Parse checklist from reviewer output and detect convergence
             if review_phase == "dev_review" and verdict is not None:
                 checklist = self._parse_checklist(iteration, review_phase)
-                if checklist is not None and checklist.all_resolved:
+                if checklist is not None:
                     import logging
                     _log = logging.getLogger(__name__)
-                    if verdict == "REQUEST_CHANGES":
+                    if checklist.all_resolved and verdict == "REQUEST_CHANGES":
                         _log.warning(
                             "Checklist all_resolved but reviewer returned "
                             "REQUEST_CHANGES — reviewer may have non-checklist "
                             "concerns (iter %d)", iteration)
+                    # R0 fix: checklist_strict_mode block was dead code
+                    # (inside ``all_resolved`` which implies pending==0).
+                    # Moved outside so it fires when items are still pending.
                     if self.spec.checklist_strict_mode and checklist.pending > 0:
                         _log.warning(
                             "checklist_strict_mode: %d items still pending — "
-                            "blocking PASS (iter %d)",
+                            "overriding PASS → REQUEST_CHANGES (iter %d)",
                             checklist.pending, iteration)
+                        verdict = "REQUEST_CHANGES"
 
             if verdict == "PASS":
                 # Exit loop — review approved
@@ -3302,9 +3306,10 @@ class Orchestrator:
     ) -> ChecklistStatus | None:
         """Parse checklist status from a reviewer's YAML output.
 
-        Reads the review file and extracts the ``checklist:`` table.
-        Returns ``None`` when the review file does not contain a
-        checklist section (e.g. planning reviews or legacy reviewers).
+        Reads the review file and extracts the ``checklist:`` table from
+        the YAML frontmatter.  Returns ``None`` when the review file does
+        not contain a checklist section (e.g. planning reviews or legacy
+        reviewers).
 
         Merges reviewer status updates into the persisted checklist
         and writes it back to disk.
@@ -3313,8 +3318,22 @@ class Orchestrator:
         if not review_path.exists():
             return None
 
+        raw_text = review_path.read_text(encoding="utf-8")
+
+        # Extract YAML frontmatter between --- delimiters (same approach
+        # as YamlFrontmatterParser).  Without this, yaml.safe_load chokes
+        # on the markdown body that follows the frontmatter.
+        if not raw_text.startswith("---"):
+            return None
+
+        parts = raw_text.split("---", 2)
+        if len(parts) < 3:
+            return None
+
+        yaml_text = parts[1]
+
         try:
-            raw = yaml.safe_load(review_path.read_text(encoding="utf-8"))
+            raw = yaml.safe_load(yaml_text)
         except yaml.YAMLError:
             return None
 
@@ -3351,20 +3370,27 @@ class Orchestrator:
         return current
 
     def _inject_checklist_into_prompt(self, prompt: str, role: str) -> str:
-        """Append remaining checklist items to the prompt for *role*.
+        """Append checklist context to the prompt for *role*.
 
-        Only injects for the ``"developer"`` role.  Returns the prompt
-        unchanged when there are no pending items.
+        For ``"developer"``: injects only pending items as a to-do list.
+        For ``"reviewer"``: injects the full markdown table so the reviewer
+        can see the accumulated state and update item statuses.
+
+        Returns the prompt unchanged when there are no items.
         """
-        if role != "developer":
-            return prompt
-
         status = self._load_checklist()
-        if status.pending == 0:
+        if status.total == 0:
             return prompt
 
-        block = status.remaining_block()
-        if not block:
-            return prompt
+        if role == "developer":
+            block = status.remaining_block()
+            if block:
+                return prompt + "\n\n" + block
+        elif role == "reviewer":
+            table = status.markdown_table()
+            header = "\n\n## Current Checklist Status\n\n"
+            header += "Update each item's status in your review YAML frontmatter "
+            header += "(`checklist:` table).\n\n"
+            return prompt + header + table
 
-        return prompt + "\n\n" + block
+        return prompt
