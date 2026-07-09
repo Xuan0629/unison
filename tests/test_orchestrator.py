@@ -1,6 +1,7 @@
 """Tests for orchestrator.py — Orchestrator state machine driver."""
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock
 import pytest
 
 from unison.orchestrator import Orchestrator
@@ -1036,7 +1037,7 @@ budget:
         assert orch.state().halt_signal is True
         assert "budget overflow" in (orch.state().halt_reason or "")
 
-    def test_moa_analyze_proceeds_when_budget_ok(self, tmp_path):
+    def test_moa_analyze_proceeds_when_budget_ok(self, tmp_path, monkeypatch):
         """_run_moa_analyze proceeds when budget is within limits."""
         world_root = tmp_path / "project"
         world_root.mkdir()
@@ -1079,6 +1080,7 @@ budget:
 """)
 
         from unison.pipeline import PipelineLoader
+        from unison.interfaces import AgentResult
         loader = PipelineLoader()
         spec = loader.load(pipeline_file)
 
@@ -1087,12 +1089,23 @@ budget:
         tracker = orch._get_budget_tracker("analyzer")
         assert tracker.check_budget() is True
 
-        # _run_moa_analyze should NOT halt on budget (will fail on
-        # missing runner or file output, but that's different from
-        # budget overflow)
+        # Mock runner to avoid subprocess timeout in unit tests.
+        # The runner is called inside ThreadPoolExecutor workers;
+        # returning a fake success prevents actual agent invocation.
+        mock_runner_result = AgentResult(
+            success=True, exit_code=0, duration=1.0,
+            stdout_tail="mock output", stderr_tail="",
+            log_path=world_root / "observer" / "logs" / "mock.log",
+            error="",
+        )
+        for name in list(orch._runners.keys()):
+            mock_runner = MagicMock()
+            mock_runner.run.return_value = mock_runner_result
+            orch._runners[name] = mock_runner
+
         orch._run_moa_analyze(1, spec.moa)
         # Should not halt with "budget overflow" — may halt for other
-        # reasons (missing runner output) but not budget
+        # reasons (missing runner output file) but not budget
         reason = orch.state().halt_reason or ""
         assert "budget overflow" not in reason
 
@@ -1226,7 +1239,7 @@ class TestChainModeRuntimeValidation:
         assert orch.state().halt_signal is True
         assert "unknown mode" in (orch.state().halt_reason or "")
 
-    def test_all_valid_modes_proceed(self, tmp_path):
+    def test_all_valid_modes_proceed(self, tmp_path, monkeypatch):
         """All valid modes pass runtime validation."""
         world_root = tmp_path / "project"
         world_root.mkdir()
@@ -1268,8 +1281,13 @@ chain:
         spec = loader.load(pipeline_file)
 
         orch = Orchestrator(spec=spec)
-        # Should NOT halt on mode validation (will likely halt on
-        # missing pipeline files or other issues, but NOT "unknown mode")
+
+        # Mock _run_state_machine to avoid actual agent subprocess
+        # invocation (which would hit pytest-timeout).  We only need
+        # to verify mode validation doesn't falsely reject valid modes.
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+
         orch._run_chain()
         reason = orch.state().halt_reason or ""
         assert "unknown mode" not in reason

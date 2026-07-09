@@ -701,6 +701,9 @@ class Orchestrator:
             stage_count = len(self.spec.chain.stages)
             self._publish_phase_event("chain_start",
                                       note=f"{stage_count} stages")
+            # P8 P1.5: Save checkpoint at chain start
+            self._state.iteration = 0
+            self._save_checkpoint(iteration=0)
 
             # P8 S11: Validate all stage modes at load time before any
             # stage runs.  A typo in stage 5's mode would otherwise waste
@@ -774,9 +777,10 @@ class Orchestrator:
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy(src, dst)
                     else:
-                        # P0.5: log missing source — non-fatal, stage may
-                        # not need it (e.g. optional upstream artefact)
-                        _log.debug(
+                        # P0.5: log missing source as warning — non-fatal,
+                        # stage may not need it (e.g. optional upstream
+                        # artefact), but it's unusual enough to surface.
+                        _log.warning(
                             "chain stage %d output_map: source %s not found, "
                             "skipping copy to %s", i, src_rel, dst_rel,
                         )
@@ -847,6 +851,21 @@ class Orchestrator:
                     self._chain_depth += 1
                     try:
                         self._run_state_machine()
+                    # P8 P1.3: Catch unexpected exceptions from stage
+                    # dispatch.  Without this, an unhandled exception in
+                    # _run_state_machine() propagates past the finally
+                    # block and escapes the chain entirely — skipping
+                    # halt_on_fail handling and the remaining stages.
+                    except Exception:
+                        _log.exception(
+                            "chain stage %d: unhandled exception in "
+                            "_run_state_machine", i,
+                        )
+                        self.halt(
+                            f"chain stage {i}: unhandled exception in "
+                            f"_run_state_machine",
+                            category="stage",
+                        )
                     finally:
                         self._chain_depth -= 1
                 finally:
@@ -868,6 +887,11 @@ class Orchestrator:
                         self._state.halt_signal = False
                         self._state.halt_reason = None
                         self._halt_category = "stage"
+
+                # P8 P1.5: Save checkpoint after each stage (with stage
+                # index) so operators can see per-stage progress in the
+                # dashboard.
+                self._save_checkpoint(iteration=i)
 
             # P0.6: Chain complete — emit one terminal "done" transition
             # and archive reviews once for the entire chain.
@@ -2800,7 +2824,9 @@ class Orchestrator:
                 start_new_session=True,
             )
         except Exception:
-            pass  # best-effort
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning("_auto_start_webui: failed to start WebUI", exc_info=True)
 
     def _auto_start_observer(self) -> None:
         """Auto-start Observer if not already running.
@@ -2838,8 +2864,10 @@ class Orchestrator:
             )
             pid_file.write_text(str(self._observer_proc.pid))
         except Exception:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning("_auto_start_observer: failed to start Observer", exc_info=True)
             self._observer_proc = None
-            pass  # best-effort
 
     def _stop_observer(self) -> None:
         """P8 S10: Terminate the Observer subprocess on orchestrator shutdown.
