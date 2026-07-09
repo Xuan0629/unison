@@ -668,6 +668,10 @@ class PipelineLoader:
             "dag",    # handled by DAG scheduler
         }
 
+        # Resolve logger once for all per-stage warnings below.
+        import logging
+        _log = logging.getLogger(__name__)
+
         stages = []
         for i, s in enumerate(raw["stages"]):
             mode = s.get("mode", "code-dev")
@@ -689,12 +693,11 @@ class PipelineLoader:
             # the MoA pipeline will run with defaults but the user may
             # have intended to configure agent count / rounds.
             if mode == "moa" and moa_config is None:
-                import logging
-                _log = logging.getLogger(__name__)
                 _log.warning(
-                    f"chain.stages[{i}]: mode='moa' but no moa config "
-                    f"is set in pipeline.yaml. MoA will run with "
-                    f"defaults (agents=3, rounds=2)."
+                    "chain.stages[%d]: mode='moa' but no moa config "
+                    "is set in pipeline.yaml. MoA will run with "
+                    "defaults (agents=3, rounds=2).",
+                    i,
                 )
             output_map = s.get("output_map", {}) or {}
             # Validate output_map paths for path-traversal

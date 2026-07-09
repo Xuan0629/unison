@@ -1505,11 +1505,13 @@ class Orchestrator:
 
         # 9. Self-heal: auto-fix framework bugs (V2)
         if not result.success and not detected.success:
-            self._attempt_self_heal(role, iteration, review_phase, result)
+            self._attempt_self_heal(role, iteration, review_phase, result,
+                                    detected.success)
             return  # self-heal handles retry internally
 
     def _attempt_self_heal(self, role: str, iteration: int,
-                           review_phase: str, result: AgentResult) -> None:
+                           review_phase: str, result: AgentResult,
+                           detected_success: bool = False) -> None:
         """Attempt self-heal: classify error → fix → review → retry if successful."""
         from unison.self_heal import ErrorClassifier, FixOrchestrator
 
@@ -1525,7 +1527,7 @@ class Orchestrator:
                 "Agent %s iteration %s failed (result.success=%s, "
                 "detected.success=%s) but error type %r is not "
                 "self-healable. No automatic fix attempted.",
-                role, iteration, result.success, False, error_type,
+                role, iteration, result.success, detected_success, error_type,
             )
             return  # not a code bug, let existing logic handle it
 

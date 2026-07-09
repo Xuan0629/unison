@@ -662,19 +662,27 @@ class TestCreatePRPushCheck:
         spec = PipelineSpec(version="1.0", world=world, agents={})
         fixer = FixOrchestrator(spec, world)
 
-        # Simulate git push failure (non-zero return code)
-        push_fail = MagicMock(returncode=1, stderr=b"remote: Permission denied")
+        calls = []
 
         def fake_run(cmd, **kwargs):
-            return push_fail
+            calls.append(cmd)
+            if isinstance(cmd, list) and "push" in cmd:
+                # git push fails with permission denied
+                return MagicMock(returncode=1, stderr=b"remote: Permission denied")
+            # gh pr create should NOT be reached — fail hard if it is
+            raise AssertionError(
+                f"gh pr create called after push failure: {cmd}"
+            )
 
         monkeypatch.setattr(sp, "run", fake_run)
 
         url = fixer._create_pr(
             "abc123def456", {"diagnosis": "test"}, "UNISON_BUG"
         )
-        # Should return empty string when push fails
         assert url == ""
+        # Verify git push was called exactly once
+        assert len(calls) == 1
+        assert any("push" in c for c in calls if isinstance(c, list))
 
     def test_push_success_proceeds_to_pr(self, tmp_path, monkeypatch):
         """When git push succeeds, gh pr create is attempted."""
