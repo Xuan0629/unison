@@ -28,6 +28,8 @@ from unison.state import State
 from unison.lock import FileLockManager
 from unison.checkpoint import FileCheckpointManager
 from unison.completion import GitCompletionDetector
+from unison.checklist import ChecklistItem, ChecklistStatus
+from unison.io import atomic_read_json, atomic_write_json
 import yaml
 from unison.verdict import YamlFrontmatterParser
 from unison.context_deflate import assemble_context, extract_top_findings
@@ -1382,6 +1384,23 @@ class Orchestrator:
                     )
                     return
 
+            # P9: Parse checklist from reviewer output and detect convergence
+            if review_phase == "dev_review" and verdict is not None:
+                checklist = self._parse_checklist(iteration, review_phase)
+                if checklist is not None and checklist.all_resolved:
+                    import logging
+                    _log = logging.getLogger(__name__)
+                    if verdict == "REQUEST_CHANGES":
+                        _log.warning(
+                            "Checklist all_resolved but reviewer returned "
+                            "REQUEST_CHANGES — reviewer may have non-checklist "
+                            "concerns (iter %d)", iteration)
+                    if self.spec.checklist_strict_mode and checklist.pending > 0:
+                        _log.warning(
+                            "checklist_strict_mode: %d items still pending — "
+                            "blocking PASS (iter %d)",
+                            checklist.pending, iteration)
+
             if verdict == "PASS":
                 # Exit loop — review approved
                 return
@@ -2487,6 +2506,10 @@ class Orchestrator:
         # the registry (so it wasn't embedded in task)
         if carry_forward:
             prompt += "\n\n" + carry_forward
+
+        # P9: Inject remaining checklist items for developer context
+        prompt = self._inject_checklist_into_prompt(prompt, role)
+
         return prompt
 
     # ==================================================================
@@ -3251,3 +3274,97 @@ class Orchestrator:
             self._state.atomic_write(state_file)
         except Exception:
             pass  # best-effort; checkpoint is the authoritative copy
+
+    # ==================================================================
+    # P9: Structured checklist
+    # ==================================================================
+
+    def _load_checklist(self) -> ChecklistStatus:
+        """Load the checklist from ``.unison/checklist.json``.
+
+        Returns an empty ``ChecklistStatus`` when the file does not exist
+        or is unreadable.
+        """
+        raw = atomic_read_json(self.spec.world.checklist_file)
+        if raw is None:
+            return ChecklistStatus()
+        try:
+            return ChecklistStatus.from_dict(raw)
+        except Exception:
+            return ChecklistStatus()
+
+    def _save_checklist(self, status: ChecklistStatus) -> None:
+        """Persist *status* to ``.unison/checklist.json`` atomically."""
+        atomic_write_json(self.spec.world.checklist_file, status.to_dict())
+
+    def _parse_checklist(
+        self, iteration: int, review_phase: str = "dev_review"
+    ) -> ChecklistStatus | None:
+        """Parse checklist status from a reviewer's YAML output.
+
+        Reads the review file and extracts the ``checklist:`` table.
+        Returns ``None`` when the review file does not contain a
+        checklist section (e.g. planning reviews or legacy reviewers).
+
+        Merges reviewer status updates into the persisted checklist
+        and writes it back to disk.
+        """
+        review_path = self._review_file_for_phase(review_phase, iteration)
+        if not review_path.exists():
+            return None
+
+        try:
+            raw = yaml.safe_load(review_path.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            return None
+
+        if not isinstance(raw, dict):
+            return None
+
+        checklist_raw = raw.get("checklist")
+        if not checklist_raw or not isinstance(checklist_raw, list):
+            return None
+
+        # Parse reviewer checklist entries
+        reviewer_items: dict[str, ChecklistItem] = {}
+        for entry in checklist_raw:
+            if not isinstance(entry, dict):
+                continue
+            item = ChecklistItem.from_dict(entry)
+            reviewer_items[item.id] = item
+
+        # Merge with persisted checklist
+        current = self._load_checklist()
+        current_by_id = {it.id: it for it in current.items}
+
+        for item_id, reviewer_item in reviewer_items.items():
+            if item_id in current_by_id:
+                # Update status if reviewer marked it as done/deferred
+                if reviewer_item.status != "pending":
+                    current_by_id[item_id].status = reviewer_item.status
+                    current_by_id[item_id].evidence = reviewer_item.evidence or current_by_id[item_id].evidence
+            else:
+                # New item from reviewer
+                current.items.append(reviewer_item)
+
+        self._save_checklist(current)
+        return current
+
+    def _inject_checklist_into_prompt(self, prompt: str, role: str) -> str:
+        """Append remaining checklist items to the prompt for *role*.
+
+        Only injects for the ``"developer"`` role.  Returns the prompt
+        unchanged when there are no pending items.
+        """
+        if role != "developer":
+            return prompt
+
+        status = self._load_checklist()
+        if status.pending == 0:
+            return prompt
+
+        block = status.remaining_block()
+        if not block:
+            return prompt
+
+        return prompt + "\n\n" + block
