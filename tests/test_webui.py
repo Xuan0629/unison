@@ -410,6 +410,13 @@ class TestLoadBudget:
 class TestLoadAgents:
     """Agent list extracted from pipeline YAML's 'agents' section."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_state_read(self):
+        """Prevent state.json pollution from affecting agent-loading tests."""
+        from unison.state import State
+        with patch("unison.webui.server.State.atomic_read", return_value=State()):
+            yield
+
     def test_returns_empty_list_when_no_config(self):
         from unison.webui import UnisonHandler
         handler = UnisonHandler.__new__(UnisonHandler)
