@@ -355,6 +355,25 @@ class PipelineLoader:
                 pipeline_role=ad.get("pipeline_role"),
                 context_budget=ad.get("context_budget"),
             )
+
+        # Bug 3: Require explicit pipeline_role on every agent.
+        # The old fallback (role= as implicit pipeline_role) caused Bug 1
+        # (planner with role="developer" got cleanup) and made 2-agent
+        # mode ambiguous.  Warning for now; will become hard error in v1.0.
+        missing = [
+            k for k, v in result.items() if not v.pipeline_role
+        ]
+        if missing:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "DEPRECATION: Missing pipeline_role for agents: %s. "
+                "Add pipeline_role: developer|reviewer|planner to each "
+                "agent. Fallback to role= will be removed in a future "
+                "version.",
+                ", ".join(missing),
+            )
+
         return result
 
     def _build_project(self, raw: dict[str, Any] | None) -> ProjectConfig:

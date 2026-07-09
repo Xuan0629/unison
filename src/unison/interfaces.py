@@ -400,6 +400,7 @@ class PipelineSpec:
     parallel_groups: dict[str, list[str]] = field(default_factory=dict)  # Pipeline B: effective_role → agent names
     mode: PipelineMode | None = None  # Named pipeline mode (auto-detected if not set)
     max_iterations: int = 5
+    max_planning_iterations: int = 3  # Bug 2: Plan-review loop cap. 0 = no planning phase.
     per_agent_timeout: int = 600    # 秒。Codex 慢需 300s+
     pipeline_timeout: int = 0       # P8 S16: Global pipeline timeout (seconds). 0 = disabled.
     context_deflation_limit: int = 5  # 每次迭代只注入最近 5 条 findings

@@ -1276,6 +1276,12 @@ class Orchestrator:
         """
         max_iter = self.spec.max_iterations
 
+        # Bug 2: Planning phases use a separate (lower) iteration cap to
+        # prevent plan-review non-convergence loops.  When the planning cap
+        # is hit, the loop auto-advances with a warning instead of halting.
+        if active_phase.startswith("planning") and self.spec.max_planning_iterations > 0:
+            max_iter = self.spec.max_planning_iterations
+
         # A1: Capture loop start commit for cumulative diff
         self._loop_start_commit = self._get_head_commit()
 
@@ -1391,6 +1397,16 @@ class Orchestrator:
 
         # Loop exhausted without PASS
         if self._state.last_review_verdict != "PASS":
+            # Bug 2: Planning phases auto-advance on exhaustion instead of
+            # halting.  Prevents plan-review non-convergence deadlocks.
+            if active_phase.startswith("planning"):
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "plan-review loop exhausted after %d iterations — "
+                    "auto-advancing to next phase", max_iter)
+                self._state.last_review_verdict = "PASS"
+                return
             self.halt(
                 f"Max iterations ({max_iter}) reached in {review_of} loop "
                 f"without PASS verdict",
@@ -1445,7 +1461,11 @@ class Orchestrator:
             # overflow_action == "downgrade" — already handled in _select_runner
 
         # 3. Pre-invoke cleanup (developer only — preserves planner/reviewer output)
-        if role == "developer":
+        # Bug 1: Check pipeline_role, not role string (role could be "coder"
+        # with pipeline_role="developer", or "developer" with pipeline_role="planner").
+        # agent_role is the PhaseDef.role value — the authoritative pipeline role.
+        pipeline_role = getattr(self, "_current_pipeline_role", role)
+        if pipeline_role == "developer":
             self.pre_invoke_cleanup()
 
         if self._state.halt_signal:
