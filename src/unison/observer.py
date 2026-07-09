@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # P10: Message templates (en / zh)
 # ============================================================================
 
-_MESSAGES: dict[str, dict[str, str]] = {
+MSG_TEMPLATES: dict[str, dict[str, str]] = {
     # ---- Pipeline lifecycle ----
     "pipeline_start": {
         "en": "🔵 {pipeline} started | {mode} | {agent_count} agents",
@@ -76,8 +76,11 @@ def _msg(key: str, language: str, **kwargs) -> str:
     """Look up message template by *key* and *language*, format with kwargs.
 
     Falls back to 'en' template if the requested language is missing a key.
+
+    Module-level helper used by Observer._format_message() and for
+    call sites that don't have access to an Observer instance.
     """
-    templates = _MESSAGES.get(key, {})
+    templates = MSG_TEMPLATES.get(key, {})
     template = templates.get(language) or templates.get("en", key)
     return template.format(**kwargs)
 
@@ -1001,6 +1004,24 @@ class Observer:
             iteration=state.iteration,
             summary=summary,
         )
+
+    # ---- P10: message formatting ---------------------------------------------
+
+    def _format_message(self, language: str, event_type: str, **kwargs) -> tuple[str, str]:
+        """P10: Render a notification title and body from templates.
+
+        Looks up ``MSG_TEMPLATES[event_type][language]`` and formats with
+        *kwargs*.  Falls back to ``"en"`` if *language* is missing, and to
+        a generic format using *event_type* as the title if the event type
+        is unknown.
+
+        Returns:
+            (title, body) tuple ready for ``Notification.title`` and
+            ``Notification.body``.
+        """
+        body = _msg(event_type, language, **kwargs)
+        title = _msg("observer_banner", language)
+        return title, body
 
     # ---- structured event emission -------------------------------------------
 

@@ -1072,18 +1072,18 @@ class TestStateP10Fields:
 
 
 class TestMessageTemplates:
-    """P10: _MESSAGES dict and _msg() helper."""
+    """P10: MSG_TEMPLATES dict, _msg() helper, and Observer._format_message()."""
 
     def test_all_event_types_have_both_languages(self):
         """Every event type template exists in both en and zh."""
-        from unison.observer import _MESSAGES
+        from unison.observer import MSG_TEMPLATES
         for key in ("pipeline_start", "pipeline_done", "phase_done",
                      "phase_changes", "stalled", "halted", "intervention",
                      "observer_banner"):
-            assert key in _MESSAGES, f"Missing template key: {key}"
+            assert key in MSG_TEMPLATES, f"Missing template key: {key}"
             for lang in ("en", "zh"):
-                assert lang in _MESSAGES[key], f"Missing {lang} for {key}"
-                assert _MESSAGES[key][lang], f"Empty template for {key}/{lang}"
+                assert lang in MSG_TEMPLATES[key], f"Missing {lang} for {key}"
+                assert MSG_TEMPLATES[key][lang], f"Empty template for {key}/{lang}"
 
     def test_msg_formatting_en(self):
         """_msg formats English templates correctly."""
@@ -1140,6 +1140,48 @@ class TestMessageTemplates:
         assert "干预" in result
         assert "SKIP" in result
         assert "dev_review" in result
+
+    # ---- Observer._format_message() tests ----
+
+    def _make_observer_for_format_test(self, tmp_path):
+        """Create a minimal Observer instance for _format_message tests."""
+        from unison.world import World
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        from unison.observer import Observer
+        return Observer(world=world)
+
+    def test_format_message_returns_title_body_tuple(self, tmp_path):
+        """_format_message returns (title, body) tuple."""
+        obs = self._make_observer_for_format_test(tmp_path)
+        title, body = obs._format_message("en", "pipeline_start",
+                                          pipeline="Test", mode="dev", agent_count=2)
+        assert isinstance(title, str)
+        assert isinstance(body, str)
+        assert len(title) > 0
+        assert len(body) > 0
+
+    def test_format_message_zh_language(self, tmp_path):
+        """_format_message formats Chinese correctly."""
+        obs = self._make_observer_for_format_test(tmp_path)
+        _title, body = obs._format_message("zh", "pipeline_start",
+                                           pipeline="测试", mode="dev", agent_count=3)
+        assert "测试" in body
+        assert "已启动" in body
+
+    def test_format_message_fallback_to_en(self, tmp_path):
+        """_format_message falls back to en for unknown language."""
+        obs = self._make_observer_for_format_test(tmp_path)
+        _title, body = obs._format_message("fr", "halted",
+                                           reason="test", phase="dev", iteration=1)
+        assert "Pipeline halted" in body  # en fallback
+
+    def test_format_message_title_is_observer_banner(self, tmp_path):
+        """_format_message title is always the observer banner."""
+        obs = self._make_observer_for_format_test(tmp_path)
+        title, _body = obs._format_message("en", "stalled",
+                                           elapsed=60, phase="dev")
+        assert "Unison Observer" in title or "观察者" not in title
 
 
 class TestVerdictDispatch:
@@ -2396,3 +2438,65 @@ class TestDevReviewOnlyFilter:
         assert skip_file.exists(), (
             "planning_review PASS should not reset dev_review consecutive count"
         )
+
+
+# ============================================================================
+# P10: RedirectControl dataclass tests
+# ============================================================================
+
+
+class TestRedirectControl:
+    """P10-021: RedirectControl dataclass write/read round-trip."""
+
+    def test_redirect_control_round_trip(self):
+        """RedirectControl → to_dict → from_dict returns identical fields."""
+        from unison.interfaces import RedirectControl
+        rc = RedirectControl(
+            reason="3 REQUEST_CHANGES + tests failing",
+            corrective_prompt="Focus on fixing test failures in test_observer.py",
+            target_agent="developer",
+            timestamp="2026-01-01T00:00:00Z",
+            source="observer",
+        )
+        d = rc.to_dict()
+        rc2 = RedirectControl.from_dict(d)
+        assert rc2.reason == rc.reason
+        assert rc2.corrective_prompt == rc.corrective_prompt
+        assert rc2.target_agent == rc.target_agent
+        assert rc2.timestamp == rc.timestamp
+        assert rc2.source == rc.source
+
+    def test_redirect_control_defaults(self):
+        """RedirectControl has correct defaults."""
+        from unison.interfaces import RedirectControl
+        rc = RedirectControl(
+            reason="test",
+            corrective_prompt="",
+            target_agent="developer",
+        )
+        assert rc.timestamp == ""
+        assert rc.source == "observer"
+
+    def test_redirect_control_from_dict_missing_fields(self):
+        """from_dict handles missing fields with defaults."""
+        from unison.interfaces import RedirectControl
+        rc = RedirectControl.from_dict({"reason": "test"})
+        assert rc.reason == "test"
+        assert rc.corrective_prompt == ""
+        assert rc.target_agent == ""
+        assert rc.timestamp == ""
+        assert rc.source == "observer"
+
+    def test_redirect_control_json_serializable(self):
+        """RedirectControl.to_dict() produces JSON-serializable output."""
+        import json
+        from unison.interfaces import RedirectControl
+        rc = RedirectControl(
+            reason="test",
+            corrective_prompt="",
+            target_agent="developer",
+        )
+        d = rc.to_dict()
+        # Should not raise
+        j = json.dumps(d, ensure_ascii=False)
+        assert "test" in j

@@ -20,7 +20,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from unison.interfaces import AgentResult, MoaConfig, PipelineSpec, ReviewVerdict, VerdictParseError
+from unison.interfaces import AgentResult, MoaConfig, PipelineSpec, RedirectControl, ReviewVerdict, VerdictParseError
 from unison.phase_router import PhaseRouter
 from unison.pipeline import PipelineValidationError
 from unison.prompt_registry import PromptRegistry
@@ -85,6 +85,8 @@ class Orchestrator:
         # P10: SKIP control — Observer writes skip.json; orchestrator validates
         self._skip_requested: bool = False
         self._test_result_cache: dict = {}  # {timestamp, exit_code} for skip quality gate
+        # P10: REDIRECT control — Observer writes redirect.json; orchestrator reads + logs
+        self._pending_redirect: RedirectControl | None = None
 
         # -- cooperative cancellation (DAG mode only) ---------------------------
         self._dag_cancel_event: threading.Event | None = None
@@ -1376,6 +1378,9 @@ class Orchestrator:
                 elif control == "report":
                     self._generate_control_report()
 
+            # P10: REDIRECT control file check (read + log, deferred to P11)
+            self._check_redirect_file()
+
             # ---- Active phase -----------------------------------------------
             self._state.transition(
                 active_phase, "orchestrator",
@@ -2657,6 +2662,48 @@ class Orchestrator:
                     pass
                 actions.append(action)
         return actions
+
+    def _check_redirect_file(self) -> RedirectControl | None:
+        """P10: Read and consume ``.unison/control/redirect.json``.
+
+        Symmetric to :meth:`_check_control_files`.  Reads, validates,
+        and consumes the redirect control file written by the Observer.
+        P10 scope: reads, validates schema, logs contents, stores on
+        ``self._pending_redirect``.  Does NOT inject redirect prompt
+        into agent context (deferred to P11).
+
+        Returns:
+            RedirectControl if a valid redirect file was consumed,
+            None otherwise.
+        """
+        import logging
+        _log = logging.getLogger(__name__)
+
+        control_dir = self.spec.world.root / ".unison" / "control"
+        redirect_path = control_dir / "redirect.json"
+        if not redirect_path.exists():
+            return None
+
+        try:
+            raw = redirect_path.read_text(encoding="utf-8")
+            data = __import__("json").loads(raw)
+            rc = RedirectControl.from_dict(data)
+            # Consume the file
+            redirect_path.unlink()
+            self._pending_redirect = rc
+            _log.info(
+                "REDIRECT signal consumed — reason: %s, target: %s. "
+                "Deferred to P11.",
+                rc.reason, rc.target_agent,
+            )
+            return rc
+        except (OSError, ValueError, KeyError) as exc:
+            _log.warning("REDIRECT file read/parse failed: %s", exc)
+            try:
+                redirect_path.unlink()
+            except OSError:
+                pass
+            return None
 
     def _evaluate_skip_quality(self) -> bool:
         """P10: Quality gate for SKIP consumption.

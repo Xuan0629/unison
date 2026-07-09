@@ -1596,3 +1596,120 @@ class TestSkipQualityGate:
         orch = self._make_orchestrator(tmp_path)
         assert orch._skip_requested is False
         assert orch._test_result_cache == {}
+
+
+class TestRedirectFile:
+    """P10-022: _check_redirect_file() reads, validates, consumes redirect.json."""
+
+    def _make_orchestrator(self, tmp_path) -> Orchestrator:
+        """Create a minimal Orchestrator for redirect testing."""
+        from unison.interfaces import AgentSpec, PipelineSpec
+        from unison.world import World as WorldCls
+
+        root = Path(tmp_path)
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "prd").mkdir(parents=True, exist_ok=True)
+        (root / "reviews").mkdir(parents=True, exist_ok=True)
+        (root / ".unison").mkdir(parents=True, exist_ok=True)
+        (root / "prd" / "PRD.md").write_text("# PRD placeholder")
+
+        agent = AgentSpec(
+            role="developer",
+            runtime="claude",
+            model="test",
+            system_prompt_path=Path("prompts/developer.md"),
+        )
+
+        world = WorldCls(root=root)
+        world.ensure_directories()
+
+        spec = PipelineSpec(
+            version="1.0",
+            world=world,
+            agents={"developer": agent},
+            mode="full-dev",
+            pipeline_name="TestPipeline",
+        )
+
+        return Orchestrator(spec=spec)
+
+    def test_no_redirect_file_returns_none(self, tmp_path):
+        """_check_redirect_file returns None when file doesn't exist."""
+        orch = self._make_orchestrator(tmp_path)
+        result = orch._check_redirect_file()
+        assert result is None
+
+    def test_consumes_valid_redirect_file(self, tmp_path):
+        """_check_redirect_file reads and consumes a valid redirect.json."""
+        import json
+        orch = self._make_orchestrator(tmp_path)
+        root = tmp_path
+        control_dir = root / ".unison" / "control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        redirect_data = {
+            "reason": "3 REQUEST_CHANGES + tests failing",
+            "corrective_prompt": "",
+            "target_agent": "developer",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "source": "observer",
+        }
+        (control_dir / "redirect.json").write_text(
+            json.dumps(redirect_data), encoding="utf-8")
+
+        result = orch._check_redirect_file()
+        assert result is not None
+        assert result.reason == redirect_data["reason"]
+        assert result.target_agent == "developer"
+        # File should be consumed
+        assert not (control_dir / "redirect.json").exists()
+
+    def test_stores_on_pending_redirect(self, tmp_path):
+        """_check_redirect_file stores result on _pending_redirect."""
+        import json
+        orch = self._make_orchestrator(tmp_path)
+        root = tmp_path
+        control_dir = root / ".unison" / "control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        (control_dir / "redirect.json").write_text(json.dumps({
+            "reason": "stuck in loop",
+            "corrective_prompt": "",
+            "target_agent": "developer",
+        }), encoding="utf-8")
+
+        orch._check_redirect_file()
+        assert orch._pending_redirect is not None
+        assert orch._pending_redirect.reason == "stuck in loop"
+
+    def test_handles_invalid_json(self, tmp_path):
+        """_check_redirect_file returns None on invalid JSON."""
+        orch = self._make_orchestrator(tmp_path)
+        root = tmp_path
+        control_dir = root / ".unison" / "control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        (control_dir / "redirect.json").write_text("not json", encoding="utf-8")
+
+        result = orch._check_redirect_file()
+        assert result is None
+        # File should still be consumed (cleanup)
+        assert not (control_dir / "redirect.json").exists()
+
+    def test_handles_missing_fields_in_json(self, tmp_path):
+        """_check_redirect_file fills missing fields with defaults."""
+        import json
+        orch = self._make_orchestrator(tmp_path)
+        root = tmp_path
+        control_dir = root / ".unison" / "control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        (control_dir / "redirect.json").write_text(
+            json.dumps({"reason": "test"}), encoding="utf-8")
+
+        result = orch._check_redirect_file()
+        assert result is not None
+        assert result.reason == "test"
+        assert result.target_agent == ""  # default
+        assert result.source == "observer"  # default
+
+    def test_pending_redirect_initialized(self, tmp_path):
+        """_pending_redirect is initialized to None."""
+        orch = self._make_orchestrator(tmp_path)
+        assert orch._pending_redirect is None

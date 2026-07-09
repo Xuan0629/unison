@@ -816,6 +816,45 @@ class Notification:
     summary: str = ""           # One-line summary for Feishu
     language: str = "en"        # observer_language at time of event (self-describing JSONL)
 
+
+@dataclass
+class RedirectControl:
+    """P10: REDIRECT intervention signal (Observer → Orchestrator).
+
+    Written by the Observer when 3+ consecutive REQUEST_CHANGES are
+    detected AND the SKIP quality heuristic is expected to fail.
+    Read, validated, and consumed by the Orchestrator at phase
+    boundaries.  P10 scope: schema + read/log only; prompt injection
+    deferred to P11.
+    """
+    reason: str                # Why REDIRECT triggered (e.g. '3 REQUEST_CHANGES + tests failing')
+    corrective_prompt: str     # What the next agent should focus on (empty in P10)
+    target_agent: str          # Which agent role to redirect (e.g. 'developer')
+    timestamp: str = ""        # ISO 8601 when trigger detected
+    source: str = "observer"   # Which component wrote the file
+
+    def to_dict(self) -> dict:
+        """Serialize to JSON-compatible dict."""
+        return {
+            "reason": self.reason,
+            "corrective_prompt": self.corrective_prompt,
+            "target_agent": self.target_agent,
+            "timestamp": self.timestamp,
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RedirectControl":
+        """Deserialize from JSON dict."""
+        return cls(
+            reason=d.get("reason", ""),
+            corrective_prompt=d.get("corrective_prompt", ""),
+            target_agent=d.get("target_agent", ""),
+            timestamp=d.get("timestamp", ""),
+            source=d.get("source", "observer"),
+        )
+
+
 class DiscordSink(Protocol):
     """Observer 的 Discord 输出。唯一可靠路径：Hermes send_message 工具。"""
     def send(self, notif: Notification) -> bool:
