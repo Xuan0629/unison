@@ -201,7 +201,7 @@ class Orchestrator:
                 "commits": self._count_commits(),
             })
         except Exception:
-            pass  # event bus failure is non-fatal
+            logger.warning("event bus publish failed", exc_info=True)
 
     def _count_commits(self) -> int:
         """P10: Count commits in the current branch (for pipeline_done summary)."""
@@ -1417,9 +1417,21 @@ class Orchestrator:
             verdict = self._parse_verdict(iteration, review_phase)
 
             # Dashboard skip: force PASS to exit loop (consumes flag)
+            # P10: Convergence has priority over SKIP — if the reviewer is
+            # flagging the same findings across iterations, the loop is
+            # genuinely stuck and SKIP would mask a real problem.
             if getattr(self, "_skip_requested", False):
                 self._skip_requested = False
-                verdict = "PASS"
+                if (iteration >= 2 and verdict == "REQUEST_CHANGES"
+                        and self._check_convergence(iteration, review_phase)):
+                    logger.warning(
+                        "convergence detected — suppressing SKIP "
+                        "(convergence is the stronger signal)"
+                    )
+                    # Don't force PASS; let the normal convergence check
+                    # below (line 1429) halt the pipeline.
+                else:
+                    verdict = "PASS"
 
             # A2: Record reviewer stats for sycophancy tracking
             if verdict:

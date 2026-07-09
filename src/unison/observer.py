@@ -625,6 +625,11 @@ class Observer:
         # P10: Language + pipeline name — read from state.json on startup
         self.observer_language: str = "en"
         self.pipeline_name: str = ""
+        # P10: Stall notification cooldown state machine
+        self._stall_cooldown_seconds: float = 300.0
+        self._last_stall_emit: float = 0.0        # time.monotonic() of last emission
+        self._stall_episode_active: bool = False
+        self._stall_escalation_count: int = 0      # increments each cooldown cycle
 
     # ---- public API ----------------------------------------------------------
 
@@ -694,18 +699,22 @@ class Observer:
                 # Process phase event directly — no need to read state.json
                 phase = bus_event.get("phase", "")
                 if not self._check_liveness_from_event(bus_event):
-                    lang = self.observer_language
-                    body = _msg("stalled", lang,
-                                elapsed=self.stall_threshold_seconds,
-                                phase=phase)
-                    self._emit_event(
-                        event_type="stalled",
-                        phase=phase,
-                        severity="warn",
-                        title=body,
-                        body=body,
-                        summary=body,
-                    )
+                    should_emit, sev = self._should_emit_stall()
+                    if should_emit:
+                        lang = self.observer_language
+                        body = _msg("stalled", lang,
+                                    elapsed=self.stall_threshold_seconds,
+                                    phase=phase)
+                        self._emit_event(
+                            event_type="stalled",
+                            phase=phase,
+                            severity=sev,
+                            title=body,
+                            body=body,
+                            summary=body,
+                        )
+                else:
+                    self._reset_stall_state()
                 continue
             except queue.Empty:
                 pass
@@ -719,18 +728,22 @@ class Observer:
                     try:
                         state = State.atomic_read(self.world.state_file)
                         if not self.check_liveness(state):
-                            lang = self.observer_language
-                            body = _msg("stalled", lang,
-                                        elapsed=self.stall_threshold_seconds,
-                                        phase=state.phase)
-                            self._emit_event(
-                                event_type="stalled",
-                                phase=state.phase,
-                                severity="warn",
-                                title=body,
-                                body=body,
-                                summary=body,
-                            )
+                            should_emit, sev = self._should_emit_stall()
+                            if should_emit:
+                                lang = self.observer_language
+                                body = _msg("stalled", lang,
+                                            elapsed=self.stall_threshold_seconds,
+                                            phase=state.phase)
+                                self._emit_event(
+                                    event_type="stalled",
+                                    phase=state.phase,
+                                    severity=sev,
+                                    title=body,
+                                    body=body,
+                                    summary=body,
+                                )
+                        else:
+                            self._reset_stall_state()
                         # P10: Check for SKIP intervention on every state read
                         self._check_skip_intervention(state)
                     except Exception:
@@ -753,18 +766,22 @@ class Observer:
 
                 state = State.atomic_read(self.world.state_file)
                 if not self.check_liveness(state):
-                    lang = self.observer_language
-                    body = _msg("stalled", lang,
-                                elapsed=self.stall_threshold_seconds,
-                                phase=state.phase)
-                    self._emit_event(
-                        event_type="stalled",
-                        phase=state.phase,
-                        severity="warn",
-                        title=body,
-                        body=body,
-                        summary=body,
-                    )
+                    should_emit, sev = self._should_emit_stall()
+                    if should_emit:
+                        lang = self.observer_language
+                        body = _msg("stalled", lang,
+                                    elapsed=self.stall_threshold_seconds,
+                                    phase=state.phase)
+                        self._emit_event(
+                            event_type="stalled",
+                            phase=state.phase,
+                            severity=sev,
+                            title=body,
+                            body=body,
+                            summary=body,
+                        )
+                else:
+                    self._reset_stall_state()
 
                 # P10: Check for SKIP intervention on every state.json change
                 self._check_skip_intervention(state)
@@ -823,6 +840,7 @@ class Observer:
 
         Conditions:
         - 3+ consecutive REQUEST_CHANGES in state.history (dev_review)
+        - At least one iteration remains (not exhausted naturally)
         - At least one output file exists (PRD or test results)
         - Test command passes (if configured)
 
@@ -847,6 +865,15 @@ class Observer:
                 break
             # Non-review transitions don't reset the counter
         if consecutive < self._SKIP_CONSECUTIVE_THRESHOLD:
+            return
+
+        # --- P10: Last-iteration guard — let loop exhaust naturally ---
+        max_iter = self._read_max_iterations_for_phase(state)
+        if max_iter is not None and state.iteration >= max_iter:
+            logger.info(
+                "SKIP intervention suppressed: iteration %d >= max %d "
+                "— loop exhausts naturally", state.iteration, max_iter
+            )
             return
 
         # --- Threshold met — check minimal satisfaction ---
@@ -897,6 +924,32 @@ class Observer:
             except Exception:
                 pass
         return None
+
+    def _read_max_iterations_for_phase(self, state: State) -> int | None:
+        """P10: Read max_iterations for the current phase from pipeline.yaml.
+
+        Returns:
+            The max iteration cap for *state.phase*, or None if
+            pipeline.yaml is not available.
+        """
+        pipeline_file = self.world.root / "pipeline.yaml"
+        if not pipeline_file.exists():
+            return None
+        try:
+            import yaml
+            raw = yaml.safe_load(pipeline_file.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return None
+            project = raw.get("project") or {}
+            if "dev" in state.phase:
+                return raw.get("max_dev_iterations") or project.get("max_dev_iterations", 5)
+            if "planning" in state.phase:
+                return raw.get("max_planning_iterations") or project.get("max_planning_iterations", 3)
+            if "discuss" in state.phase:
+                return raw.get("max_discuss_iterations") or project.get("max_discuss_iterations", 3)
+            return raw.get("max_iterations") or project.get("max_iterations", 5)
+        except Exception:
+            return None
 
     def _write_skip_control(self, state: State) -> None:
         """P10: Write .unison/control/skip.json to trigger orchestrator SKIP.
@@ -1050,6 +1103,43 @@ class Observer:
                 iteration=iteration,
                 summary=body,
             )
+
+    # ---- P10: Stall notification cooldown -----------------------------------
+
+    def _should_emit_stall(self) -> tuple[bool, str]:
+        """P10: Cooldown state machine for stall notifications.
+
+        Prevents stall notification spam (51 identical events in 28 min).
+        Emits at most once per cooldown period.  Escalates from warn to
+        error after 2 cooldown cycles (10 min of continuous stall).
+
+        Returns:
+            (should_emit, severity) — severity is "warn" or "error".
+        """
+        now = time.monotonic()
+        if not self._stall_episode_active:
+            # First stall in this episode → emit warn
+            self._stall_episode_active = True
+            self._last_stall_emit = now
+            self._stall_escalation_count = 0
+            return True, "warn"
+
+        # Check if cooldown has expired
+        elapsed_since_last = now - self._last_stall_emit
+        if elapsed_since_last < self._stall_cooldown_seconds:
+            # Still in cooldown → suppress
+            return False, "warn"
+
+        # Cooldown expired, still stalled → increment escalation
+        self._stall_escalation_count += 1
+        self._last_stall_emit = now
+        severity = "error" if self._stall_escalation_count >= 2 else "warn"
+        return True, severity
+
+    def _reset_stall_state(self) -> None:
+        """P10: Reset stall cooldown when activity resumes."""
+        self._stall_episode_active = False
+        self._stall_escalation_count = 0
 
     def _check_liveness_from_event(self, event_data: dict) -> bool:
         """Check liveness from an event bus event (no state.json read needed).
@@ -1265,18 +1355,22 @@ class Observer:
         if self.world.state_file.exists():
             state = State.atomic_read(self.world.state_file)
             if not self.check_liveness(state):
-                lang = self.observer_language
-                body = _msg("stalled", lang,
-                            elapsed=self.stall_threshold_seconds,
-                            phase=state.phase)
-                self._emit_event(
-                    event_type="stalled",
-                    phase=state.phase,
-                    severity="warn",
-                    title=body,
-                    body=body,
-                    summary=body,
-                )
+                should_emit, sev = self._should_emit_stall()
+                if should_emit:
+                    lang = self.observer_language
+                    body = _msg("stalled", lang,
+                                elapsed=self.stall_threshold_seconds,
+                                phase=state.phase)
+                    self._emit_event(
+                        event_type="stalled",
+                        phase=state.phase,
+                        severity=sev,
+                        title=body,
+                        body=body,
+                        summary=body,
+                    )
+            else:
+                self._reset_stall_state()
 
         # 检查 notifications.jsonl
         if self.world.notifications_file.exists():
