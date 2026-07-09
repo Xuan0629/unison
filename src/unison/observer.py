@@ -59,6 +59,11 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "en": "🔴 Pipeline halted: {reason} | phase: {phase} iter: {iteration}",
         "zh": "🔴 管道终止: {reason} | 阶段: {phase} 轮次: {iteration}",
     },
+    # ---- Observer intervention ----
+    "intervention": {
+        "en": "🟠 Observer intervention: {action} in {phase}",
+        "zh": "🟠 Observer 干预: {action} — {phase}",
+    },
     # ---- Observer banner ----
     "observer_banner": {
         "en": "📡 Unison Observer",
@@ -975,7 +980,7 @@ class Observer:
 
         # Emit intervention event
         lang = self.observer_language
-        body = _msg("stalled", lang, elapsed=0, phase=state.phase)  # placeholder
+        body = _msg("intervention", lang, action="SKIP", phase=state.phase)
         summary = (
             f"SKIP intervention after {self._SKIP_CONSECUTIVE_THRESHOLD}+ "
             f"REQUEST_CHANGES in {state.phase}"
@@ -984,7 +989,7 @@ class Observer:
             event_type="intervention",
             phase=state.phase,
             severity="warn",
-            title=f"SKIP intervention: {state.phase}",
+            title=body,
             body=summary,
             iteration=state.iteration,
             summary=summary,
@@ -1065,7 +1070,8 @@ class Observer:
         elif event_kind == "phase_done":
             commits = event_data.get("commits", 0)
             commits_detail = f" | {commits} commits" if commits else ""
-            body = _msg("phase_done", lang,
+            template_key = "phase_changes" if verdict == "REQUEST_CHANGES" else "phase_done"
+            body = _msg(template_key, lang,
                         phase=phase, iteration=iteration,
                         verdict=verdict or "PASS",
                         commits_detail=commits_detail)

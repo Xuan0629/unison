@@ -1078,7 +1078,8 @@ class TestMessageTemplates:
         """Every event type template exists in both en and zh."""
         from unison.observer import _MESSAGES
         for key in ("pipeline_start", "pipeline_done", "phase_done",
-                     "phase_changes", "stalled", "halted", "observer_banner"):
+                     "phase_changes", "stalled", "halted", "intervention",
+                     "observer_banner"):
             assert key in _MESSAGES, f"Missing template key: {key}"
             for lang in ("en", "zh"):
                 assert lang in _MESSAGES[key], f"Missing {lang} for {key}"
@@ -1123,6 +1124,91 @@ class TestMessageTemplates:
         assert "预算超限" in result
         assert "dev_active" in result
         assert "2" in result
+
+    def test_intervention_template_en(self):
+        """_msg renders intervention template in English."""
+        from unison.observer import _msg
+        result = _msg("intervention", "en", action="SKIP", phase="dev_review")
+        assert "intervention" in result.lower()
+        assert "SKIP" in result
+        assert "dev_review" in result
+
+    def test_intervention_template_zh(self):
+        """_msg renders intervention template in Chinese."""
+        from unison.observer import _msg
+        result = _msg("intervention", "zh", action="SKIP", phase="dev_review")
+        assert "干预" in result
+        assert "SKIP" in result
+        assert "dev_review" in result
+
+
+class TestVerdictDispatch:
+    """P10: _on_phase_event dispatches phase_changes template on REQUEST_CHANGES."""
+
+    def test_phase_done_uses_phase_done_template_on_pass(self, tmp_path):
+        """When verdict is PASS, _on_phase_event uses 'phase_done' template."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unittest.mock import patch
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+        observer.observer_language = "en"
+        observer.pipeline_name = "TestPipeline"
+
+        event_data = {
+            "event": "phase_done",
+            "phase": "dev_review",
+            "iteration": 3,
+            "last_verdict": "PASS",
+            "mode": "full-dev",
+            "agent_count": 3,
+            "commits": 2,
+        }
+        observer._on_phase_event(event_data)
+
+        # Check that notification was written with phase_done template
+        if world.notifications_file.exists():
+            content = world.notifications_file.read_text()
+            records = [_json.loads(l) for l in content.strip().split("\n") if l]
+            assert any(
+                r.get("event_type") == "phase_done" and "passed" in r.get("title", "").lower()
+                for r in records
+            ), f"Expected phase_done notification with 'passed', got: {records}"
+
+    def test_phase_done_uses_phase_changes_template_on_request_changes(self, tmp_path):
+        """When verdict is REQUEST_CHANGES, _on_phase_event uses 'phase_changes' template."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+        observer.observer_language = "en"
+        observer.pipeline_name = "TestPipeline"
+
+        event_data = {
+            "event": "phase_done",
+            "phase": "dev_review",
+            "iteration": 3,
+            "last_verdict": "REQUEST_CHANGES",
+            "mode": "full-dev",
+            "agent_count": 3,
+            "commits": 1,
+        }
+        observer._on_phase_event(event_data)
+
+        # Check that notification uses phase_changes template (REQUEST_CHANGES / auto-advancing)
+        if world.notifications_file.exists():
+            content = world.notifications_file.read_text()
+            records = [_json.loads(l) for l in content.strip().split("\n") if l]
+            assert any(
+                r.get("event_type") == "phase_done" and "REQUEST_CHANGES" in r.get("title", "")
+                for r in records
+            ), f"Expected phase_done with REQUEST_CHANGES template, got: {records}"
 
 
 class TestEmitEvent:
