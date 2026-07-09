@@ -213,6 +213,7 @@ class PipelineLoader:
             max_dev_iterations=raw.get("max_dev_iterations") or (raw.get("project") or {}).get("max_dev_iterations", 5),
             checklist_strict_mode=raw.get("checklist_strict_mode", False),
             per_agent_timeout=raw.get("per_agent_timeout", 600),
+            pipeline_timeout=raw.get("pipeline_timeout", 0),  # P9: was missing from YAML loader
             context_deflation_limit=raw.get("context_deflation_limit", 5),
             observer_poll_interval=raw.get("observer_poll_interval", 60),
             agent_log_retention_hours=raw.get("agent_log_retention_hours", 168),

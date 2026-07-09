@@ -1784,6 +1784,12 @@ class Orchestrator:
         def plan_one(spec: AgentSpec) -> None:
             runner = self._runners.get(spec.runtime)
             if runner is None:
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "multi-planner: no runner for runtime %r, skipping %s",
+                    spec.runtime, spec.role,
+                )
                 return
 
             # Build prompt via registry with role-specific output paths

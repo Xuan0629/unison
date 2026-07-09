@@ -111,9 +111,10 @@ class FileSnapshotManager:
         return json.loads(self._manifest_path.read_text())
 
     def _write_manifest(self, data: dict[str, dict[str, Any]]) -> None:
-        """Atomically write the manifest file."""
+        """Atomically write the manifest file (P9: uses atomic_write_json)."""
+        from unison.io import atomic_write_json
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self._manifest_path.write_text(json.dumps(data, indent=2, default=str))
+        atomic_write_json(self._manifest_path, data)
 
     def _record_to_dict(self, record: SnapshotRecord) -> dict[str, Any]:
         return {
