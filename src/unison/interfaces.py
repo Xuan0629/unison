@@ -404,6 +404,7 @@ class PipelineSpec:
     mode: PipelineMode | None = None  # Named pipeline mode (auto-detected if not set)
     max_iterations: int = 5
     max_planning_iterations: int = 3  # Bug 2: Plan-review loop cap. 0 = no planning phase.
+    max_discuss_iterations: int = 3   # P9: Discuss-review loop cap (full-dev discuss phase).
     max_dev_iterations: int = 5       # P9: Dev-review loop cap (separate from planning).
     checklist_strict_mode: bool = False  # P9: When True, unchecked items block PASS.
     per_agent_timeout: int = 600    # 秒。Codex 慢需 300s+

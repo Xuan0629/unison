@@ -1288,6 +1288,10 @@ class Orchestrator:
         if active_phase.startswith("dev") and self.spec.max_dev_iterations > 0:
             max_iter = self.spec.max_dev_iterations
 
+        # P9: Discuss phases also get a separate cap (max_discuss_iterations).
+        if active_phase.startswith("discuss") and self.spec.max_discuss_iterations > 0:
+            max_iter = self.spec.max_discuss_iterations
+
         # A1: Capture loop start commit for cumulative diff
         self._loop_start_commit = self._get_head_commit()
 
@@ -1431,6 +1435,14 @@ class Orchestrator:
                 _log = logging.getLogger(__name__)
                 _log.warning(
                     "plan-review loop exhausted after %d iterations — "
+                    "auto-advancing to next phase", max_iter)
+                self._state.last_review_verdict = "PASS"
+                return
+            if active_phase.startswith("discuss"):
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "discuss-review loop exhausted after %d iterations — "
                     "auto-advancing to next phase", max_iter)
                 self._state.last_review_verdict = "PASS"
                 return

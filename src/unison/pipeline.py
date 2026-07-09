@@ -209,6 +209,7 @@ class PipelineLoader:
             mode=mode,
             max_iterations=raw.get("max_iterations") or (raw.get("project") or {}).get("max_iterations", 5),
             max_planning_iterations=raw.get("max_planning_iterations") or (raw.get("project") or {}).get("max_planning_iterations", 3),
+            max_discuss_iterations=raw.get("max_discuss_iterations") or (raw.get("project") or {}).get("max_discuss_iterations", 3),
             max_dev_iterations=raw.get("max_dev_iterations") or (raw.get("project") or {}).get("max_dev_iterations", 5),
             checklist_strict_mode=raw.get("checklist_strict_mode", False),
             per_agent_timeout=raw.get("per_agent_timeout", 600),
