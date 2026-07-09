@@ -1715,3 +1715,112 @@ agents:
         orch._run_chain()
         assert orch.state().halt_signal is True
         assert orch._halt_category == "external"
+
+
+# ============================================================================
+# Regression: Convergence + Budget Overflow Halts in Chain (P0.5)
+# ============================================================================
+
+
+class TestConvergenceAndBudgetHaltInChain:
+    """Convergence and parallel_dev budget overflow halts use
+    category='external' and must not be cleared by halt_on_fail=False.
+
+    These are regression tests for the review finding that
+    _run_loop() convergence detection and _run_dev_parallel()
+    budget overflow were raising halts with the default stage
+    category, allowing them to be cleared by halt_on_fail=False
+    chains.
+    """
+
+    @staticmethod
+    def _make_orch(tmp_path: Path, stages: list[ChainStage]) -> Orchestrator:
+        """Create an Orchestrator with a chain-mode PipelineSpec."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        (prompts_dir / "developer.md").write_text("# Dummy")
+        (prompts_dir / "reviewer.md").write_text("# Dummy")
+        pipeline_file.write_text("""
+version: "2.0"
+mode: chain
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        spec.chain.stages = stages
+        return Orchestrator(spec=spec)
+
+    def test_convergence_halt_not_cleared_by_halt_on_fail_false(
+        self, tmp_path, monkeypatch,
+    ):
+        """Convergence halt (category='external') is NOT cleared when
+        halt_on_fail=False — only stage-failure halts are cleared."""
+        stages = [
+            ChainStage(mode="code-dev", halt_on_fail=False),
+            ChainStage(mode="code-dev"),
+        ]
+        orch = self._make_orch(tmp_path, stages)
+
+        call_count = 0
+
+        def _fake_run_state_machine():
+            nonlocal call_count
+            call_count += 1
+            # Simulate review convergence halt (category="external")
+            orch.halt(
+                "review converged — same findings persist across "
+                "iterations 2→3 (dev loop)",
+                category="external",
+            )
+
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", _fake_run_state_machine)
+
+        orch._run_chain()
+
+        # Only the first stage should run — external halt is NOT cleared
+        assert call_count == 1
+        assert orch.state().halt_signal is True
+        assert "review converged" in orch.state().halt_reason
+
+    def test_parallel_dev_budget_overflow_not_cleared_by_halt_on_fail_false(
+        self, tmp_path, monkeypatch,
+    ):
+        """Parallel dev budget overflow halt (category='external') is NOT
+        cleared when halt_on_fail=False — only stage-failure halts are
+        cleared."""
+        stages = [
+            ChainStage(mode="code-dev", halt_on_fail=False),
+            ChainStage(mode="code-dev"),
+        ]
+        orch = self._make_orch(tmp_path, stages)
+
+        call_count = 0
+
+        def _fake_run_state_machine():
+            nonlocal call_count
+            call_count += 1
+            # Simulate parallel dev budget overflow halt
+            orch.halt("budget overflow: developer", category="external")
+
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", _fake_run_state_machine)
+
+        orch._run_chain()
+
+        # Only the first stage should run — external halt is NOT cleared
+        assert call_count == 1
+        assert orch.state().halt_signal is True
+        assert "budget overflow" in orch.state().halt_reason

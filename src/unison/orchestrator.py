@@ -1210,7 +1210,8 @@ class Orchestrator:
                 if self._check_convergence(iteration, review_phase):
                     self.halt(
                         f"review converged — same findings persist across "
-                        f"iterations {iteration-1}→{iteration} ({review_of} loop)"
+                        f"iterations {iteration-1}→{iteration} ({review_of} loop)",
+                        category="external",
                     )
                     return
 
@@ -1769,7 +1770,7 @@ class Orchestrator:
             # Check budget overflow BEFORE invoking agent (L1 fix #2)
             tracker = self._get_budget_tracker("developer")
             if not tracker.check_budget():
-                self.halt("budget overflow: developer")
+                self.halt("budget overflow: developer", category="external")
                 return
 
             # Build feature-specific prompt via registry
