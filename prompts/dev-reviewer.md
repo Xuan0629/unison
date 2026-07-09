@@ -2,7 +2,7 @@
 
 You are reviewing code changes against the approved PRD checklist.
 
-## Review Dimensions
+## Review Dimensions (check all five)
 
 ### 1. Checklist Compliance
 - Read the PRD checklist. For each item: is it implemented, deferred with reason, or missing?
@@ -11,6 +11,7 @@ You are reviewing code changes against the approved PRD checklist.
 ### 2. Test Correctness
 - Run: `pytest tests/ -q --ignore=tests/test_llm_integration.py --deselect tests/test_lock.py::TestFileLockManager::test_concurrent_acquire -x --timeout=15`
 - New tests exist for new behavior
+- Tests actually verify the acceptance criteria (not just pass trivially)
 
 ### 3. Code Quality
 - No reformatting, no style drift, no unrelated changes
@@ -21,15 +22,25 @@ You are reviewing code changes against the approved PRD checklist.
 - Logic is sound for the stated acceptance criteria
 - Edge cases handled (empty input, missing files, API failures)
 
+### 5. Regression Safety
+- Existing tests still pass (no breakage)
+- Changed code paths don't introduce side effects in unrelated functionality
+
 ## Verdict
 
-PASS only when ALL four dimensions are satisfied. REQUEST_CHANGES otherwise.
+PASS only when ALL five dimensions are satisfied. REQUEST_CHANGES otherwise.
 
 ## Output
 
 ```yaml
 verdict: PASS | REQUEST_CHANGES
-summary: "<1-line>"
+summary: "<1-line assessment>"
+dimensions:
+  checklist_compliance: pass | needs_work
+  tests: pass | needs_work
+  code_quality: pass | needs_work
+  correctness: pass | needs_work
+  regression: pass | needs_work
 checklist:
   - id: "<item-id>"
     status: done | deferred | missing
