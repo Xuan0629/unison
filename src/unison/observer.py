@@ -8,7 +8,9 @@ import json
 import logging
 import os
 import queue
+import shlex
 import struct
+import subprocess
 import sys
 import time
 import urllib.request
@@ -729,6 +731,8 @@ class Observer:
                                 body=body,
                                 summary=body,
                             )
+                        # P10: Check for SKIP intervention on every state read
+                        self._check_skip_intervention(state)
                     except Exception:
                         pass
                 continue
@@ -761,6 +765,9 @@ class Observer:
                         body=body,
                         summary=body,
                     )
+
+                # P10: Check for SKIP intervention on every state.json change
+                self._check_skip_intervention(state)
 
             # 处理 notifications.jsonl 变化
             if event.path.name == "notifications.jsonl":
@@ -800,6 +807,137 @@ class Observer:
             self.pipeline_name = getattr(state, "pipeline_name", "")
         except Exception:
             pass  # Non-fatal — use defaults
+
+    # ---- P10: SKIP intervention -----------------------------------------------
+
+    _SKIP_CONSECUTIVE_THRESHOLD: int = 3  # Trigger after 3+ REQUEST_CHANGES
+
+    def _check_skip_intervention(self, state: State) -> None:
+        """P10: Check if the pipeline is stuck in REQUEST_CHANGES loop.
+
+        When 3+ consecutive review verdicts are REQUEST_CHANGES in the
+        dev-review phase, check whether the current output minimally
+        satisfies the user's needs.  If so, write the skip control file
+        so the orchestrator can exit the loop on the next iteration
+        boundary.
+
+        Conditions:
+        - 3+ consecutive REQUEST_CHANGES in state.history (dev_review)
+        - At least one output file exists (PRD or test results)
+        - Test command passes (if configured)
+
+        The orchestrator's ``_check_control_files()`` already reads and
+        consumes ``.unison/control/skip.json`` at every iteration
+        boundary.
+        """
+        # Only intervene in dev-review phases
+        if "dev" not in state.phase:
+            return
+
+        # Check for 3+ consecutive REQUEST_CHANGES in history
+        consecutive = 0
+        for t in reversed(state.history):
+            if t.to_phase and "review" in t.to_phase and t.verdict == "REQUEST_CHANGES":
+                consecutive += 1
+                if consecutive >= self._SKIP_CONSECUTIVE_THRESHOLD:
+                    break
+            elif t.to_phase and "review" in t.to_phase:
+                # A PASS in review resets the counter
+                break
+            # Non-review transitions don't reset the counter
+        else:
+            # Didn't reach threshold
+            return
+
+        # --- Threshold met — check minimal satisfaction ---
+        root = self.world.root
+        # Has the pipeline produced any output?
+        has_prd = (root / "prd" / "PRD.md").exists()
+        has_specs = (root / "prd" / "specs").exists()
+        has_any_output = has_prd or has_specs
+
+        if not has_any_output:
+            logger.info("SKIP intervention: no output detected, skipping")
+            return
+
+        # Run test command if configured
+        test_cmd = self._read_test_command()
+        if test_cmd:
+            try:
+                result = subprocess.run(
+                    shlex.split(test_cmd) if isinstance(test_cmd, str) else test_cmd,
+                    cwd=str(root),
+                    capture_output=True, timeout=120,
+                )
+                if result.returncode != 0:
+                    logger.info(
+                        "SKIP intervention: test command failed (exit %d), "
+                        "not skipping", result.returncode
+                    )
+                    return
+            except (subprocess.SubprocessError, OSError) as exc:
+                logger.warning("SKIP intervention: test command error: %s", exc)
+                return
+
+        # --- Conditions met: write skip control file ---
+        self._write_skip_control(state)
+
+    def _read_test_command(self) -> str | None:
+        """P10: Read test_command from pipeline config or project config."""
+        # Try to read from pipeline.yaml
+        pipeline_file = self.world.root / "pipeline.yaml"
+        if pipeline_file.exists():
+            try:
+                import yaml
+                raw = yaml.safe_load(pipeline_file.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    project = raw.get("project", {})
+                    if isinstance(project, dict) and project.get("test_command"):
+                        return str(project["test_command"])
+            except Exception:
+                pass
+        return None
+
+    def _write_skip_control(self, state: State) -> None:
+        """P10: Write .unison/control/skip.json to trigger orchestrator SKIP.
+
+        The orchestrator's ``_check_control_files()`` reads and consumes
+        this file at the next iteration boundary.
+        """
+        control_dir = self.world.root / ".unison" / "control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        skip_file = control_dir / "skip.json"
+        skip_data = {
+            "reason": (
+                f"Observer detected {self._SKIP_CONSECUTIVE_THRESHOLD}+ "
+                f"consecutive REQUEST_CHANGES in {state.phase} — "
+                f"current output minimally satisfies requirements"
+            ),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "phase": state.phase,
+            "iteration": state.iteration,
+        }
+        skip_file.write_text(json.dumps(skip_data, indent=2, ensure_ascii=False))
+        logger.warning("SKIP intervention: wrote %s", skip_file)
+
+        # Emit intervention event
+        lang = self.observer_language
+        body = _msg("stalled", lang, elapsed=0, phase=state.phase)  # placeholder
+        summary = (
+            f"SKIP intervention after {self._SKIP_CONSECUTIVE_THRESHOLD}+ "
+            f"REQUEST_CHANGES in {state.phase}"
+        )
+        self._emit_event(
+            event_type="intervention",
+            phase=state.phase,
+            severity="warn",
+            title=f"SKIP intervention: {state.phase}",
+            body=summary,
+            iteration=state.iteration,
+            summary=summary,
+        )
+
+    # ---- structured event emission -------------------------------------------
 
     def _emit_event(
         self,
