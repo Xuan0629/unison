@@ -844,7 +844,11 @@ agents:
 # ============================================================================
 
 class TestCheckControlFiles:
-    """Tests for Orchestrator._check_control_files — reads .unison/control/."""
+    """Tests for Orchestrator._check_control_files — reads .unison/control/.
+
+    P8 S18: _check_control_files now returns list[str] and consumes ALL
+    matching control files, not just the first one.
+    """
 
     def _make_orch(self, tmp_path):
         """Helper: create an Orchestrator with a minimal spec."""
@@ -890,17 +894,17 @@ agents:
         )
         return Orchestrator(spec=spec)
 
-    def test_returns_none_when_no_control_dir(self, tmp_path):
+    def test_returns_empty_list_when_no_control_dir(self, tmp_path):
         orch = self._make_orch(tmp_path)
         result = orch._check_control_files()
-        assert result is None
+        assert result == []
 
-    def test_returns_none_when_control_dir_empty(self, tmp_path):
+    def test_returns_empty_list_when_control_dir_empty(self, tmp_path):
         orch = self._make_orch(tmp_path)
         control_dir = orch.spec.world.root / ".unison" / "control"
         control_dir.mkdir(parents=True, exist_ok=True)
         result = orch._check_control_files()
-        assert result is None
+        assert result == []
 
     def test_returns_pause_and_consumes_file(self, tmp_path):
         orch = self._make_orch(tmp_path)
@@ -909,7 +913,7 @@ agents:
         (control_dir / "pause.json").write_text('{"action":"pause"}')
 
         result = orch._check_control_files()
-        assert result == "pause"
+        assert result == ["pause"]
         # File should be consumed
         assert not (control_dir / "pause.json").exists()
 
@@ -920,7 +924,7 @@ agents:
         (control_dir / "skip.json").write_text('{"action":"skip"}')
 
         result = orch._check_control_files()
-        assert result == "skip"
+        assert result == ["skip"]
         assert not (control_dir / "skip.json").exists()
 
     def test_returns_report_and_consumes_file(self, tmp_path):
@@ -930,11 +934,11 @@ agents:
         (control_dir / "report.json").write_text('{"action":"report"}')
 
         result = orch._check_control_files()
-        assert result == "report"
+        assert result == ["report"]
         assert not (control_dir / "report.json").exists()
 
-    def test_pause_takes_priority_over_skip(self, tmp_path):
-        """Pause is checked first — returns pause even if skip also exists."""
+    def test_consumes_all_control_files(self, tmp_path):
+        """P8 S18: ALL control files are consumed, not just the first."""
         orch = self._make_orch(tmp_path)
         control_dir = orch.spec.world.root / ".unison" / "control"
         control_dir.mkdir(parents=True, exist_ok=True)
@@ -942,9 +946,12 @@ agents:
         (control_dir / "skip.json").write_text('{"action":"skip"}')
 
         result = orch._check_control_files()
-        assert result == "pause"
-        # Only pause should be consumed; skip remains
-        assert (control_dir / "skip.json").exists()
+        # Both are consumed
+        assert "pause" in result
+        assert "skip" in result
+        assert len(result) == 2
+        assert not (control_dir / "pause.json").exists()
+        assert not (control_dir / "skip.json").exists()
 
     def test_generate_control_report_writes_file(self, tmp_path):
         orch = self._make_orch(tmp_path)

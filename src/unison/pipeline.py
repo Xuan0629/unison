@@ -633,11 +633,22 @@ class PipelineLoader:
 
         Raises:
             PipelineValidationError: If any stage has mode ``"chain"``
-                (recursive chain-in-chain is forbidden — P0.3), or
-                output_map entries fail path containment checks.
+                (recursive chain-in-chain is forbidden — P0.3), uses an
+                unknown mode (P8 S11), or output_map entries fail path
+                containment checks.
         """
         if not raw or not isinstance(raw.get("stages"), list):
             return ChainConfig()
+
+        # P8 S11: Build set of valid chain stage modes at load time.
+        # Modes in PhaseRouter.PHASES_BY_MODE plus special modes that
+        # are handled outside _run_state_machine.
+        from unison.phase_router import PhaseRouter
+        _VALID_CHAIN_MODES = set(PhaseRouter.PHASES_BY_MODE.keys()) | {
+            "moa",    # handled by _run_moa_pipeline
+            "dag",    # handled by DAG scheduler
+        }
+
         stages = []
         for i, s in enumerate(raw["stages"]):
             mode = s.get("mode", "code-dev")
@@ -647,6 +658,13 @@ class PipelineLoader:
                 raise PipelineValidationError(
                     "chain.stages cannot include a stage with mode='chain'. "
                     "Chain-in-chain recursion is not supported."
+                )
+            # P8 S11: Reject unknown modes at load time so a typo in
+            # stage 5 doesn't waste wall-clock time on stages 1-4.
+            if mode not in _VALID_CHAIN_MODES:
+                raise PipelineValidationError(
+                    f"chain.stages[{i}]: unknown mode {mode!r}. "
+                    f"Valid modes: {sorted(_VALID_CHAIN_MODES)}"
                 )
             output_map = s.get("output_map", {}) or {}
             # Validate output_map paths for path-traversal
@@ -904,11 +922,11 @@ class DAGScheduler:
                 in_flight.add(stage.name)
 
             while futures:
-                # Poll interval: 10ms (was 50ms) to keep latency low
-                # for normal completion. Hung stages are still detected
-                # by the deadline check below; the only cost is
-                # ~100 wakeups/sec when stages are running.
-                done, _ = wait(futures, timeout=0.01,
+                # P8 S17: Poll interval increased to 100ms (was 10ms).
+                # A 10ms interval causes ~360K wakeups/hr of DAG runtime;
+                # 100ms reduces wakeups 10x with negligible latency impact
+                # since DAG stages take minutes, not milliseconds.
+                done, _ = wait(futures, timeout=0.1,
                                return_when=FIRST_COMPLETED)
                 now = time.monotonic()
 

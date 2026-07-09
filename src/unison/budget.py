@@ -8,6 +8,7 @@ to decide whether to continue, pause, or downgrade work.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -82,6 +83,9 @@ class BudgetTracker:
         self._per_task_used: int = 0
         self._phases: list[PhaseUsage] = []
 
+        # P8 S13: Lock for thread-safe budget mutations in MoA context
+        self._lock = threading.Lock()
+
         # Attempt to load persisted state
         if persist_path is not None and persist_path.exists():
             self._load()
@@ -117,42 +121,48 @@ class BudgetTracker:
         date does not match today's date, ``_reset_daily()`` is called
         before recording.
 
+        Thread-safe via ``threading.Lock`` (P8 S13).
+
         Args:
             tokens: Number of tokens consumed.
             phase: Optional phase label (e.g. ``"planning"``).
             iter_n: Optional iteration number for the phase.
         """
-        # Day-boundary detection
-        self._check_date_change()
+        with self._lock:
+            # Day-boundary detection
+            self._check_date_change()
 
-        self._daily_used += tokens
-        self._per_task_used += tokens
+            self._daily_used += tokens
+            self._per_task_used += tokens
 
-        if phase:
-            from datetime import datetime, timezone
+            if phase:
+                from datetime import datetime, timezone
 
-            self._phases.append(
-                PhaseUsage(
-                    phase=phase,
-                    iter_n=iter_n,
-                    tokens_used=tokens,
-                    timestamp=datetime.now(timezone.utc).isoformat(),
+                self._phases.append(
+                    PhaseUsage(
+                        phase=phase,
+                        iter_n=iter_n,
+                        tokens_used=tokens,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                    )
                 )
-            )
 
-        self._save()
+            self._save()
 
     def check_budget(self) -> bool:
         """Return True if usage is within both the daily and per-task limits.
+
+        Thread-safe via ``threading.Lock`` (P8 S13).
 
         Returns:
             True when ``daily_used < daily_limit`` **and**
             ``per_task_used < per_task_limit``, False otherwise.
         """
-        return (
-            self._daily_used < self.daily_limit
-            and self._per_task_used < self.per_task_limit
-        )
+        with self._lock:
+            return (
+                self._daily_used < self.daily_limit
+                and self._per_task_used < self.per_task_limit
+            )
 
     # ------------------------------------------------------------------
     # New methods (V2)
@@ -189,9 +199,13 @@ class BudgetTracker:
         )
 
     def reset_task(self) -> None:
-        """Reset the per-task counter (but not the daily counter)."""
-        self._per_task_used = 0
-        self._save()
+        """Reset the per-task counter (but not the daily counter).
+
+        Thread-safe via ``threading.Lock`` (P8 S13).
+        """
+        with self._lock:
+            self._per_task_used = 0
+            self._save()
 
     # ------------------------------------------------------------------
     # Persistence internals
@@ -289,3 +303,27 @@ class BudgetTracker:
         except OSError:
             # Best-effort persistence — don't crash on I/O errors
             pass
+
+
+# ============================================================================
+# Token estimation — shared utility
+# ============================================================================
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate token count from text length, non-ASCII aware (P8 S8).
+
+    ASCII text: ~4 chars per token (English).  Non-ASCII (CJK, emoji,
+    etc.): ~1-2 chars per token.  This heuristic is coarse but avoids
+    the 3-12x undercount of plain ``len(text) // 4`` for non-English
+    projects.
+
+    Returns at least 1.
+    """
+    if not text:
+        return 1
+    ascii_chars = sum(1 for c in text if ord(c) < 128)
+    non_ascii_chars = len(text) - ascii_chars
+    # ASCII: ~4 chars/token, non-ASCII: ~1.5 chars/token
+    estimated = (ascii_chars // 4) + int(non_ascii_chars / 1.5)
+    return max(1, estimated)

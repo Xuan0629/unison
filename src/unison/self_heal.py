@@ -280,9 +280,11 @@ class FixOrchestrator:
                 ex.submit(run_codex): "codex",
                 ex.submit(run_claude): "claude",
             }
-            for future in concurrent.futures.as_completed(futures):
+            for future in concurrent.futures.as_completed(futures, timeout=360):
                 try:
-                    results.append(future.result())
+                    # P8 S15: Add per-reviewer timeout to prevent hanging
+                    # reviewers from blocking the entire self-heal pipeline
+                    results.append(future.result(timeout=360))
                 except Exception as e:
                     results.append({"passed": False, "summary": str(e), "findings": []})
         return results
@@ -292,23 +294,42 @@ class FixOrchestrator:
     # ------------------------------------------------------------------
 
     def _commit_fix(self, fix_proposal: dict, error_type: str) -> str:
-        """Commit the fix to an auto-fix branch."""
+        """Commit the fix to an auto-fix branch.
+
+        P8 S12: Saves and restores the original branch so subsequent
+        pipeline stages don't run on the auto-fix/ branch.
+        """
         ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         branch = f"auto-fix/{ts}"
         diagnosis = fix_proposal.get("diagnosis", "auto-fix")[:60]
 
         root = self._world.root
-        subprocess.run(["git", "-C", str(root), "checkout", "-b", branch],
-                       capture_output=True)
-        subprocess.run(["git", "-C", str(root), "add", "-A"],
-                       capture_output=True)
-        subprocess.run(["git", "-C", str(root), "commit", "-m",
-                        f"auto-fix({error_type}): {diagnosis}"],
-                       capture_output=True)
 
-        result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
-                                capture_output=True, text=True)
-        return result.stdout.strip()
+        # P8 S12: Save the current branch name before switching
+        current_branch_result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True,
+        )
+        original_branch = current_branch_result.stdout.strip() or "master"
+
+        try:
+            subprocess.run(["git", "-C", str(root), "checkout", "-b", branch],
+                           capture_output=True)
+            subprocess.run(["git", "-C", str(root), "add", "-A"],
+                           capture_output=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-m",
+                            f"auto-fix({error_type}): {diagnosis}"],
+                           capture_output=True)
+
+            result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                    capture_output=True, text=True)
+            return result.stdout.strip()
+        finally:
+            # P8 S12: Restore the original branch so pipeline continues correctly
+            subprocess.run(
+                ["git", "-C", str(root), "checkout", original_branch],
+                capture_output=True,
+            )
 
     def _create_pr(self, commit_hash: str, fix_proposal: dict, error_type: str) -> str:
         """Create a GitHub PR for the fix."""

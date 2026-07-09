@@ -150,10 +150,10 @@ class TestBuildChainParsing:
         assert cfg.stages[0].mode == "code-dev"
 
     def test_build_chain_invalid_mode_accepted_literally(self):
-        """mode value is passed through as-is (validation is PipelineMode type check)."""
+        """P8 S11: Unknown modes are rejected at load time."""
         raw = {"stages": [{"mode": "some-custom-mode"}]}
-        cfg = PipelineLoader._build_chain(raw)
-        assert cfg.stages[0].mode == "some-custom-mode"
+        with pytest.raises(PipelineValidationError, match="unknown mode"):
+            PipelineLoader._build_chain(raw)
 
 
 # ============================================================================

@@ -31,7 +31,7 @@ from unison.completion import GitCompletionDetector
 import yaml
 from unison.verdict import YamlFrontmatterParser
 from unison.context_deflate import assemble_context, extract_top_findings
-from unison.budget import BudgetTracker
+from unison.budget import BudgetTracker, estimate_tokens
 from unison.event_bus import get_event_bus
 from unison.runners.base import mask_secrets
 from unison.runners.claude import ClaudeRunner
@@ -91,6 +91,12 @@ class Orchestrator:
         self._checkpoint_mgr = FileCheckpointManager(
             base_dir=Path.home() / ".unison" / "checkpoints"
         )
+
+        # -- observer tracking (P8 S10) ----------------------------------------
+        self._observer_proc: subprocess.Popen | None = None
+
+        # -- pipeline timeout (P8 S16) -----------------------------------------
+        self._pipeline_start_time: float = time.monotonic()
 
         # -- runner routing (runtime name → runner instance) ------------------
         self._runners: dict[str, ClaudeRunner | CodexRunner | HermesRunner | OpenClawRunner] = {
@@ -287,7 +293,12 @@ class Orchestrator:
             pass
         finally:
             # ------------------------------------------------------------------
-            # 5. Release lock
+            # 5. Stop Observer (P8 S10: prevent orphan accumulation)
+            # ------------------------------------------------------------------
+            self._stop_observer()
+
+            # ------------------------------------------------------------------
+            # 6. Release lock
             # ------------------------------------------------------------------
             self._lock_mgr.release(project_name)
 
@@ -402,19 +413,21 @@ class Orchestrator:
         """
         moa_config = self.spec.moa or MoaConfig()
 
-        # Populate runtime_agents for Web UI display
-        self._state.runtime_agents = []
+        # Populate runtime_agents for Web UI display (P8 S14: append
+        # to preserve agents from earlier modes instead of overwriting)
+        moa_agents = []
         for i in range(1, moa_config.agents + 1):
-            self._state.runtime_agents.append({
+            moa_agents.append({
                 "role": f"moa-analyzer-{i}",
                 "runtime": moa_config.runtime,
                 "model": moa_config.model,
             })
-        self._state.runtime_agents.append({
+        moa_agents.append({
             "role": "moa-synthesizer",
             "runtime": moa_config.runtime,
             "model": moa_config.model,
         })
+        self._state.runtime_agents.extend(moa_agents)
 
         for round_n in range(1, moa_config.rounds + 1):
             if self._state.halt_signal:
@@ -591,7 +604,7 @@ class Orchestrator:
 
             # Budget tracking
             tracker = self._get_budget_tracker("analyzer")
-            estimated_tokens = max(1, len(full_prompt) // 4)
+            estimated_tokens = estimate_tokens(full_prompt)
             tracker.add_usage(
                 estimated_tokens,
                 phase=f"moa_analyze_{spec.role}",
@@ -856,13 +869,30 @@ class Orchestrator:
             )
             return
 
-        # Read all analysis files — assemble_context handles budget via
-        # token-aware truncation, so we pass full content here.
+        # Read all analysis files with per-file and total size caps (P8 S7).
+        # Without caps, 10 agents × 20-50KB = 200-500KB prompt, risking
+        # ARG_MAX on Linux when use_stdin=False on the runner.
+        _MAX_PER_ANALYSIS = 16384    # 16 KB per analysis file
+        _MAX_TOTAL_ANALYSES = 49152  # 48 KB total across all analyses
         analyses_text = ""
+        total_chars = 0
         for af in analysis_files:
             raw = af.read_text(encoding="utf-8")
-            analyses_text += f"\n### {af.name}\n"
-            analyses_text += raw + "\n"
+            # Skip obviously empty/garbage output (P8 S25 guard)
+            if len(raw.strip()) < 100:
+                continue
+            truncated = raw[:_MAX_PER_ANALYSIS]
+            if len(raw) > _MAX_PER_ANALYSIS:
+                truncated += "\n...[analysis truncated]"
+            header = f"\n### {af.name}\n"
+            if total_chars + len(header) + len(truncated) > _MAX_TOTAL_ANALYSES:
+                # Partial inclusion: add what fits and stop
+                remaining = _MAX_TOTAL_ANALYSES - total_chars - len(header)
+                if remaining > 200:
+                    analyses_text += header + truncated[:remaining] + "\n...[total cap reached]"
+                break
+            analyses_text += header + truncated + "\n"
+            total_chars = len(analyses_text)
 
         # Build synthesizer agent spec
         from unison.interfaces import AgentSpec
@@ -940,7 +970,7 @@ class Orchestrator:
 
         # Budget tracking
         tracker = self._get_budget_tracker("synthesizer")
-        estimated_tokens = max(1, len(full_prompt) // 4)
+        estimated_tokens = estimate_tokens(full_prompt)
         tracker.add_usage(
             estimated_tokens,
             phase="moa_synthesize",
@@ -1164,15 +1194,22 @@ class Orchestrator:
             if self._state.halt_signal:
                 return
 
-            # ---- Dashboard control check (every iteration boundary) --------
-            control = self._check_control_files()
-            if control == "pause":
-                self.halt("Dashboard pause requested", category="external")
+            # ---- Pipeline timeout check (P8 S16) -----------------------------
+            self._check_pipeline_timeout()
+            if self._state.halt_signal:
                 return
-            elif control == "skip":
-                self._skip_requested = True
-            elif control == "report":
-                self._generate_control_report()
+
+            # ---- Dashboard control check (every iteration boundary) --------
+            # P8 S18: Process ALL control files, not just the first match
+            controls = self._check_control_files()
+            for control in controls:
+                if control == "pause":
+                    self.halt("Dashboard pause requested", category="external")
+                    return
+                elif control == "skip":
+                    self._skip_requested = True
+                elif control == "report":
+                    self._generate_control_report()
 
             # ---- Active phase -----------------------------------------------
             self._state.transition(
@@ -1339,7 +1376,7 @@ class Orchestrator:
             self._recover_timeout_work(role, world, iteration)
 
         # 8. Track token usage (estimate from prompt length)
-        estimated_tokens = max(1, len(prompt) // 4)
+        estimated_tokens = estimate_tokens(prompt)
         tracker.add_usage(estimated_tokens, phase=role, iter_n=iteration)
 
         # 8. Post-invoke completion detection (§5)
@@ -1476,7 +1513,7 @@ class Orchestrator:
             )
             # Budget tracking per agent
             tracker = self._get_budget_tracker(pipeline_role)
-            estimated_tokens = max(1, len(prompt) // 4)
+            estimated_tokens = estimate_tokens(prompt)
             tracker.add_usage(
                 estimated_tokens, phase=f"{pipeline_role}_{spec.role}",
                 iter_n=iteration,
@@ -1577,7 +1614,7 @@ class Orchestrator:
 
             # Budget tracking
             tracker = self._get_budget_tracker("planner")
-            estimated_tokens = max(1, len(full_prompt) // 4)
+            estimated_tokens = estimate_tokens(full_prompt)
             tracker.add_usage(
                 estimated_tokens, phase=f"planner_{spec.role}", iter_n=iteration,
             )
@@ -1661,12 +1698,15 @@ class Orchestrator:
                 )
 
         # Dispatch one developer to each worktree
+        # P8 S9: Track failed developers so their work is excluded from merge
+        failed_developers: list[str] = []
         for spec, info in zip(agent_specs, worktree_infos):
             if info is None or self._state.halt_signal:
                 continue
 
             runner = self._runners.get(spec.runtime)
             if runner is None:
+                failed_developers.append(spec.role)
                 continue
 
             # Check budget
@@ -1699,7 +1739,8 @@ class Orchestrator:
                 f"{timestamp}_{spec.role}",
             )
 
-            runner.run(
+            # P8 S9: Capture result and check success
+            result = runner.run(
                 spec=spec,
                 prompt=full_prompt,
                 workdir=info.path,
@@ -1707,7 +1748,16 @@ class Orchestrator:
                 log_path=log_path,
             )
 
-            estimated_tokens = max(1, len(full_prompt) // 4)
+            if not result.success:
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "multi_developer %s failed (exit %d): %s",
+                    spec.role, result.exit_code, result.error,
+                )
+                failed_developers.append(spec.role)
+
+            estimated_tokens = estimate_tokens(full_prompt)
             tracker.add_usage(
                 estimated_tokens, phase=f"developer_{spec.role}", iter_n=iteration,
             )
@@ -1725,10 +1775,20 @@ class Orchestrator:
             if self._state.halt_signal:
                 break
 
-        # Merge all feature branches
+        # P8 S9: Exclude failed developers from merge
+        if failed_developers:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "multi_developer: %d/%d developers failed, excluding from merge: %s",
+                len(failed_developers), len(agent_specs),
+                ", ".join(failed_developers),
+            )
+
+        # Merge all feature branches (excluding failed developers' branches)
         branch_names = [
-            info.branch for info in worktree_infos
-            if info is not None
+            info.branch for info, spec in zip(worktree_infos, agent_specs)
+            if info is not None and spec.role not in failed_developers
         ]
         if branch_names:
             merge_result = mgr.merge_reconciliation(branch_names, strategy="ff")
@@ -1776,6 +1836,8 @@ class Orchestrator:
                 )
 
         # Dispatch one Developer to each created worktree
+        # P8 S9: Track failed developers so their work is excluded from merge
+        failed_features: list[str] = []
         for feature_name, info in zip(feature_list, worktree_infos):
             if info is None:
                 continue
@@ -1786,6 +1848,7 @@ class Orchestrator:
             # Get runner for developer
             runner, effective_spec = self._select_runner("developer")
             if runner is None or effective_spec is None:
+                failed_features.append(feature_name)
                 continue
 
             # Check budget overflow BEFORE invoking agent (L1 fix #2)
@@ -1814,7 +1877,8 @@ class Orchestrator:
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             log_path = world.agent_log("developer", iteration, f"{timestamp}_{feature_name}")  # type: ignore[arg-type]
 
-            runner.run(
+            # P8 S9: Capture result and check success
+            result = runner.run(
                 spec=effective_spec,
                 prompt=full_prompt,
                 workdir=info.path,
@@ -1822,13 +1886,22 @@ class Orchestrator:
                 log_path=log_path,
             )
 
+            if not result.success:
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "parallel_developer %s failed (exit %d): %s",
+                    feature_name, result.exit_code, result.error,
+                )
+                failed_features.append(feature_name)
+
             # L1 fix #1: halt check after runner.run() so agent B doesn't
             # run if agent A triggered halt (e.g. budget overflow / SIGINT).
             if self._state.halt_signal:
                 break
 
             # Track token usage
-            estimated_tokens = max(1, len(full_prompt) // 4)
+            estimated_tokens = estimate_tokens(full_prompt)
             tracker.add_usage(estimated_tokens, phase=f"developer_{feature_name}", iter_n=iteration)
 
             # Completion detection
@@ -1841,10 +1914,20 @@ class Orchestrator:
             if detected.commit:
                 self._state.last_dev_commit = detected.commit
 
-        # Merge all feature branches
+        # P8 S9: Log failed developers and exclude from merge
+        if failed_features:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "parallel_developers: %d/%d features failed, excluding from merge: %s",
+                len(failed_features), len(feature_list),
+                ", ".join(failed_features),
+            )
+
+        # Merge all feature branches (excluding failed developers' branches)
         branch_names = [
-            info.branch for info in worktree_infos
-            if info is not None
+            info.branch for info, fname in zip(worktree_infos, feature_list)
+            if info is not None and fname not in failed_features
         ]
         if branch_names:
             merge_result = mgr.merge_reconciliation(branch_names, strategy="ff")
@@ -2229,20 +2312,38 @@ class Orchestrator:
     # Internal: helpers
     # ==================================================================
 
-    def _check_control_files(self) -> str | None:
+    def _check_pipeline_timeout(self) -> None:
+        """P8 S16: Halt if the pipeline has exceeded its wall-clock timeout.
+
+        Checks ``self.spec.pipeline_timeout``.  A value of 0 means
+        no timeout (disabled).  Called at iteration boundaries.
+        """
+        if self.spec.pipeline_timeout <= 0:
+            return
+        elapsed = time.monotonic() - self._pipeline_start_time
+        if elapsed > self.spec.pipeline_timeout:
+            self.halt(
+                f"pipeline timeout: {elapsed:.0f}s elapsed "
+                f"(limit={self.spec.pipeline_timeout}s)",
+                category="external",
+            )
+
+    def _check_control_files(self) -> list[str]:
         """Check for dashboard control files in ``.unison/control/``.
 
-        Called at phase boundaries.  Reads and consumes exactly one
-        control file (pause → halt, skip → force PASS, report → snapshot).
+        Called at phase boundaries.  Reads and consumes ALL control
+        files (P8 S18: previously only consumed the first match,
+        silently dropping simultaneous pause+report requests).
 
         Returns:
-            The action string (``"pause"``, ``"skip"``, ``"report"``)
-            if a control file was consumed, or ``None``.
+            List of action strings (``"pause"``, ``"skip"``, ``"report"``)
+            for all control files consumed, or empty list.
         """
         control_dir = self.spec.world.root / ".unison" / "control"
         if not control_dir.exists():
-            return None
+            return []
 
+        actions: list[str] = []
         for action in ("pause", "skip", "report"):
             cf = control_dir / f"{action}.json"
             if cf.exists():
@@ -2250,8 +2351,8 @@ class Orchestrator:
                     cf.unlink()  # consume the control file
                 except OSError:
                     pass
-                return action
-        return None
+                actions.append(action)
+        return actions
 
     # === architect-loop pattern: freeze acceptance criteria ===
     def _freeze_acceptance_criteria(self) -> None:
@@ -2651,7 +2752,7 @@ class Orchestrator:
                 pid_file.unlink(missing_ok=True)
 
         try:
-            proc = subprocess.Popen(
+            self._observer_proc = subprocess.Popen(
                 [
                     sys.executable, "-m", "unison.cli", "observe",
                     "--project", str(self.spec.world.root),
@@ -2660,9 +2761,30 @@ class Orchestrator:
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-            pid_file.write_text(str(proc.pid))
+            pid_file.write_text(str(self._observer_proc.pid))
         except Exception:
+            self._observer_proc = None
             pass  # best-effort
+
+    def _stop_observer(self) -> None:
+        """P8 S10: Terminate the Observer subprocess on orchestrator shutdown.
+
+        Prevents orphan Observer processes from accumulating over
+        long-running CI/CD pipelines.
+        """
+        if self._observer_proc is None:
+            return
+        try:
+            self._observer_proc.terminate()
+            try:
+                self._observer_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._observer_proc.kill()
+                self._observer_proc.wait(timeout=2)
+        except Exception:
+            pass
+        finally:
+            self._observer_proc = None
 
     def _run_bootstrap(self) -> None:
         """Execute bootstrap commands in local shell (§12).
