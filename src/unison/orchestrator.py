@@ -20,7 +20,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from unison.interfaces import AgentResult, MoaConfig, PipelineSpec, RedirectControl, ReviewVerdict, VerdictParseError
+from unison.interfaces import AgentResult, MoaConfig, Notification, PipelineSpec, RedirectControl, ReviewVerdict, VerdictParseError
 from unison.phase_router import PhaseRouter
 from unison.pipeline import PipelineValidationError
 from unison.prompt_registry import PromptRegistry
@@ -179,6 +179,13 @@ class Orchestrator:
         self._state.halt_reason = reason
         self._halt_category = category
         self._publish_phase_event("halt", note=reason, event="halted")
+        # P10: Canonical halt notification written directly to JSONL
+        self._write_lifecycle_notification(
+            event_type="halted",
+            severity="error",
+            title=f"Pipeline halted: {reason}",
+            summary=f"Halted in {self._state.phase}: {reason}",
+        )
 
     def _publish_phase_event(self, phase: str, note: str = "",
                              event: str = "") -> None:
@@ -221,6 +228,54 @@ class Orchestrator:
         except Exception:
             pass
         return 0
+
+    def _write_lifecycle_notification(
+        self,
+        event_type: str,
+        phase: str = "",
+        severity: str = "info",
+        title: str = "",
+        body: str = "",
+        iteration: int | None = None,
+        verdict: str = "",
+        summary: str = "",
+    ) -> None:
+        """P10: Write a lifecycle event directly to ``notifications.jsonl``.
+
+        This is the **canonical source** for structured pipeline events
+        (per MoA Disagreement #2 resolution).  When the Observer runs as
+        a separate subprocess, the in-process event bus is unreachable;
+        this method ensures lifecycle records are always durably written.
+
+        The Observer's file-watcher path picks up new lines from
+        ``notifications.jsonl`` on the next poll cycle.
+        """
+        import json as _json
+        nf = self.spec.world.notifications_file
+        nf.parent.mkdir(parents=True, exist_ok=True)
+
+        ts = datetime.now(timezone.utc).isoformat()
+        it = iteration if iteration is not None else self._state.iteration
+
+        record: dict = {
+            "timestamp": ts,
+            "phase": phase or self._state.phase,
+            "severity": severity,
+            "title": title,
+            "body": body,
+            "event_type": event_type,
+            "pipeline": self._state.pipeline_name,
+            "iteration": it,
+            "verdict": verdict,
+            "summary": summary or body,
+            "language": self._state.observer_language,
+        }
+
+        try:
+            with open(nf, "a", encoding="utf-8") as fh:
+                fh.write(_json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            logger.warning("Failed to write lifecycle notification to %s", nf)
 
     def pre_invoke_cleanup(self) -> None:
         """Run ``git reset --hard HEAD && git clean -fd``.
@@ -360,10 +415,17 @@ class Orchestrator:
         """
         mode = self.spec.mode or "code-dev"
 
-        # P10: Emit pipeline_start event
+        # P10: Emit pipeline_start event (event bus + canonical JSONL)
         self._publish_phase_event(
             "init", note=f"pipeline {self.spec.pipeline_name} starting",
             event="pipeline_start",
+        )
+        self._write_lifecycle_notification(
+            event_type="pipeline_start",
+            phase="init",
+            severity="info",
+            title=f"Pipeline {self._state.pipeline_name} started in {mode} mode",
+            summary=f"{mode} | {len(self.spec.agents)} agents",
         )
 
         # MoA mode uses a dedicated N-round analyze→synthesize loop
@@ -416,10 +478,18 @@ class Orchestrator:
             # "done" transition and review archiving — the chain emits
             # a single terminal done/archive after all stages complete.
             if not self._in_chain:
-                # P10: Emit pipeline_done before the terminal "done" transition
+                # P10: Emit pipeline_done (event bus + canonical JSONL)
+                commits = self._count_commits()
                 self._publish_phase_event(
                     "done", note="pipeline complete",
                     event="pipeline_done",
+                )
+                self._write_lifecycle_notification(
+                    event_type="pipeline_done",
+                    phase="done",
+                    severity="info",
+                    title=f"Pipeline {self._state.pipeline_name} complete",
+                    summary=f"{commits} commits",
                 )
                 self._state.transition("done", "orchestrator",
                                        note="pipeline complete")
@@ -517,10 +587,18 @@ class Orchestrator:
             # P0.6: When running inside _run_chain(), suppress per-stage
             # "done" transition and review archiving.
             if not self._in_chain:
-                # P10: Emit pipeline_done before the terminal transition
+                # P10: Emit pipeline_done (event bus + canonical JSONL)
+                commits = self._count_commits()
                 self._publish_phase_event(
                     "done", note="moa pipeline complete",
                     event="pipeline_done",
+                )
+                self._write_lifecycle_notification(
+                    event_type="pipeline_done",
+                    phase="done",
+                    severity="info",
+                    title=f"Pipeline {self._state.pipeline_name} complete",
+                    summary=f"MoA pipeline: {commits} commits",
                 )
                 self._state.transition("done", "orchestrator",
                                        note="moa pipeline complete")
@@ -978,10 +1056,18 @@ class Orchestrator:
             # P0.6: Chain complete — emit one terminal "done" transition
             # and archive reviews once for the entire chain.
             if not self._state.halt_signal:
-                # P10: Emit pipeline_done before the terminal transition
+                # P10: Emit pipeline_done (event bus + canonical JSONL)
+                commits = self._count_commits()
                 self._publish_phase_event(
                     "done", note="chain complete",
                     event="pipeline_done",
+                )
+                self._write_lifecycle_notification(
+                    event_type="pipeline_done",
+                    phase="done",
+                    severity="info",
+                    title=f"Pipeline {self._state.pipeline_name} complete",
+                    summary=f"Chain pipeline: {commits} commits",
                 )
                 self._state.transition("done", "orchestrator",
                                        note="chain complete")
@@ -1489,10 +1575,20 @@ class Orchestrator:
 
             if verdict == "PASS":
                 # Exit loop — review approved
-                # P10: Emit phase_done event
+                # P10: Emit phase_done event (event bus + canonical JSONL)
                 self._publish_phase_event(
                     review_phase, note=f"{review_of} PASS after {iteration} iters",
                     event="phase_done",
+                )
+                commits = self._count_commits()
+                self._write_lifecycle_notification(
+                    event_type="phase_done",
+                    phase=review_phase,
+                    severity="info",
+                    title=f"{review_phase} PASS after {iteration} iters",
+                    verdict="PASS",
+                    iteration=iteration,
+                    summary=f"{review_of} PASS | {commits} commits | iter {iteration}",
                 )
                 return
 

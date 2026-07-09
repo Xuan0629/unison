@@ -1713,3 +1713,198 @@ class TestRedirectFile:
         """_pending_redirect is initialized to None."""
         orch = self._make_orchestrator(tmp_path)
         assert orch._pending_redirect is None
+
+
+# ============================================================================
+# R1 Fix tests: Orchestrator lifecycle notifications → notifications.jsonl
+# ============================================================================
+
+
+class TestOrchestratorLifecycleNotifications:
+    """R1-HIGH: Orchestrator writes lifecycle events directly to JSONL."""
+
+    def _make_orchestrator(self, tmp_path) -> Orchestrator:
+        """Create a minimal Orchestrator for lifecycle notification testing."""
+        from unison.interfaces import AgentSpec, PipelineSpec
+        from unison.world import World as WorldCls
+
+        root = Path(tmp_path)
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "prd").mkdir(parents=True, exist_ok=True)
+        (root / "reviews").mkdir(parents=True, exist_ok=True)
+        (root / ".unison").mkdir(parents=True, exist_ok=True)
+        (root / "prd" / "PRD.md").write_text("# PRD placeholder")
+
+        agent = AgentSpec(
+            role="developer",
+            runtime="claude",
+            model="test",
+            system_prompt_path=Path("prompts/developer.md"),
+        )
+
+        world = WorldCls(root=root)
+        world.ensure_directories()
+
+        spec = PipelineSpec(
+            version="1.0",
+            world=world,
+            agents={"developer": agent},
+            mode="full-dev",
+            pipeline_name="TestPipeline",
+            observer_language="zh",
+        )
+
+        orch = Orchestrator(spec=spec)
+        orch._state.observer_language = "zh"
+        orch._state.pipeline_name = "TestPipeline"
+        return orch
+
+    # ---- _write_lifecycle_notification tests ----
+
+    def test_write_pipeline_start_notification(self, tmp_path):
+        """_write_lifecycle_notification writes pipeline_start to JSONL."""
+        import json as _json
+        orch = self._make_orchestrator(tmp_path)
+
+        orch._write_lifecycle_notification(
+            event_type="pipeline_start",
+            phase="init",
+            severity="info",
+            title="Pipeline TestPipeline started",
+            summary="full-dev | 1 agents",
+        )
+
+        nf = tmp_path / "observer" / "notifications.jsonl"
+        assert nf.exists()
+        records = [_json.loads(l) for l in nf.read_text().strip().split("\n") if l]
+        assert len(records) == 1
+        r = records[0]
+        assert r["event_type"] == "pipeline_start"
+        assert r["phase"] == "init"
+        assert r["severity"] == "info"
+        assert r["pipeline"] == "TestPipeline"
+        assert r["language"] == "zh"
+
+    def test_write_phase_done_notification(self, tmp_path):
+        """_write_lifecycle_notification writes phase_done with verdict."""
+        import json as _json
+        orch = self._make_orchestrator(tmp_path)
+
+        orch._write_lifecycle_notification(
+            event_type="phase_done",
+            phase="planning_review",
+            severity="info",
+            title="planning_review PASS after 3 iters",
+            verdict="PASS",
+            iteration=3,
+            summary="planning PASS | 2 commits | iter 3",
+        )
+
+        nf = tmp_path / "observer" / "notifications.jsonl"
+        records = [_json.loads(l) for l in nf.read_text().strip().split("\n") if l]
+        assert len(records) == 1
+        r = records[0]
+        assert r["event_type"] == "phase_done"
+        assert r["verdict"] == "PASS"
+        assert r["iteration"] == 3
+
+    def test_write_pipeline_done_notification(self, tmp_path):
+        """_write_lifecycle_notification writes pipeline_done."""
+        import json as _json
+        orch = self._make_orchestrator(tmp_path)
+
+        orch._write_lifecycle_notification(
+            event_type="pipeline_done",
+            phase="done",
+            severity="info",
+            title="Pipeline TestPipeline complete",
+            summary="5 commits",
+        )
+
+        nf = tmp_path / "observer" / "notifications.jsonl"
+        records = [_json.loads(l) for l in nf.read_text().strip().split("\n") if l]
+        assert len(records) == 1
+        r = records[0]
+        assert r["event_type"] == "pipeline_done"
+        assert r["phase"] == "done"
+
+    def test_write_halted_notification(self, tmp_path):
+        """_write_lifecycle_notification writes halted with error severity."""
+        import json as _json
+        orch = self._make_orchestrator(tmp_path)
+
+        orch._write_lifecycle_notification(
+            event_type="halted",
+            severity="error",
+            title="Pipeline halted: budget overflow",
+            summary="Halted in dev_active: budget overflow",
+        )
+
+        nf = tmp_path / "observer" / "notifications.jsonl"
+        records = [_json.loads(l) for l in nf.read_text().strip().split("\n") if l]
+        assert len(records) == 1
+        r = records[0]
+        assert r["event_type"] == "halted"
+        assert r["severity"] == "error"
+        assert "budget overflow" in r["summary"]
+
+    def test_multiple_events_append(self, tmp_path):
+        """Multiple _write_lifecycle_notification calls append to JSONL."""
+        import json as _json
+        orch = self._make_orchestrator(tmp_path)
+
+        orch._write_lifecycle_notification(
+            event_type="pipeline_start", phase="init",
+            severity="info", title="start", summary="start",
+        )
+        orch._write_lifecycle_notification(
+            event_type="phase_done", phase="planning_review",
+            severity="info", title="phase done", verdict="PASS",
+            iteration=2, summary="planning done",
+        )
+        orch._write_lifecycle_notification(
+            event_type="pipeline_done", phase="done",
+            severity="info", title="complete", summary="done",
+        )
+
+        nf = tmp_path / "observer" / "notifications.jsonl"
+        records = [_json.loads(l) for l in nf.read_text().strip().split("\n") if l]
+        assert len(records) == 3
+        assert [r["event_type"] for r in records] == [
+            "pipeline_start", "phase_done", "pipeline_done",
+        ]
+
+    def test_notification_record_has_all_structured_fields(self, tmp_path):
+        """Every lifecycle record includes all P10 structured fields."""
+        import json as _json
+        orch = self._make_orchestrator(tmp_path)
+
+        orch._write_lifecycle_notification(
+            event_type="pipeline_start", phase="init",
+            severity="info", title="test", summary="test",
+            iteration=0, verdict="",
+        )
+
+        nf = tmp_path / "observer" / "notifications.jsonl"
+        r = _json.loads(nf.read_text().strip())
+        for field in ("event_type", "pipeline", "iteration", "verdict",
+                      "summary", "language", "timestamp", "phase",
+                      "severity", "title", "body"):
+            assert field in r, f"Missing field: {field}"
+
+    def test_notification_respects_state_language_and_name(self, tmp_path):
+        """Notification uses state.observer_language and state.pipeline_name."""
+        import json as _json
+        orch = self._make_orchestrator(tmp_path)
+        orch._state.observer_language = "zh"
+        orch._state.pipeline_name = "自定义管道"
+
+        orch._write_lifecycle_notification(
+            event_type="pipeline_start", phase="init",
+            severity="info", title="start", summary="start",
+        )
+
+        nf = tmp_path / "observer" / "notifications.jsonl"
+        r = _json.loads(nf.read_text().strip())
+        assert r["language"] == "zh"
+        assert r["pipeline"] == "自定义管道"

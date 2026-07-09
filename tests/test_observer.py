@@ -2500,3 +2500,235 @@ class TestRedirectControl:
         # Should not raise
         j = json.dumps(d, ensure_ascii=False)
         assert "test" in j
+
+
+# ============================================================================
+# R1 Fix tests: skip.json schema + redirect.json writer
+# ============================================================================
+
+
+class TestSkipJsonSchema:
+    """R1-LOW: skip.json includes the P10-013 action field."""
+
+    def test_skip_json_has_action_field(self, tmp_path):
+        """_write_skip_control writes `action: skip` per P10-013 schema."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        (tmp_path / "prd" / "PRD.md").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "prd" / "PRD.md").write_text("# Test PRD")
+
+        observer = Observer(world=world)
+        state = State(phase="dev_review", iteration=3)
+        observer._write_skip_control(state)
+
+        skip_file = tmp_path / ".unison" / "control" / "skip.json"
+        assert skip_file.exists()
+        data = _json.loads(skip_file.read_text())
+        assert data["action"] == "skip"
+        assert data["reason"]
+        assert data["timestamp"]
+        assert data["phase"] == "dev_review"
+        assert data["iteration"] == 3
+
+    def test_skip_json_schema_complete(self, tmp_path):
+        """skip.json has all fields from P10-013: action, reason, iteration, timestamp."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        (tmp_path / "prd" / "PRD.md").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "prd" / "PRD.md").write_text("# Test")
+
+        obs = Observer(world=world)
+        state = State(phase="dev_review", iteration=4)
+        obs._write_skip_control(state)
+
+        data = _json.loads(
+            (tmp_path / ".unison" / "control" / "skip.json").read_text()
+        )
+        for key in ("action", "reason", "timestamp", "phase", "iteration"):
+            assert key in data, f"Missing key: {key}"
+
+
+class TestObserverRedirectWriter:
+    """R1-MEDIUM: Observer writes redirect.json when SKIP conditions fail."""
+
+    def test_write_redirect_control_creates_file(self, tmp_path):
+        """_write_redirect_control writes redirect.json with correct schema."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+        state = State(phase="dev_review", iteration=4)
+        observer._write_redirect_control(state, "Test failure reason")
+
+        redirect_file = tmp_path / ".unison" / "control" / "redirect.json"
+        assert redirect_file.exists()
+        data = _json.loads(redirect_file.read_text())
+        assert "3+ REQUEST_CHANGES" in data["reason"]
+        assert "Test failure reason" in data["reason"]
+        assert data["corrective_prompt"] == ""  # P11 fills this
+        assert data["target_agent"] == "developer"
+        assert data["source"] == "observer"
+        assert data["timestamp"]
+
+    def test_write_redirect_control_schema_matches_RedirectControl(self, tmp_path):
+        """redirect.json can be deserialized via RedirectControl.from_dict()."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.interfaces import RedirectControl
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+        state = State(phase="dev_review", iteration=3)
+        observer._write_redirect_control(state, "Tests failed with exit 1")
+
+        data = _json.loads(
+            (tmp_path / ".unison" / "control" / "redirect.json").read_text()
+        )
+        rc = RedirectControl.from_dict(data)
+        assert rc.reason
+        assert rc.target_agent == "developer"
+        assert rc.source == "observer"
+        assert "Tests failed" in rc.reason
+
+
+class TestObserverRedirectOnSkipFailure:
+    """R1-MEDIUM: _check_skip_intervention writes redirect.json on SKIP failure."""
+
+    def test_redirect_written_when_no_output(self, tmp_path):
+        """When 3+ REQUEST_CHANGES but no output exists, write redirect.json."""
+        from unison.world import World
+        from unison.observer import Observer
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        # No PRD.md — _check_skip_intervention should write redirect.json
+        # (not skip.json) since there's no output to verify.
+
+        observer = Observer(world=world)
+        state = State(phase="dev_review", iteration=3)
+        for i in range(3):
+            state.transition("dev_review", "reviewer",
+                           iter_n=i+1, verdict="REQUEST_CHANGES")
+
+        observer._check_skip_intervention(state)
+
+        # skip.json should NOT exist (no output, so SKIP not satisfied)
+        skip_file = tmp_path / ".unison" / "control" / "skip.json"
+        assert not skip_file.exists()
+
+        # redirect.json should exist (pattern detected but heuristic failed)
+        redirect_file = tmp_path / ".unison" / "control" / "redirect.json"
+        assert redirect_file.exists()
+        data = json.loads(redirect_file.read_text())
+        assert "No output detected" in data["reason"]
+
+    def test_redirect_written_when_tests_fail(self, tmp_path):
+        """When 3+ REQUEST_CHANGES with output but test_command fails → redirect.json."""
+        from unittest import mock
+        from unison.world import World
+        from unison.observer import Observer
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        (tmp_path / "prd" / "PRD.md").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "prd" / "PRD.md").write_text("# Test PRD")
+
+        observer = Observer(world=world)
+        state = State(phase="dev_review", iteration=3)
+        for i in range(3):
+            state.transition("dev_review", "reviewer",
+                           iter_n=i+1, verdict="REQUEST_CHANGES")
+
+        # Mock test command to fail
+        with mock.patch.object(observer, "_read_test_command", return_value="pytest"):
+            with mock.patch("subprocess.run") as mock_run:
+                mock_run.return_value.returncode = 1  # Tests fail
+                observer._check_skip_intervention(state)
+
+        # skip.json should NOT exist (tests fail)
+        skip_file = tmp_path / ".unison" / "control" / "skip.json"
+        assert not skip_file.exists()
+
+        # redirect.json should exist (pattern detected but tests fail)
+        redirect_file = tmp_path / ".unison" / "control" / "redirect.json"
+        assert redirect_file.exists()
+        data = json.loads(redirect_file.read_text())
+        assert "Test command failed" in data["reason"]
+
+    def test_skip_written_when_conditions_pass(self, tmp_path):
+        """When 3+ REQUEST_CHANGES with output and passing tests → skip.json."""
+        from unittest import mock
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        (tmp_path / "prd" / "PRD.md").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "prd" / "PRD.md").write_text("# Test PRD")
+
+        observer = Observer(world=world)
+        state = State(phase="dev_review", iteration=3)
+        for i in range(3):
+            state.transition("dev_review", "reviewer",
+                           iter_n=i+1, verdict="REQUEST_CHANGES")
+
+        # Mock test command to pass
+        with mock.patch.object(observer, "_read_test_command", return_value="pytest"):
+            with mock.patch("subprocess.run") as mock_run:
+                mock_run.return_value.returncode = 0  # Tests pass
+                observer._check_skip_intervention(state)
+
+        # skip.json should exist
+        skip_file = tmp_path / ".unison" / "control" / "skip.json"
+        assert skip_file.exists()
+        data = _json.loads(skip_file.read_text())
+        assert data["action"] == "skip"
+
+        # redirect.json should NOT exist (SKIP was honored)
+        redirect_file = tmp_path / ".unison" / "control" / "redirect.json"
+        assert not redirect_file.exists()
+
+    def test_redirect_on_last_iteration_guard(self, tmp_path):
+        """When 3+ REQUEST_CHANGES but on last iteration → redirect.json (not skip)."""
+        from unittest import mock
+        from unison.world import World
+        from unison.observer import Observer
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        (tmp_path / "prd" / "PRD.md").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "prd" / "PRD.md").write_text("# Test PRD")
+        # Create a minimal pipeline.yaml so max_iter can be read
+        (tmp_path / "pipeline.yaml").write_text("max_dev_iterations: 5\n")
+
+        observer = Observer(world=world)
+        state = State(phase="dev_review", iteration=5)  # At max_iter
+        for i in range(3):
+            state.transition("dev_review", "reviewer",
+                           iter_n=i+3, verdict="REQUEST_CHANGES")
+
+        observer._check_skip_intervention(state)
+
+        # skip.json should NOT exist (last iteration guard)
+        skip_file = tmp_path / ".unison" / "control" / "skip.json"
+        assert not skip_file.exists()
+
+        # redirect.json should exist (pattern detected but guard triggered)
+        redirect_file = tmp_path / ".unison" / "control" / "redirect.json"
+        assert redirect_file.exists()
+        data = json.loads(redirect_file.read_text())
+        assert "loop exhausts" in data["reason"]

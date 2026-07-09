@@ -846,7 +846,12 @@ class Observer:
         so the orchestrator can exit the loop on the next iteration
         boundary.
 
-        Conditions:
+        P10-021: When the threshold is met but SKIP conditions are NOT
+        satisfied (no output, tests failing, last iteration), write
+        ``.unison/control/redirect.json`` instead so the orchestrator
+        can log and defer corrective action to P11.
+
+        Conditions for SKIP:
         - 3+ consecutive REQUEST_CHANGES in state.history (dev_review)
         - At least one iteration remains (not exhausted naturally)
         - At least one output file exists (PRD or test results)
@@ -889,6 +894,9 @@ class Observer:
                 "SKIP intervention suppressed: iteration %d >= max %d "
                 "— loop exhausts naturally", state.iteration, max_iter
             )
+            # P10-021: Write REDIRECT — pattern detected but SKIP guarded
+            self._write_redirect_control(state,
+                "Last iteration — loop exhausts naturally")
             return
 
         # --- Threshold met — check minimal satisfaction ---
@@ -900,6 +908,9 @@ class Observer:
 
         if not has_any_output:
             logger.info("SKIP intervention: no output detected, skipping")
+            # P10-021: Write REDIRECT — pattern detected but no output
+            self._write_redirect_control(state,
+                "No output detected — nothing to verify")
             return
 
         # Run test command if configured
@@ -916,9 +927,14 @@ class Observer:
                         "SKIP intervention: test command failed (exit %d), "
                         "not skipping", result.returncode
                     )
+                    # P10-021: Write REDIRECT — pattern detected but tests fail
+                    self._write_redirect_control(state,
+                        f"Test command failed (exit {result.returncode})")
                     return
             except (subprocess.SubprocessError, OSError) as exc:
                 logger.warning("SKIP intervention: test command error: %s", exc)
+                self._write_redirect_control(state,
+                    f"Test command error: {exc}")
                 return
 
         # --- Conditions met: write skip control file ---
@@ -971,11 +987,14 @@ class Observer:
 
         The orchestrator's ``_check_control_files()`` reads and consumes
         this file at the next iteration boundary.
+
+        Schema per P10-013: action, reason, iteration, timestamp.
         """
         control_dir = self.world.root / ".unison" / "control"
         control_dir.mkdir(parents=True, exist_ok=True)
         skip_file = control_dir / "skip.json"
         skip_data = {
+            "action": "skip",
             "reason": (
                 f"Observer detected {self._SKIP_CONSECUTIVE_THRESHOLD}+ "
                 f"consecutive REQUEST_CHANGES in {state.phase} — "
@@ -1003,6 +1022,31 @@ class Observer:
             body=summary,
             iteration=state.iteration,
             summary=summary,
+        )
+
+    def _write_redirect_control(self, state: State, reason: str) -> None:
+        """P10-021: Write .unison/control/redirect.json for REDIRECT groundwork.
+
+        Called when 3+ consecutive REQUEST_CHANGES are detected in dev_review
+        but the SKIP heuristic is NOT met (e.g. tests failing, no output).
+        The orchestrator reads, logs, and defers corrective action to P11.
+
+        Uses the RedirectControl schema from interfaces.py.
+        """
+        control_dir = self.world.root / ".unison" / "control"
+        control_dir.mkdir(parents=True, exist_ok=True)
+        redirect_file = control_dir / "redirect.json"
+        redirect_data = {
+            "reason": f"3+ REQUEST_CHANGES in {state.phase}: {reason}",
+            "corrective_prompt": "",  # P11: LLM-generated corrective instructions
+            "target_agent": "developer",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "source": "observer",
+        }
+        redirect_file.write_text(json.dumps(redirect_data, indent=2, ensure_ascii=False))
+        logger.info(
+            "REDIRECT signal written: %s (reason: %s)",
+            redirect_file, reason,
         )
 
     # ---- P10: message formatting ---------------------------------------------
