@@ -608,6 +608,18 @@ class Observer:
         # 确保目录存在
         self.world.ensure_directories()
 
+        # ---- Write PID file for liveness monitoring -----------------------------
+        pid_dir = Path.home() / ".unison" / "observer"
+        pid_dir.mkdir(parents=True, exist_ok=True)
+        pid_file = pid_dir / f"{self.world.root.name}.pid"
+        pid_file.write_text(str(os.getpid()))
+        try:
+            self._run_loop()
+        finally:
+            pid_file.unlink(missing_ok=True)
+
+    def _run_loop(self) -> None:
+        """Blocking event loop (extracted so PID cleanup is guaranteed)."""
         # ---- Phase 6: subscribe to internal event bus -------------------------
         bus = get_event_bus()
         bus.subscribe("phase", self._on_phase_event)

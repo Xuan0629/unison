@@ -116,6 +116,11 @@ def _build_parser() -> argparse.ArgumentParser:
     wui.add_argument("--port", type=int, default=9099,
                      help="Listen port (default: 9099)")
 
+    # --- observe -----------------------------------------------------
+    obs = sub.add_parser("observe", help="Start observer daemon (file watcher + notifications)")
+    obs.add_argument("--project", type=Path, default=Path("."),
+                     help="Project root (default: current dir)")
+
     return p
 
 
@@ -295,6 +300,16 @@ def _cmd_webui(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_observe(args: argparse.Namespace) -> int:
+    """Start the observer daemon."""
+    from unison.world import World
+    from unison.observer import Observer
+    world = World(args.project.resolve())
+    obs = Observer(world)
+    obs.run()
+    return 0
+
+
 _HANDLERS = {
     "run": _cmd_run,
     "dry-run": _cmd_dry_run,
@@ -302,6 +317,7 @@ _HANDLERS = {
     "init": _cmd_init,
     "new": _cmd_new,
     "webui": _cmd_webui,
+    "observe": _cmd_observe,
 }
 
 
