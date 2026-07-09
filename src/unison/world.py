@@ -92,6 +92,11 @@ class World:
         return self.unison_dir / "state.json"
 
     @property
+    def checklist_file(self) -> Path:
+        """P9: Structured checklist for shared progress tracking."""
+        return self.unison_dir / "checklist.json"
+
+    @property
     def policy_file(self) -> Path:
         """Risk policy YAML."""
         return self.unison_dir / "policy.yaml"

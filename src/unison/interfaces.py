@@ -118,6 +118,9 @@ class World:
     def state_file(self) -> Path: return self.unison_dir / "state.json"
 
     @property
+    def checklist_file(self) -> Path: return self.unison_dir / "checklist.json"
+
+    @property
     def notifications_file(self) -> Path: return self.observer_dir / "notifications.jsonl"
 
     @property
