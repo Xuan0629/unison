@@ -203,7 +203,12 @@ class UnisonHandler(BaseHTTPRequestHandler):
             try:
                 state = State.atomic_read(state_file)
             except Exception:
-                pass
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "_load_agents: failed to read state.json, "
+                    "falling back to pipeline YAML agents", exc_info=True,
+                )
         if state.runtime_agents:
             return state.runtime_agents
 

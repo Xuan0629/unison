@@ -1552,13 +1552,14 @@ agents:
     def test_recursion_guard_fires_on_directly_constructed_chain_stage(
         self, tmp_path, monkeypatch,
     ):
-        """A chain stage that triggers another chain (via
-        _run_state_machine → _run_chain) must hit the depth guard instead
-        of recursing until stack overflow.
+        """Chain mode is rejected at runtime even when PipelineLoader is
+        bypassed.
 
-        PipelineLoader rejects mode='chain' at parse time, but a
-        directly-constructed PipelineSpec bypasses that guard.  The
-        orchestrator-level depth tracking must catch it.
+        PipelineLoader._build_chain() rejects mode='chain' at parse time.
+        The runtime validation in _run_chain() provides defence-in-depth
+        for directly-constructed PipelineSpec objects (which bypass
+        PipelineLoader).  The mode validation fires before any stage runs,
+        making the depth guard secondary for this case.
         """
         stages = [ChainStage(mode="chain")]
         orch = self._make_orch(tmp_path, stages)
@@ -1568,25 +1569,14 @@ agents:
         def _fake_halt(msg: str, **kwargs) -> None:
             halt_msgs.append(msg)
 
-        # Simulate: _run_state_machine() sees mode="chain" and calls
-        # _run_chain() again.  We set the depth to MAX_CHAIN_DEPTH - 1
-        # so the NEXT recursive call (which would be at MAX_CHAIN_DEPTH)
-        # triggers the guard.
         monkeypatch.setattr(orch, "halt", _fake_halt)
 
-        # Simulate a depth already at 2; the dispatch will increment to 3
-        # before calling _run_state_machine(), which will call _run_chain()
-        # again with depth 3 >= MAX_CHAIN_DEPTH → halt.
-        orch._chain_depth = 2
-        # _run_state_machine() will see mode="chain" and call _run_chain()
-        # with effective depth 3 → halted before any stages run.
+        # Runtime validation rejects mode='chain' before any stage runs.
         orch._run_chain()
 
         assert len(halt_msgs) == 1
-        assert "depth 3" in halt_msgs[0]
-        assert "MAX_CHAIN_DEPTH" not in halt_msgs[0]  # no literal template leak
-        # Verify the message mentions the depth limit
-        assert "3" in halt_msgs[0]
+        assert "unknown mode" in halt_msgs[0]
+        assert "chain" in halt_msgs[0]
 
     def test_normal_chain_no_false_recursion_guard(self, tmp_path, monkeypatch):
         """A normal non-chain stage must NOT trigger the depth guard.

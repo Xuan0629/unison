@@ -709,7 +709,10 @@ class Orchestrator:
             # stage runs.  A typo in stage 5's mode would otherwise waste
             # the wall-clock time of stages 1-4 before halting.
             from unison.phase_router import PhaseRouter
-            _KNOWN_MODES = set(PhaseRouter.PHASES_BY_MODE.keys()) | {"moa", "chain"}
+            # P8 P1.2: Match load-time validation in _build_chain().
+            # "dag" is handled by the DAG scheduler; "chain" is already
+            # rejected at load time (recursive chain-in-chain is forbidden).
+            _KNOWN_MODES = set(PhaseRouter.PHASES_BY_MODE.keys()) | {"moa", "dag"}
             for i, stage in enumerate(self.spec.chain.stages):
                 if stage.mode not in _KNOWN_MODES:
                     self.halt(
@@ -723,109 +726,125 @@ class Orchestrator:
                 if self._state.halt_signal:
                     return
 
+                # P8 P1.3: saved_spec / saved_mode are initialised early so
+                # the finally block (which restores self.spec) is safe to
+                # execute even when an early return fires from output_map
+                # validation or pipeline loading.
+                saved_spec = None
+                saved_mode = None
+
                 self._publish_phase_event("chain_stage",
                                           note=f"stage {i}: {stage.mode}")
 
-                # Map upstream outputs → downstream inputs
-                root = self.spec.world.root.resolve()
-                for src_rel, dst_rel in stage.output_map.items():
-                    # Defence-in-depth: reject path traversal (load-time
-                    # validation via PipelineLoader._validate_output_map
-                    # should already catch these, but verify again in case
-                    # a PipelineSpec was constructed without going through
-                    # PipelineLoader.load).
-                    if not isinstance(src_rel, str) or not isinstance(dst_rel, str):
-                        self.halt(
-                            f"chain stage {i} output_map: all keys and values "
-                            f"must be strings, got {type(src_rel).__name__!r} → "
-                            f"{type(dst_rel).__name__!r}"
-                        )
-                        return
-                    if Path(src_rel).is_absolute():
-                        self.halt(
-                            f"chain stage {i} output_map: source path must be "
-                            f"relative, got absolute: {src_rel!r}"
-                        )
-                        return
-                    if Path(dst_rel).is_absolute():
-                        self.halt(
-                            f"chain stage {i} output_map: destination path must "
-                            f"be relative, got absolute: {dst_rel!r}"
-                        )
-                        return
-                    try:
-                        (root / src_rel).resolve().relative_to(root)
-                    except ValueError:
-                        self.halt(
-                            f"chain stage {i} output_map source path escapes "
-                            f"project root: {src_rel!r} resolves to "
-                            f"{(root / src_rel).resolve()!s}"
-                        )
-                        return
-                    try:
-                        (root / dst_rel).resolve().relative_to(root)
-                    except ValueError:
-                        self.halt(
-                            f"chain stage {i} output_map destination path "
-                            f"escapes project root: {dst_rel!r} resolves to "
-                            f"{(root / dst_rel).resolve()!s}"
-                        )
-                        return
-                    src = root / src_rel
-                    dst = root / dst_rel
-                    if src.exists():
-                        dst.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy(src, dst)
-                    else:
-                        # P0.5: log missing source as warning — non-fatal,
-                        # stage may not need it (e.g. optional upstream
-                        # artefact), but it's unusual enough to surface.
-                        _log.warning(
-                            "chain stage %d output_map: source %s not found, "
-                            "skipping copy to %s", i, src_rel, dst_rel,
-                        )
-
-                # Run the stage.
-                # If the stage specifies a pipeline YAML, load it via
-                # PipelineLoader so the stage runs with its own agent/moa/
-                # project configuration rather than the top-level spec
-                # (P0 major fix).  Otherwise just switch the mode.
-                from unison.pipeline import PipelineLoader
-
-                if stage.pipeline:
-                    pipeline_path = (self.spec.world.root / stage.pipeline).resolve()
-                    if not pipeline_path.exists():
-                        self.halt(
-                            f"chain stage {i}: pipeline file not found: "
-                            f"{pipeline_path}"
-                        )
-                        return
-                    loader = PipelineLoader()
-                    try:
-                        stage_spec = loader.load(pipeline_path)
-                    except Exception as exc:
-                        self.halt(
-                            f"chain stage {i}: failed to load pipeline "
-                            f"{pipeline_path}: {exc}"
-                        )
-                        return
-                    # Keep the loaded spec's own World so that prompt paths
-                    # and other config-owned resources resolve relative to
-                    # the stage pipeline file rather than the parent
-                    # project.  Apply the stage's requested mode.
-                    # P8 S5: Override world.root with the original project
-                    # root so agents run in the correct directory even when
-                    # stage.pipeline points to a subdirectory.
-                    stage_spec = replace(stage_spec, mode=stage.mode,
-                                         world=replace(stage_spec.world, root=root))
-                    saved_spec = self.spec
-                    self.spec = stage_spec
-                else:
-                    saved_spec = None
-                    saved_mode = self.spec.mode
-                    self.spec = replace(self.spec, mode=stage.mode)
-
+                # P8 P1.3: Wider try boundary — covers output_map file
+                # operations (mkdir, copy can throw OSError) and pipeline
+                # loading dataclasses.replace() calls, not just the
+                # _run_state_machine() dispatch.  The finally block
+                # guarantees self.spec is restored even on early returns
+                # from self.halt() + return inside the try body.
                 try:
+                    # Map upstream outputs → downstream inputs
+                    root = self.spec.world.root.resolve()
+                    for src_rel, dst_rel in stage.output_map.items():
+                        # Defence-in-depth: reject path traversal (load-time
+                        # validation via PipelineLoader._validate_output_map
+                        # should already catch these, but verify again in case
+                        # a PipelineSpec was constructed without going through
+                        # PipelineLoader.load).
+                        if not isinstance(src_rel, str) or not isinstance(dst_rel, str):
+                            self.halt(
+                                f"chain stage {i} output_map: all keys and values "
+                                f"must be strings, got {type(src_rel).__name__!r} → "
+                                f"{type(dst_rel).__name__!r}"
+                            )
+                            return
+                        if Path(src_rel).is_absolute():
+                            self.halt(
+                                f"chain stage {i} output_map: source path must be "
+                                f"relative, got absolute: {src_rel!r}"
+                            )
+                            return
+                        if Path(dst_rel).is_absolute():
+                            self.halt(
+                                f"chain stage {i} output_map: destination path must "
+                                f"be relative, got absolute: {dst_rel!r}"
+                            )
+                            return
+                        try:
+                            (root / src_rel).resolve().relative_to(root)
+                        except ValueError:
+                            self.halt(
+                                f"chain stage {i} output_map source path escapes "
+                                f"project root: {src_rel!r} resolves to "
+                                f"{(root / src_rel).resolve()!s}"
+                            )
+                            return
+                        try:
+                            (root / dst_rel).resolve().relative_to(root)
+                        except ValueError:
+                            self.halt(
+                                f"chain stage {i} output_map destination path "
+                                f"escapes project root: {dst_rel!r} resolves to "
+                                f"{(root / dst_rel).resolve()!s}"
+                            )
+                            return
+                        src = root / src_rel
+                        dst = root / dst_rel
+                        if src.exists():
+                            # P8 P1.3: mkdir + copy are now inside the
+                            # outer try/except — OSError here is caught
+                            # and turned into a stage halt instead of
+                            # escaping the chain entirely.
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy(src, dst)
+                        else:
+                            # P0.5: log missing source as warning — non-fatal,
+                            # stage may not need it (e.g. optional upstream
+                            # artefact), but it's unusual enough to surface.
+                            _log.warning(
+                                "chain stage %d output_map: source %s not found, "
+                                "skipping copy to %s", i, src_rel, dst_rel,
+                            )
+
+                    # Run the stage.
+                    # If the stage specifies a pipeline YAML, load it via
+                    # PipelineLoader so the stage runs with its own agent/moa/
+                    # project configuration rather than the top-level spec
+                    # (P0 major fix).  Otherwise just switch the mode.
+                    from unison.pipeline import PipelineLoader
+
+                    if stage.pipeline:
+                        pipeline_path = (self.spec.world.root / stage.pipeline).resolve()
+                        if not pipeline_path.exists():
+                            self.halt(
+                                f"chain stage {i}: pipeline file not found: "
+                                f"{pipeline_path}"
+                            )
+                            return
+                        loader = PipelineLoader()
+                        try:
+                            stage_spec = loader.load(pipeline_path)
+                        except Exception as exc:
+                            self.halt(
+                                f"chain stage {i}: failed to load pipeline "
+                                f"{pipeline_path}: {exc}"
+                            )
+                            return
+                        # Keep the loaded spec's own World so that prompt paths
+                        # and other config-owned resources resolve relative to
+                        # the stage pipeline file rather than the parent
+                        # project.  Apply the stage's requested mode.
+                        # P8 S5: Override world.root with the original project
+                        # root so agents run in the correct directory even when
+                        # stage.pipeline points to a subdirectory.
+                        stage_spec = replace(stage_spec, mode=stage.mode,
+                                             world=replace(stage_spec.world, root=root))
+                        saved_spec = self.spec
+                        self.spec = stage_spec
+                    else:
+                        saved_mode = self.spec.mode
+                        self.spec = replace(self.spec, mode=stage.mode)
+
                     # P0.3: Clear cross-contamination from previous stage.
                     # runtime_agents carries MoA agents into non-MoA stages;
                     # iteration accumulates across stages.
@@ -868,10 +887,23 @@ class Orchestrator:
                         )
                     finally:
                         self._chain_depth -= 1
+                # P8 P1.3: Catch unexpected exceptions from stage setup
+                # (output_map file ops, pipeline loading, replace() calls)
+                # that previously escaped the chain entirely.
+                except Exception:
+                    _log.exception(
+                        "chain stage %d: unhandled exception in stage "
+                        "setup or dispatch", i,
+                    )
+                    self.halt(
+                        f"chain stage {i}: unhandled exception in stage "
+                        f"setup or dispatch",
+                        category="stage",
+                    )
                 finally:
                     if saved_spec is not None:
                         self.spec = saved_spec
-                    else:
+                    elif saved_mode is not None:
                         self.spec = replace(self.spec, mode=saved_mode)
 
                 # Stage finished — halt behaviour depends on halt_on_fail
@@ -1724,7 +1756,12 @@ class Orchestrator:
                 try:
                     future.result()
                 except Exception:
-                    pass
+                    import logging
+                    _log = logging.getLogger(__name__)
+                    _log.warning(
+                        "_invoke_multi_planner: planner agent raised "
+                        "exception", exc_info=True,
+                    )
 
         # After all planners complete, symlink the first planner's output
         # as the canonical PRD for downstream reviewer consumption.
