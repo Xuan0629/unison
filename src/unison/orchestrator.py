@@ -78,6 +78,7 @@ class Orchestrator:
         self._state = State()
         self._halt_category: str = "stage"  # "stage" or "external" (P0.5)
         self._in_chain: bool = False        # True when running inside _run_chain (P0.6)
+        self._chain_depth: int = 0          # recursion guard for nested chains (P0.3)
 
         # -- cooperative cancellation (DAG mode only) ---------------------------
         self._dag_cancel_event: threading.Event | None = None
@@ -251,7 +252,8 @@ class Orchestrator:
         # ------------------------------------------------------------------
         project_name = self.spec.world.root.name
         if not self._lock_mgr.acquire(project_name):
-            self.halt(f"Could not acquire lock for project: {project_name}")
+            self.halt(f"Could not acquire lock for project: {project_name}",
+                      category="external")
             return self._state
 
         try:
@@ -324,7 +326,7 @@ class Orchestrator:
 
         phases = PhaseRouter.get_phases(mode)
         if not phases:
-            self.halt(f"Unknown pipeline mode: {mode}")
+            self.halt(f"Unknown pipeline mode: {mode}", category="external")
             return
 
         for pd in phases:
@@ -618,7 +620,7 @@ class Orchestrator:
             )
             return
 
-    def _run_chain(self, _depth: int = 0) -> None:
+    def _run_chain(self) -> None:
         """Run chained pipeline stages sequentially.
 
         Each stage in ``ChainConfig.stages`` is executed in order.
@@ -626,9 +628,10 @@ class Orchestrator:
         to downstream input locations so the next stage picks them up
         automatically.
 
-        Args:
-            _depth: Internal recursion guard — raises when chain depth
-                exceeds ``MAX_CHAIN_DEPTH`` (P0.3).
+        Uses ``self._chain_depth`` as a recursion guard — incremented
+        before every ``_run_state_machine()`` dispatch so that nested
+        chain stages (loaded via PipelineLoader or constructed directly)
+        are caught before exhausting the stack (P0.3).
         """
         import shutil
         import logging
@@ -636,10 +639,12 @@ class Orchestrator:
         _log = logging.getLogger(__name__)
         MAX_CHAIN_DEPTH = 3
 
-        if _depth >= MAX_CHAIN_DEPTH:
+        if self._chain_depth >= MAX_CHAIN_DEPTH:
             self.halt(
-                f"chain depth {_depth} exceeds maximum {MAX_CHAIN_DEPTH} — "
-                f"recursive or excessively deep chain detected"
+                f"chain depth {self._chain_depth} exceeds maximum "
+                f"{MAX_CHAIN_DEPTH} — recursive or excessively deep "
+                f"chain detected",
+                category="external",
             )
             return
 
@@ -756,10 +761,17 @@ class Orchestrator:
                     self.spec = replace(self.spec, mode=stage.mode)
 
                 try:
-                    # P0.8: Always route through _run_state_machine() which
-                    # handles MOA (and all other modes) internally.  No
-                    # special-case dispatch needed here.
-                    self._run_state_machine()
+                    # P0.3: Thread chain depth through recursive dispatch so
+                    # directly-constructed PipelineSpecs containing
+                    # ChainStage(mode="chain") are caught before stack
+                    # exhaustion.  _run_state_machine() calls _run_chain()
+                    # again for chain-mode stages, which checks
+                    # self._chain_depth.
+                    self._chain_depth += 1
+                    try:
+                        self._run_state_machine()
+                    finally:
+                        self._chain_depth -= 1
                 finally:
                     if saved_spec is not None:
                         self.spec = saved_spec
@@ -1223,7 +1235,8 @@ class Orchestrator:
         if self._state.last_review_verdict != "PASS":
             self.halt(
                 f"Max iterations ({max_iter}) reached in {review_of} loop "
-                f"without PASS verdict"
+                f"without PASS verdict",
+                category="external",
             )
 
     # ==================================================================
@@ -1267,7 +1280,8 @@ class Orchestrator:
             if self.spec.budget.overflow_action == "halt":
                 self.halt(
                     f"budget overflow: {role} "
-                    f"(daily={tracker.current_usage}/{tracker.daily_limit})"
+                    f"(daily={tracker.current_usage}/{tracker.daily_limit})",
+                    category="external",
                 )
                 return
             # overflow_action == "downgrade" — already handled in _select_runner
@@ -1636,7 +1650,7 @@ class Orchestrator:
             # Check budget
             tracker = self._get_budget_tracker("developer")
             if not tracker.check_budget():
-                self.halt("budget overflow: developer")
+                self.halt("budget overflow: developer", category="external")
                 return
 
             # Resolve system prompt via registry

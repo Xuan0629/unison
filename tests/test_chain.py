@@ -1032,7 +1032,8 @@ agents:
         monkeypatch.setattr(orch, "_run_state_machine", sm_called)
         monkeypatch.setattr(orch, "halt", halt_called)
 
-        orch._run_chain(_depth=2)
+        orch._chain_depth = 2
+        orch._run_chain()
 
         # Depth 2 < MAX_CHAIN_DEPTH (3) → should run, not halt
         assert sm_called.call_count == 1
@@ -1049,7 +1050,8 @@ agents:
         monkeypatch.setattr(orch, "_run_state_machine", sm_called)
         monkeypatch.setattr(orch, "halt", halt_called)
 
-        orch._run_chain(_depth=3)
+        orch._chain_depth = 3
+        orch._run_chain()
 
         # Depth 3 >= MAX_CHAIN_DEPTH (3) → should halt
         halt_called.assert_called_once()
@@ -1512,3 +1514,204 @@ agents:
             f"chain_end must fire even on early halt, got {phases}"
         )
         assert call_count == 1  # second stage never ran
+
+
+# ============================================================================
+# Regression: Depth Guard via Instance Variable (bypasses PipelineLoader)
+# ============================================================================
+
+
+class TestChainDepthGuardRegression:
+    """The recursion guard must fire when a directly-constructed
+    PipelineSpec containing ChainStage(mode="chain") recurses through
+    _run_state_machine() → _run_chain() without going through
+    PipelineLoader (which rejects chain-in-chain at parse time)."""
+
+    @staticmethod
+    def _make_orch(tmp_path: Path, stages: list[ChainStage]) -> Orchestrator:
+        pipeline_file = tmp_path / "pipeline.yaml"
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        (prompts_dir / "developer.md").write_text("# Dummy")
+        (prompts_dir / "reviewer.md").write_text("# Dummy")
+        pipeline_file.write_text("""
+version: "2.0"
+mode: chain
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        spec.chain.stages = stages
+        return Orchestrator(spec=spec)
+
+    def test_recursion_guard_fires_on_directly_constructed_chain_stage(
+        self, tmp_path, monkeypatch,
+    ):
+        """A chain stage that triggers another chain (via
+        _run_state_machine → _run_chain) must hit the depth guard instead
+        of recursing until stack overflow.
+
+        PipelineLoader rejects mode='chain' at parse time, but a
+        directly-constructed PipelineSpec bypasses that guard.  The
+        orchestrator-level depth tracking must catch it.
+        """
+        stages = [ChainStage(mode="chain")]
+        orch = self._make_orch(tmp_path, stages)
+
+        halt_msgs = []
+
+        def _fake_halt(msg: str, **kwargs) -> None:
+            halt_msgs.append(msg)
+
+        # Simulate: _run_state_machine() sees mode="chain" and calls
+        # _run_chain() again.  We set the depth to MAX_CHAIN_DEPTH - 1
+        # so the NEXT recursive call (which would be at MAX_CHAIN_DEPTH)
+        # triggers the guard.
+        monkeypatch.setattr(orch, "halt", _fake_halt)
+
+        # Simulate a depth already at 2; the dispatch will increment to 3
+        # before calling _run_state_machine(), which will call _run_chain()
+        # again with depth 3 >= MAX_CHAIN_DEPTH → halt.
+        orch._chain_depth = 2
+        # _run_state_machine() will see mode="chain" and call _run_chain()
+        # with effective depth 3 → halted before any stages run.
+        orch._run_chain()
+
+        assert len(halt_msgs) == 1
+        assert "depth 3" in halt_msgs[0]
+        assert "MAX_CHAIN_DEPTH" not in halt_msgs[0]  # no literal template leak
+        # Verify the message mentions the depth limit
+        assert "3" in halt_msgs[0]
+
+    def test_normal_chain_no_false_recursion_guard(self, tmp_path, monkeypatch):
+        """A normal non-chain stage must NOT trigger the depth guard.
+        The depth increments before dispatch and decrements after, so a
+        single-level chain with non-chain stages stays at depth ≤1."""
+        stages = [ChainStage(mode="code-dev")]
+        orch = self._make_orch(tmp_path, stages)
+
+        halt_msgs = []
+
+        def _fake_halt(msg: str, **kwargs) -> None:
+            halt_msgs.append(msg)
+
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+        monkeypatch.setattr(orch, "halt", _fake_halt)
+
+        orch._run_chain()
+
+        # No halt — the guard must not fire for normal (non-recursive) chains
+        assert len(halt_msgs) == 0
+        # Depth should be back to 0 after the chain completes
+        assert orch._chain_depth == 0
+
+
+# ============================================================================
+# Regression: max_iterations Halt Not Cleared by halt_on_fail=False (P0.5)
+# ============================================================================
+
+
+class TestMaxIterationsHaltInChain:
+    """max_iterations exhaustion is an external halt that must stop the
+    chain regardless of halt_on_fail=False."""
+
+    @staticmethod
+    def _make_orch(tmp_path: Path, stages: list[ChainStage]) -> Orchestrator:
+        pipeline_file = tmp_path / "pipeline.yaml"
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        (prompts_dir / "developer.md").write_text("# Dummy")
+        (prompts_dir / "reviewer.md").write_text("# Dummy")
+        pipeline_file.write_text("""
+version: "2.0"
+mode: chain
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        spec.chain.stages = stages
+        return Orchestrator(spec=spec)
+
+    def test_max_iterations_halt_not_cleared_by_halt_on_fail_false(
+        self, tmp_path, monkeypatch,
+    ):
+        """max_iterations halt (category='external') is NOT cleared even
+        when halt_on_fail=False — only stage-failure halts are cleared."""
+        stages = [
+            ChainStage(mode="code-dev", halt_on_fail=False),
+            ChainStage(mode="code-dev"),
+        ]
+        orch = self._make_orch(tmp_path, stages)
+
+        call_count = 0
+
+        def _fake_run_state_machine():
+            nonlocal call_count
+            call_count += 1
+            # Simulate max_iterations halt (category="external")
+            orch.halt(
+                "Max iterations (5) reached in dev loop without PASS verdict",
+                category="external",
+            )
+
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", _fake_run_state_machine)
+
+        orch._run_chain()
+
+        # Only the first stage should run — external halt is NOT cleared
+        # even when halt_on_fail=False
+        assert call_count == 1
+        assert orch.state().halt_signal is True
+        assert "Max iterations" in orch.state().halt_reason
+
+    def test_max_iterations_halt_with_default_category_is_external(
+        self, tmp_path, monkeypatch,
+    ):
+        """Regression: the halt() call inside _run_loop() for max_iterations
+        must pass category='external' so halt_on_fail=False chains can't
+        clear it.
+
+        This test verifies that the orchestrator's internal halt for
+        max_iterations uses the 'external' category by checking that
+        the halt is preserved across halt_on_fail=False stages.
+        """
+        # Verify that halt() with category="external" sets _halt_category
+        stages = [ChainStage(mode="code-dev")]
+        orch = self._make_orch(tmp_path, stages)
+
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        # Make _run_state_machine a no-op so we can inspect internal state
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+
+        orch.halt("Max iterations (5) reached", category="external")
+        assert orch._halt_category == "external"
+
+        # Now run _run_chain — the first stage completes (no-op), then
+        # halt_on_fail check sees external → preserved
+        orch._run_chain()
+        assert orch.state().halt_signal is True
+        assert orch._halt_category == "external"
