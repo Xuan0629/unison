@@ -700,8 +700,10 @@ agents:
         spec.chain.stages = stages
         return Orchestrator(spec=spec)
 
-    def test_moa_stage_dispatches_to_run_moa_pipeline(self, tmp_path, monkeypatch):
-        """mode='moa' stage → _run_moa_pipeline() is called."""
+    def test_moa_stage_dispatches_to_state_machine(self, tmp_path, monkeypatch):
+        """mode='moa' stage → _run_state_machine() is called (P0.8: no
+        special-case MOA dispatch — _run_state_machine() handles MOA
+        detection internally)."""
         stages = [ChainStage(mode="moa")]
         orch = self._make_orchestrator(tmp_path, stages)
 
@@ -711,8 +713,10 @@ agents:
         monkeypatch.setattr(orch, "_run_state_machine", sm_called)
 
         orch._run_chain()
-        assert moa_called.call_count == 1
-        assert sm_called.call_count == 0
+        # P0.8: _run_chain() always routes through _run_state_machine()
+        assert sm_called.call_count == 1
+        # _run_moa_pipeline is NOT called directly from _run_chain()
+        assert moa_called.call_count == 0
 
     def test_non_moa_stage_dispatches_to_state_machine(self, tmp_path, monkeypatch):
         """mode='code-dev' stage → _run_state_machine() is called."""
@@ -780,6 +784,64 @@ agents:
 
         # Second stage should NOT have run because halt_on_fail=True
         assert call_count == 1
+
+    def test_external_halt_not_cleared_by_halt_on_fail_false(
+        self, tmp_path, monkeypatch,
+    ):
+        """P0.5: External halt (Ctrl-C / SIGINT) stops chain even with
+        halt_on_fail=False — only stage-failure halts are cleared."""
+        stages = [
+            ChainStage(mode="code-dev", halt_on_fail=False),
+            ChainStage(mode="code-dev"),
+        ]
+        orch = self._make_orchestrator(tmp_path, stages)
+
+        call_count = 0
+
+        def _fake_run_state_machine():
+            nonlocal call_count
+            call_count += 1
+            # Simulate SIGINT (category="external")
+            orch.halt("SIGINT", category="external")
+
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", _fake_run_state_machine)
+
+        orch._run_chain()
+
+        # Only the first stage should run — external halt is NOT cleared
+        # even when halt_on_fail=False
+        assert call_count == 1
+        assert orch.state().halt_signal is True
+        assert orch.state().halt_reason == "SIGINT"
+
+    def test_stage_failure_halt_cleared_by_halt_on_fail_false(
+        self, tmp_path, monkeypatch,
+    ):
+        """P0.5: Stage-failure halt IS cleared by halt_on_fail=False —
+        only external halts are preserved."""
+        stages = [
+            ChainStage(mode="code-dev", halt_on_fail=False),
+            ChainStage(mode="code-dev"),
+        ]
+        orch = self._make_orchestrator(tmp_path, stages)
+
+        call_count = 0
+
+        def _fake_run_state_machine():
+            nonlocal call_count
+            call_count += 1
+            # Simulate a stage failure (default category="stage")
+            orch.halt("agent execution failed")
+
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", _fake_run_state_machine)
+
+        orch._run_chain()
+
+        # Both stages run: first halt is cleared (stage failure),
+        # second halt (halt_on_fail=True default) stops the chain.
+        assert call_count == 2
 
 
 # ============================================================================
@@ -1057,9 +1119,9 @@ agents:
 
         orch._run_chain()
 
-        # Stage mode is moa → should dispatch to _run_moa_pipeline
-        assert moa_called.call_count == 1
-        assert sm_called.call_count == 0
+        # P0.8: _run_chain() always routes through _run_state_machine()
+        assert sm_called.call_count == 1
+        assert moa_called.call_count == 0
 
     def test_stage_pipeline_preserves_world(self, tmp_path, monkeypatch):
         """Loaded stage spec keeps its own World (pipeline file's directory).
@@ -1088,8 +1150,7 @@ agents:
             nonlocal captured_spec
             captured_spec = orch.spec
 
-        monkeypatch.setattr(orch, "_run_moa_pipeline", _capture_spec)
-        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", _capture_spec)
 
         orch._run_chain()
 
@@ -1220,8 +1281,7 @@ agents:
             nonlocal captured_spec
             captured_spec = orch.spec
 
-        monkeypatch.setattr(orch, "_run_moa_pipeline", _capture_spec)
-        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+        monkeypatch.setattr(orch, "_run_state_machine", _capture_spec)
 
         orch._run_chain()
 
@@ -1313,3 +1373,142 @@ class TestChainConfigInPipelineSpec:
         stage = ChainStage(mode="code-dev")
         stage.mode = "full-dev"  # should not raise
         assert stage.mode == "full-dev"
+
+
+# ============================================================================
+# Chain Lifecycle Events (P0.6)
+# ============================================================================
+
+
+class TestChainLifecycleEvents:
+    """_run_chain() emits chain_start, chain_stage, chain_end events
+    and suppresses per-stage done/_archive_reviews()."""
+
+    @staticmethod
+    def _make_orch(tmp_path: Path, stages: list[ChainStage]) -> Orchestrator:
+        """Create an Orchestrator with a chain-mode PipelineSpec."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        (prompts_dir / "developer.md").write_text("# Dummy")
+        (prompts_dir / "reviewer.md").write_text("# Dummy")
+        pipeline_file.write_text("""
+version: "2.0"
+mode: chain
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        spec.chain.stages = stages
+        return Orchestrator(spec=spec)
+
+    def test_chain_lifecycle_events_emitted(self, tmp_path, monkeypatch):
+        """chain_start, chain_stage, and chain_end events are published."""
+        stages = [
+            ChainStage(mode="code-dev"),
+            ChainStage(mode="code-dev"),
+        ]
+        orch = self._make_orch(tmp_path, stages)
+
+        events = []
+
+        def _capture_event(phase: str, note: str = "") -> None:
+            events.append((phase, note))
+
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_publish_phase_event", _capture_event)
+
+        orch._run_chain()
+
+        phases = [e[0] for e in events]
+        assert "chain_start" in phases, f"chain_start not found in {phases}"
+        assert phases.count("chain_stage") == 2, f"expected 2 chain_stage, got {phases}"
+        assert "done" in phases, f"done not found in {phases}"
+        assert "chain_end" in phases, f"chain_end not found in {phases}"
+
+        # chain_start comes first, chain_end comes last
+        chain_start_idx = phases.index("chain_start")
+        chain_end_idx = phases.index("chain_end")
+        assert chain_start_idx < chain_end_idx
+
+    def test_per_stage_done_suppressed_in_chain(self, tmp_path, monkeypatch):
+        """When running inside a chain, _run_state_machine() does NOT
+        transition to 'done' or call _archive_reviews() — the chain
+        handles those once at the end."""
+        stages = [ChainStage(mode="code-dev")]
+        orch = self._make_orch(tmp_path, stages)
+
+        # Track state transitions
+        done_transitions = []
+        original_transition = orch._state.transition
+
+        def _tracking_transition(phase, actor, iter_n=0, note=""):
+            if phase == "done":
+                done_transitions.append((phase, note))
+            original_transition(phase, actor, iter_n=iter_n, note=note)
+
+        archive_calls = []
+        monkeypatch.setattr(orch._state, "transition", _tracking_transition)
+        monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_archive_reviews",
+                            lambda: archive_calls.append(1))
+
+        orch._run_chain()
+
+        # Exactly one "done" transition with "chain complete" note
+        assert len(done_transitions) == 1, (
+            f"expected 1 done transition, got {len(done_transitions)}: "
+            f"{done_transitions}"
+        )
+        assert "chain complete" in done_transitions[0][1]
+
+        # Exactly one _archive_reviews() call (at chain end)
+        assert len(archive_calls) == 1
+
+    def test_chain_end_emitted_on_early_halt(self, tmp_path, monkeypatch):
+        """chain_end is emitted even when a stage halts mid-chain (e.g.
+        halt_on_fail=True)."""
+        stages = [
+            ChainStage(mode="code-dev"),  # will halt
+            ChainStage(mode="code-dev"),  # should not run
+        ]
+        orch = self._make_orch(tmp_path, stages)
+
+        events = []
+
+        def _capture_event(phase: str, note: str = "") -> None:
+            events.append((phase, note))
+
+        call_count = 0
+
+        def _fake_run_state_machine():
+            nonlocal call_count
+            call_count += 1
+            orch.halt("simulated failure")
+
+        monkeypatch.setattr(orch, "_run_state_machine", _fake_run_state_machine)
+        monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
+        monkeypatch.setattr(orch, "_publish_phase_event", _capture_event)
+
+        orch._run_chain()
+
+        phases = [e[0] for e in events]
+        assert "chain_start" in phases
+        assert "chain_stage" in phases
+        assert "chain_end" in phases, (
+            f"chain_end must fire even on early halt, got {phases}"
+        )
+        assert call_count == 1  # second stage never ran

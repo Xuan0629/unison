@@ -76,6 +76,8 @@ class Orchestrator:
         self.spec = spec
         self.dry_run = dry_run
         self._state = State()
+        self._halt_category: str = "stage"  # "stage" or "external" (P0.5)
+        self._in_chain: bool = False        # True when running inside _run_chain (P0.6)
 
         # -- cooperative cancellation (DAG mode only) ---------------------------
         self._dag_cancel_event: threading.Event | None = None
@@ -114,12 +116,12 @@ class Orchestrator:
         # catches KeyboardInterrupt, kills the child process, and re-raises
         # — unwinding through run()'s finally block for prompt lock release.
         def _sigint_handler(signum: int, frame: object) -> None:
-            self.halt("SIGINT")
+            self.halt("SIGINT", category="external")
             signal.signal(signal.SIGINT, signal.SIG_DFL)
             os.kill(os.getpid(), signal.SIGINT)
 
         def _sigterm_handler(signum: int, frame: object) -> None:
-            self.halt("SIGTERM")
+            self.halt("SIGTERM", category="external")
             signal.signal(signal.SIGINT, signal.SIG_DFL)
             signal.signal(signal.SIGTERM, signal.SIG_DFL)
             os.kill(os.getpid(), signal.SIGINT)
@@ -138,7 +140,7 @@ class Orchestrator:
         """
         return self._state
 
-    def halt(self, reason: str) -> None:
+    def halt(self, reason: str, category: str = "stage") -> None:
         """External halt trigger — sets halt_signal + halt_reason.
 
         After halt() is called, run() will stop at the next check point.
@@ -150,9 +152,17 @@ class Orchestrator:
           - SEAN Ctrl-C (SIGINT → graceful shutdown)
           - sudo detected
           - L3 risk rejected
+
+        Args:
+            reason: Human-readable halt reason.
+            category: ``"stage"`` (default) for stage-failure halts that
+                can be cleared by ``halt_on_fail=False``; ``"external"``
+                for user/system halts (SIGINT, HALT file, dashboard)
+                that must always stop the pipeline (P0.5).
         """
         self._state.halt_signal = True
         self._state.halt_reason = reason
+        self._halt_category = category
         self._publish_phase_event("halt", note=reason)
 
     def _publish_phase_event(self, phase: str, note: str = "") -> None:
@@ -346,11 +356,15 @@ class Orchestrator:
                                pd.review_of, role=pd.role)
 
         if not self._state.halt_signal:
-            self._state.transition("done", "orchestrator",
-                                   note="pipeline complete")
-            self._publish_phase_event("done", note="pipeline complete")
-            self._archive_reviews()
-            self._save_checkpoint()
+            # P0.6: When running inside _run_chain(), suppress per-stage
+            # "done" transition and review archiving — the chain emits
+            # a single terminal done/archive after all stages complete.
+            if not self._in_chain:
+                self._state.transition("done", "orchestrator",
+                                       note="pipeline complete")
+                self._publish_phase_event("done", note="pipeline complete")
+                self._archive_reviews()
+                self._save_checkpoint()
 
     def _run_review_only(self) -> None:
         """inspect-only mode: Reviewer(s) → report (no planner, no dev)."""
@@ -438,11 +452,14 @@ class Orchestrator:
 
         # Pipeline complete
         if not self._state.halt_signal:
-            self._state.transition("done", "orchestrator",
-                                   note="moa pipeline complete")
-            self._publish_phase_event("done", note="moa pipeline complete")
-            self._archive_reviews()
-            self._save_checkpoint()
+            # P0.6: When running inside _run_chain(), suppress per-stage
+            # "done" transition and review archiving.
+            if not self._in_chain:
+                self._state.transition("done", "orchestrator",
+                                       note="moa pipeline complete")
+                self._publish_phase_event("done", note="moa pipeline complete")
+                self._archive_reviews()
+                self._save_checkpoint()
 
     def _run_moa_analyze(self, round_n: int, moa_config) -> None:
         """Run N analyzer agents in parallel for MoA round *round_n*.
@@ -626,122 +643,155 @@ class Orchestrator:
             )
             return
 
-        for i, stage in enumerate(self.spec.chain.stages):
-            if self._state.halt_signal:
-                return
+        # P0.6: Set in-chain context so _run_state_machine() and
+        # _run_moa_pipeline() suppress their per-stage "done"
+        # transitions and _archive_reviews().  The chain emits one
+        # terminal done/archive after all stages complete.
+        prev_in_chain = self._in_chain
+        self._in_chain = True
+        try:
+            stage_count = len(self.spec.chain.stages)
+            self._publish_phase_event("chain_start",
+                                      note=f"{stage_count} stages")
 
-            # Map upstream outputs → downstream inputs
-            root = self.spec.world.root.resolve()
-            for src_rel, dst_rel in stage.output_map.items():
-                # Defence-in-depth: reject path traversal (load-time
-                # validation via PipelineLoader._validate_output_map
-                # should already catch these, but verify again in case
-                # a PipelineSpec was constructed without going through
-                # PipelineLoader.load).
-                if not isinstance(src_rel, str) or not isinstance(dst_rel, str):
-                    self.halt(
-                        f"chain stage {i} output_map: all keys and values "
-                        f"must be strings, got {type(src_rel).__name__!r} → "
-                        f"{type(dst_rel).__name__!r}"
-                    )
+            for i, stage in enumerate(self.spec.chain.stages):
+                if self._state.halt_signal:
                     return
-                if Path(src_rel).is_absolute():
-                    self.halt(
-                        f"chain stage {i} output_map: source path must be "
-                        f"relative, got absolute: {src_rel!r}"
-                    )
-                    return
-                if Path(dst_rel).is_absolute():
-                    self.halt(
-                        f"chain stage {i} output_map: destination path must "
-                        f"be relative, got absolute: {dst_rel!r}"
-                    )
-                    return
-                try:
-                    (root / src_rel).resolve().relative_to(root)
-                except ValueError:
-                    self.halt(
-                        f"chain stage {i} output_map source path escapes "
-                        f"project root: {src_rel!r} resolves to "
-                        f"{(root / src_rel).resolve()!s}"
-                    )
-                    return
-                try:
-                    (root / dst_rel).resolve().relative_to(root)
-                except ValueError:
-                    self.halt(
-                        f"chain stage {i} output_map destination path "
-                        f"escapes project root: {dst_rel!r} resolves to "
-                        f"{(root / dst_rel).resolve()!s}"
-                    )
-                    return
-                src = root / src_rel
-                dst = root / dst_rel
-                if src.exists():
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy(src, dst)
+
+                self._publish_phase_event("chain_stage",
+                                          note=f"stage {i}: {stage.mode}")
+
+                # Map upstream outputs → downstream inputs
+                root = self.spec.world.root.resolve()
+                for src_rel, dst_rel in stage.output_map.items():
+                    # Defence-in-depth: reject path traversal (load-time
+                    # validation via PipelineLoader._validate_output_map
+                    # should already catch these, but verify again in case
+                    # a PipelineSpec was constructed without going through
+                    # PipelineLoader.load).
+                    if not isinstance(src_rel, str) or not isinstance(dst_rel, str):
+                        self.halt(
+                            f"chain stage {i} output_map: all keys and values "
+                            f"must be strings, got {type(src_rel).__name__!r} → "
+                            f"{type(dst_rel).__name__!r}"
+                        )
+                        return
+                    if Path(src_rel).is_absolute():
+                        self.halt(
+                            f"chain stage {i} output_map: source path must be "
+                            f"relative, got absolute: {src_rel!r}"
+                        )
+                        return
+                    if Path(dst_rel).is_absolute():
+                        self.halt(
+                            f"chain stage {i} output_map: destination path must "
+                            f"be relative, got absolute: {dst_rel!r}"
+                        )
+                        return
+                    try:
+                        (root / src_rel).resolve().relative_to(root)
+                    except ValueError:
+                        self.halt(
+                            f"chain stage {i} output_map source path escapes "
+                            f"project root: {src_rel!r} resolves to "
+                            f"{(root / src_rel).resolve()!s}"
+                        )
+                        return
+                    try:
+                        (root / dst_rel).resolve().relative_to(root)
+                    except ValueError:
+                        self.halt(
+                            f"chain stage {i} output_map destination path "
+                            f"escapes project root: {dst_rel!r} resolves to "
+                            f"{(root / dst_rel).resolve()!s}"
+                        )
+                        return
+                    src = root / src_rel
+                    dst = root / dst_rel
+                    if src.exists():
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy(src, dst)
+                    else:
+                        # P0.5: log missing source — non-fatal, stage may
+                        # not need it (e.g. optional upstream artefact)
+                        _log.debug(
+                            "chain stage %d output_map: source %s not found, "
+                            "skipping copy to %s", i, src_rel, dst_rel,
+                        )
+
+                # Run the stage.
+                # If the stage specifies a pipeline YAML, load it via
+                # PipelineLoader so the stage runs with its own agent/moa/
+                # project configuration rather than the top-level spec
+                # (P0 major fix).  Otherwise just switch the mode.
+                from unison.pipeline import PipelineLoader
+
+                if stage.pipeline:
+                    pipeline_path = (self.spec.world.root / stage.pipeline).resolve()
+                    if not pipeline_path.exists():
+                        self.halt(
+                            f"chain stage {i}: pipeline file not found: "
+                            f"{pipeline_path}"
+                        )
+                        return
+                    loader = PipelineLoader()
+                    try:
+                        stage_spec = loader.load(pipeline_path)
+                    except Exception as exc:
+                        self.halt(
+                            f"chain stage {i}: failed to load pipeline "
+                            f"{pipeline_path}: {exc}"
+                        )
+                        return
+                    # Keep the loaded spec's own World so that prompt paths
+                    # and other config-owned resources resolve relative to
+                    # the stage pipeline file rather than the parent
+                    # project.  Apply the stage's requested mode.
+                    stage_spec = replace(stage_spec, mode=stage.mode)
+                    saved_spec = self.spec
+                    self.spec = stage_spec
                 else:
-                    # P0.5: log missing source — non-fatal, stage may
-                    # not need it (e.g. optional upstream artefact)
-                    _log.debug(
-                        "chain stage %d output_map: source %s not found, "
-                        "skipping copy to %s", i, src_rel, dst_rel,
-                    )
+                    saved_spec = None
+                    saved_mode = self.spec.mode
+                    self.spec = replace(self.spec, mode=stage.mode)
 
-            # Run the stage.
-            # If the stage specifies a pipeline YAML, load it via
-            # PipelineLoader so the stage runs with its own agent/moa/
-            # project configuration rather than the top-level spec
-            # (P0 major fix).  Otherwise just switch the mode.
-            from unison.pipeline import PipelineLoader
-
-            if stage.pipeline:
-                pipeline_path = (self.spec.world.root / stage.pipeline).resolve()
-                if not pipeline_path.exists():
-                    self.halt(
-                        f"chain stage {i}: pipeline file not found: "
-                        f"{pipeline_path}"
-                    )
-                    return
-                loader = PipelineLoader()
                 try:
-                    stage_spec = loader.load(pipeline_path)
-                except Exception as exc:
-                    self.halt(
-                        f"chain stage {i}: failed to load pipeline "
-                        f"{pipeline_path}: {exc}"
-                    )
-                    return
-                # Keep the loaded spec's own World so that prompt paths
-                # and other config-owned resources resolve relative to
-                # the stage pipeline file rather than the parent
-                # project.  Apply the stage's requested mode.
-                stage_spec = replace(stage_spec, mode=stage.mode)
-                saved_spec = self.spec
-                self.spec = stage_spec
-            else:
-                saved_spec = None
-                saved_mode = self.spec.mode
-                self.spec = replace(self.spec, mode=stage.mode)
-
-            try:
-                if self.spec.mode == "moa":
-                    self._run_moa_pipeline()
-                else:
+                    # P0.8: Always route through _run_state_machine() which
+                    # handles MOA (and all other modes) internally.  No
+                    # special-case dispatch needed here.
                     self._run_state_machine()
-            finally:
-                if saved_spec is not None:
-                    self.spec = saved_spec
-                else:
-                    self.spec = replace(self.spec, mode=saved_mode)
+                finally:
+                    if saved_spec is not None:
+                        self.spec = saved_spec
+                    else:
+                        self.spec = replace(self.spec, mode=saved_mode)
 
-            # Stage finished — halt behaviour depends on halt_on_fail
-            if self._state.halt_signal:
-                if stage.halt_on_fail:
-                    return
-                # P0.5: halt_on_fail=False — clear halt and continue
-                self._state.halt_signal = False
-                self._state.halt_reason = None
+                # Stage finished — halt behaviour depends on halt_on_fail
+                if self._state.halt_signal:
+                    if stage.halt_on_fail:
+                        return
+                    # P0.5: halt_on_fail=False — only clear stage-failure
+                    # halts (agent errors, MoA failures, verdict parse
+                    # errors).  External halts (Ctrl-C, SIGINT, dashboard
+                    # pause, .unison/HALT, max_iter, sudo) must always stop
+                    # the chain regardless of halt_on_fail.
+                    if self._halt_category != "external":
+                        self._state.halt_signal = False
+                        self._state.halt_reason = None
+                        self._halt_category = "stage"
+
+            # P0.6: Chain complete — emit one terminal "done" transition
+            # and archive reviews once for the entire chain.
+            if not self._state.halt_signal:
+                self._state.transition("done", "orchestrator",
+                                       note="chain complete")
+                self._publish_phase_event("done", note="chain complete")
+                self._archive_reviews()
+                self._save_checkpoint()
+        finally:
+            self._publish_phase_event("chain_end",
+                                      note=f"halted={self._state.halt_signal}")
+            self._in_chain = prev_in_chain
 
     def _run_moa_synthesis(self, round_n: int, moa_config) -> None:
         """Run a single synthesizer agent to merge MoA analyses.
@@ -1084,7 +1134,7 @@ class Orchestrator:
             # ---- Dashboard control check (every iteration boundary) --------
             control = self._check_control_files()
             if control == "pause":
-                self.halt("Dashboard pause requested")
+                self.halt("Dashboard pause requested", category="external")
                 return
             elif control == "skip":
                 self._skip_requested = True
