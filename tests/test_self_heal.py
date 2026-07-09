@@ -589,3 +589,65 @@ class TestAttemptFixEdgeCases:
         heal = fixer.attempt_fix("TIMEOUT", result)
         assert heal.success is False
         assert heal.error_type == "TIMEOUT"
+
+
+# ---------------------------------------------------------------------------
+# P8 S1: _run_tests shell=False
+# ---------------------------------------------------------------------------
+
+
+class TestRunTestsNoShell:
+    """P8 S1: _run_tests uses shell=False, accepts list and string."""
+
+    def test_run_tests_uses_shell_false(self, tmp_path, monkeypatch):
+        """_run_tests calls subprocess.run with shell=False."""
+        from unittest.mock import MagicMock
+        import subprocess as sp
+
+        from unison.interfaces import PipelineSpec, ProjectConfig
+        from unison.self_heal import FixOrchestrator
+
+        world = minimal_spec_fixture_world(tmp_path)
+        spec = PipelineSpec(
+            version="1.0", world=world,
+            agents={},
+            project=ProjectConfig(test_command="echo hello"),
+        )
+        fixer = FixOrchestrator(spec, world)
+
+        mock_run = MagicMock(return_value=MagicMock(returncode=0))
+        monkeypatch.setattr(sp, "run", mock_run)
+
+        result = fixer._run_tests()
+        assert result is True
+        call_kwargs = mock_run.call_args[1]
+        assert call_kwargs.get("shell") is False, \
+            "_run_tests must use shell=False (P8 S1)"
+
+    def test_run_tests_returns_false_on_timeout(self, tmp_path, monkeypatch):
+        """_run_tests returns False on TimeoutExpired."""
+        import subprocess as sp
+
+        from unison.interfaces import PipelineSpec, ProjectConfig
+        from unison.self_heal import FixOrchestrator
+
+        world = minimal_spec_fixture_world(tmp_path)
+        spec = PipelineSpec(
+            version="1.0", world=world,
+            agents={},
+            project=ProjectConfig(test_command="echo hello"),
+        )
+        fixer = FixOrchestrator(spec, world)
+
+        def _raise_timeout(*args, **kwargs):
+            raise sp.TimeoutExpired(cmd="echo", timeout=1.0)
+
+        monkeypatch.setattr(sp, "run", _raise_timeout)
+        result = fixer._run_tests()
+        assert result is False
+
+
+def minimal_spec_fixture_world(tmp_path):
+    """Helper to create a World in tmp_path for _run_tests tests."""
+    from unison.interfaces import World
+    return World(root=tmp_path)

@@ -1126,12 +1126,11 @@ agents:
         assert moa_called.call_count == 0
 
     def test_stage_pipeline_preserves_world(self, tmp_path, monkeypatch):
-        """Loaded stage spec keeps its own World (pipeline file's directory).
+        """Loaded stage spec gets its own World but root is overridden.
 
-        The stage pipeline is in a subdirectory and has project_root: '.',
-        so its World.root must be the stage pipeline's parent directory,
-        NOT the parent project root.  This ensures prompt paths resolve
-        relative to the stage pipeline file.
+        P8 S5: When stage.pipeline points to a subdirectory, world.root
+        is overridden with the original project root so agents can find
+        src/, tests/, and prd/. The stage mode is still applied.
         """
         main_file = self._write_minimal_pipeline(tmp_path, "pipeline.yaml", "chain")
         stage_file = self._write_minimal_pipeline(
@@ -1157,9 +1156,10 @@ agents:
         orch._run_chain()
 
         assert captured_spec is not None
-        # Stage world.root must be the stage pipeline's directory
-        expected_stage_root = (tmp_path / "pipelines").resolve()
-        assert captured_spec.world.root == expected_stage_root
+        # P8 S5: world.root must be the ORIGINAL project root (not the
+        # subdirectory), so agents can find src/, tests/, prd/.
+        expected_project_root = tmp_path.resolve()
+        assert captured_spec.world.root == expected_project_root
         # Mode should be overridden to the stage's mode
         assert captured_spec.mode == "moa"
 
@@ -1213,13 +1213,11 @@ agents:
         assert "pipeline file not found" in halt_msgs[0]
 
     def test_stage_pipeline_resolves_own_prompts(self, tmp_path, monkeypatch):
-        """Regression: stage resolves prompt paths from its own directory.
+        """P8 S5: world.root is overridden to the original project root.
 
-        When parent and stage have distinct prompt files, the stage must
-        resolve its prompts from the stage pipeline's directory, NOT from
-        the parent project's directory.  The previous code replaced the
-        loaded spec's World with the parent's World, causing the stage to
-        silently use the wrong (or missing) prompt files.
+        When a stage pipeline is in a subdirectory, world.root is set to
+        the original project root so agents can find src/, tests/, prd/.
+        Prompt paths resolve relative to the project root.
         """
         # -- parent pipeline with its own prompts --
         parent_prompts = tmp_path / "prompts"
@@ -1288,20 +1286,16 @@ agents:
         orch._run_chain()
 
         assert captured_spec is not None
-        # Stage world.root must be the stage pipeline's directory
-        assert captured_spec.world.root == stage_dir.resolve()
-        # Resolved prompt paths must point to the stage's own prompt files
+        # P8 S5: world.root must be the ORIGINAL project root so agents
+        # can find src/, tests/, prd/ — NOT the subdirectory.
+        assert captured_spec.world.root == tmp_path.resolve()
+        # Prompt paths resolve relative to the project root
         dev_prompt_path = (
             captured_spec.world.root
             / captured_spec.agents["developer"].system_prompt_path
         )
         assert dev_prompt_path.is_file()
-        assert dev_prompt_path.read_text() == "# Stage developer prompt"
-        # The stage must NOT resolve to the parent's prompt
-        parent_dev_path = (
-            spec.world.root / spec.agents["developer"].system_prompt_path
-        )
-        assert dev_prompt_path != parent_dev_path
+        assert dev_prompt_path.read_text() == "# Parent developer prompt"
 
 
 # ============================================================================

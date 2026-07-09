@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -9,20 +10,23 @@ from pathlib import Path
 class BootstrapExecutor:
     """Execute bootstrap commands in a working directory.
 
-    Runs shell commands sequentially.  Returns True if all commands
+    Runs commands sequentially.  Returns True if all commands
     succeed, or False if any command fails (non-zero exit code).
+
+    Commands may be a list (preferred, shell=False) or a string
+    (parsed via shlex.split).
 
     Usage::
 
         executor = BootstrapExecutor()
-        ok = executor.execute(["pip install -e .", "pre-commit install"], workdir=project_dir)
+        ok = executor.execute(["pip", "install", "-e", "."], workdir=project_dir)
     """
 
     def execute(self, commands: list[str], workdir: Path) -> bool:
         """Run each command in *commands* sequentially inside *workdir*.
 
         Args:
-            commands: List of shell command strings to execute.
+            commands: List of command strings or lists to execute.
             workdir: Directory in which to run the commands.
 
         Returns:
@@ -34,9 +38,13 @@ class BootstrapExecutor:
         workdir = Path(workdir)
 
         for cmd in commands:
+            if isinstance(cmd, list):
+                cmd_args = cmd
+            else:
+                cmd_args = shlex.split(cmd)
             result = subprocess.run(
-                cmd,
-                shell=True,
+                cmd_args,
+                shell=False,
                 cwd=workdir,
                 capture_output=True,
                 text=True,

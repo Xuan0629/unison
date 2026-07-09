@@ -217,11 +217,20 @@ class FixOrchestrator:
     # ------------------------------------------------------------------
 
     def _run_tests(self) -> bool:
-        """Run the project's test command and return True if all pass."""
+        """Run the project's test command and return True if all pass.
+
+        Accepts a list (shell=False) or a simple string (shlex.split).
+        Complex shell commands (pipes, redirects) must use the list form.
+        """
         test_cmd = self._spec.project.test_command or "pytest tests/ -v"
+        if isinstance(test_cmd, list):
+            cmd_args = test_cmd
+        else:
+            import shlex
+            cmd_args = shlex.split(test_cmd)
         try:
             proc = subprocess.run(
-                test_cmd, shell=True, capture_output=True, text=True,
+                cmd_args, shell=False, capture_output=True, text=True,
                 timeout=self._config.fix_timeout, cwd=str(self._world.root),
             )
             return proc.returncode == 0

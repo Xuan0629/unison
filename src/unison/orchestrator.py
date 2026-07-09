@@ -33,6 +33,7 @@ from unison.verdict import YamlFrontmatterParser
 from unison.context_deflate import assemble_context, extract_top_findings
 from unison.budget import BudgetTracker
 from unison.event_bus import get_event_bus
+from unison.runners.base import mask_secrets
 from unison.runners.claude import ClaudeRunner
 from unison.runners.codex import CodexRunner
 from unison.runners.hermes import HermesRunner
@@ -752,7 +753,11 @@ class Orchestrator:
                     # and other config-owned resources resolve relative to
                     # the stage pipeline file rather than the parent
                     # project.  Apply the stage's requested mode.
-                    stage_spec = replace(stage_spec, mode=stage.mode)
+                    # P8 S5: Override world.root with the original project
+                    # root so agents run in the correct directory even when
+                    # stage.pipeline points to a subdirectory.
+                    stage_spec = replace(stage_spec, mode=stage.mode,
+                                         world=replace(stage_spec.world, root=root))
                     saved_spec = self.spec
                     self.spec = stage_spec
                 else:
@@ -2125,11 +2130,11 @@ class Orchestrator:
                     prev.read_text(encoding="utf-8"), limit=3
                 )
 
-        # Get recent git diff
-        diff = self._recent_diff()
+        # Get recent git diff (with secret masking — P8 S4)
+        diff = mask_secrets(self._recent_diff())
 
         # A1: Cumulative diff since loop start (regression detection)
-        cumulative_diff = self._cumulative_diff()
+        cumulative_diff = mask_secrets(self._cumulative_diff())
         if cumulative_diff:
             diff = diff + "\n\n## Cumulative Changes (since loop start)\n" + cumulative_diff
 
@@ -2485,8 +2490,13 @@ class Orchestrator:
             # Run the project's test command against the uncommitted state
             if not self.spec.project.test_command:
                 return  # no test command configured
+            test_cmd = self.spec.project.test_command
+            if isinstance(test_cmd, list):
+                cmd_args = test_cmd
+            else:
+                cmd_args = shlex.split(test_cmd)
             test_result = subprocess.run(
-                shlex.split(self.spec.project.test_command),
+                cmd_args, shell=False,
                 cwd=str(world.root),
                 capture_output=True,
                 text=True,
@@ -2659,14 +2669,20 @@ class Orchestrator:
 
         Bootstrap runs before the state machine.  Commands are executed
         sequentially in the project root directory.
+
+        Commands may be a list (preferred, shell=False) or a string
+        (parsed via shlex.split).
         """
         for cmd in self.spec.bootstrap.commands:
             if self._state.halt_signal:
                 return
             try:
+                if isinstance(cmd, list):
+                    cmd_args = cmd
+                else:
+                    cmd_args = shlex.split(cmd)
                 subprocess.run(
-                    cmd,
-                    shell=True,
+                    cmd_args, shell=False,
                     cwd=str(self.spec.world.root),
                     timeout=300,
                     check=False,

@@ -43,3 +43,21 @@ class TestBootstrapExecutor:
             workdir=tmp_path
         )
         assert result is False
+
+    def test_execute_list_command(self, tmp_path):
+        """Execute a list-form command (shell=False, P8 S1b)."""
+        executor = BootstrapExecutor()
+        result = executor.execute(
+            commands=[["echo", "hello_list"]],
+            workdir=tmp_path,
+        )
+        assert result is True
+
+    def test_execute_mixed_commands(self, tmp_path):
+        """Execute mixed list and string commands (P8 S1b)."""
+        executor = BootstrapExecutor()
+        result = executor.execute(
+            commands=["echo 'string_cmd'", ["echo", "list_cmd"]],
+            workdir=tmp_path,
+        )
+        assert result is True

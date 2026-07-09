@@ -1,12 +1,13 @@
-"""Tests for secret masking — mask_secrets and _mask_log_file.
+"""Tests for secret masking — mask_secrets, _mask_log_file, and git diff masking.
 
 Validates that API keys, tokens, and secrets are redacted before
-being persisted to log files.
+being persisted to log files or injected into LLM prompts.
 """
 
 import os
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -201,3 +202,126 @@ class TestMaskLogFile:
             assert content.count("[REDACTED]") == 2
         finally:
             log_path.unlink(missing_ok=True)
+
+
+# ------------------------------------------------------------------
+# P8 S4: Git diff secret masking in _build_prompt
+# ------------------------------------------------------------------
+
+
+class TestGitDiffSecretMasking:
+    """P8 S4: mask_secrets() applied to git diffs in _build_prompt."""
+
+    def test_recent_diff_secrets_are_masked(self, tmp_path):
+        """Secrets in _recent_diff output are masked before prompt injection."""
+        from unison.interfaces import (
+            AgentSpec, BudgetConfig, MoaConfig, PipelineSpec, SelfHealConfig, World,
+        )
+        from unison.orchestrator import Orchestrator
+
+        world = World(root=tmp_path)
+        spec = PipelineSpec(
+            version="1.0", world=world,
+            agents={
+                "developer": AgentSpec(
+                    role="developer", runtime="claude", model="test",
+                    system_prompt_path=Path("prompts/developer.md"),
+                ),
+            },
+            budget=BudgetConfig(),
+            self_heal=SelfHealConfig(),
+        )
+
+        orch = Orchestrator(spec=spec, dry_run=True)
+
+        # Mock _recent_diff to return content with an API key
+        diff_with_secret = (
+            "diff --git a/src/main.py b/src/main.py\n"
+            "+OPENAI_API_KEY=sk-proj-secret-key-12345\n"
+            "+normal code here\n"
+        )
+        orch._recent_diff = MagicMock(return_value=diff_with_secret)
+        orch._cumulative_diff = MagicMock(return_value="")
+
+        # Mock other dependencies so _build_prompt succeeds
+        orch._registry = MagicMock()
+        orch._registry.resolve.return_value = "system prompt"
+        orch._registry.task_for.return_value = "task instruction"
+
+        prompt = orch._build_prompt("developer", 1)
+
+        assert "sk-proj-secret-key-12345" not in prompt
+        assert "[REDACTED]" in prompt
+        assert "OPENAI_API_KEY=[REDACTED]" in prompt
+
+    def test_cumulative_diff_secrets_are_masked(self, tmp_path):
+        """Secrets in _cumulative_diff output are masked before prompt injection."""
+        from unison.interfaces import (
+            AgentSpec, BudgetConfig, PipelineSpec, SelfHealConfig, World,
+        )
+        from unison.orchestrator import Orchestrator
+
+        world = World(root=tmp_path)
+        spec = PipelineSpec(
+            version="1.0", world=world,
+            agents={
+                "developer": AgentSpec(
+                    role="developer", runtime="claude", model="test",
+                    system_prompt_path=Path("prompts/developer.md"),
+                ),
+            },
+            budget=BudgetConfig(),
+            self_heal=SelfHealConfig(),
+        )
+
+        orch = Orchestrator(spec=spec, dry_run=True)
+
+        orch._recent_diff = MagicMock(return_value="normal diff")
+        # Cumulative diff contains a GitHub token
+        cumulative_with_secret = (
+            " src/config.py | 2 +-\n"
+            " 1 file changed, 1 insertion(+), 1 deletion(-)\n"
+            " GITHUB_TOKEN=ghp_abc123def456ghi789jkl012mno345pqr678stu"
+        )
+        orch._cumulative_diff = MagicMock(return_value=cumulative_with_secret)
+
+        orch._registry = MagicMock()
+        orch._registry.resolve.return_value = "system prompt"
+        orch._registry.task_for.return_value = "task instruction"
+
+        prompt = orch._build_prompt("developer", 1)
+
+        assert "ghp_abc" not in prompt
+        assert "[REDACTED]" in prompt
+
+    def test_no_diff_no_crash(self, tmp_path):
+        """Empty diffs don't cause issues with mask_secrets."""
+        from unison.interfaces import (
+            AgentSpec, BudgetConfig, PipelineSpec, SelfHealConfig, World,
+        )
+        from unison.orchestrator import Orchestrator
+
+        world = World(root=tmp_path)
+        spec = PipelineSpec(
+            version="1.0", world=world,
+            agents={
+                "developer": AgentSpec(
+                    role="developer", runtime="claude", model="test",
+                    system_prompt_path=Path("prompts/developer.md"),
+                ),
+            },
+            budget=BudgetConfig(),
+            self_heal=SelfHealConfig(),
+        )
+
+        orch = Orchestrator(spec=spec, dry_run=True)
+        orch._recent_diff = MagicMock(return_value="")
+        orch._cumulative_diff = MagicMock(return_value="")
+
+        orch._registry = MagicMock()
+        orch._registry.resolve.return_value = "system prompt"
+        orch._registry.task_for.return_value = "task instruction"
+
+        prompt = orch._build_prompt("developer", 1)
+        # Should not crash, and prompt should still be valid
+        assert "system prompt" in prompt
