@@ -1282,6 +1282,10 @@ class Orchestrator:
         if active_phase.startswith("planning") and self.spec.max_planning_iterations > 0:
             max_iter = self.spec.max_planning_iterations
 
+        # P9: Dev phases also get a separate cap (max_dev_iterations).
+        if active_phase.startswith("dev") and self.spec.max_dev_iterations > 0:
+            max_iter = self.spec.max_dev_iterations
+
         # A1: Capture loop start commit for cumulative diff
         self._loop_start_commit = self._get_head_commit()
 
