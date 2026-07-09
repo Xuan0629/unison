@@ -20,24 +20,9 @@ from typing import Literal
 from unison.world import World
 from unison.state import State
 from unison.event_bus import get_event_bus
+from unison.interfaces import Notification
 
 logger = logging.getLogger(__name__)
-
-
-# ============================================================================
-# Notification
-# ============================================================================
-
-
-@dataclass
-class Notification:
-    """Observer 输出的事件。"""
-
-    timestamp: str
-    phase: str
-    severity: Literal["info", "warn", "error"]
-    title: str
-    body: str
 
 
 # ============================================================================
@@ -585,6 +570,9 @@ class Observer:
         self._use_polling = False
         self._notification_offset = 0
         self._event_queue: queue.Queue[dict] = queue.Queue()  # event bus → main loop bridge
+        # P10: Language + pipeline name — read from state.json on startup
+        self.observer_language: str = "en"
+        self.pipeline_name: str = ""
 
     # ---- public API ----------------------------------------------------------
 
@@ -620,6 +608,9 @@ class Observer:
 
     def _run_loop(self) -> None:
         """Blocking event loop (extracted so PID cleanup is guaranteed)."""
+        # ---- P10: Read language + pipeline name from state.json if available ----
+        self._load_config_from_state()
+
         # ---- Phase 6: subscribe to internal event bus -------------------------
         bus = get_event_bus()
         bus.subscribe("phase", self._on_phase_event)
@@ -736,6 +727,23 @@ class Observer:
         self.watcher.stop()
 
     # ---- Phase 6: event bus callbacks ------------------------------------------
+
+    def _load_config_from_state(self) -> None:
+        """P10: Read observer_language + pipeline_name from state.json.
+
+        Called once on startup.  If state.json doesn't exist yet, defaults
+        are kept (en / empty string).
+        """
+        if not self.world.state_file.exists():
+            return
+        try:
+            state = State.atomic_read(self.world.state_file)
+            lang = getattr(state, "observer_language", "en")
+            if lang in ("en", "zh"):
+                self.observer_language = lang
+            self.pipeline_name = getattr(state, "pipeline_name", "")
+        except Exception:
+            pass  # Non-fatal — use defaults
 
     def _on_phase_event(self, event_data: dict) -> None:
         """Callback for event bus ``"phase"`` topic.
@@ -888,6 +896,12 @@ class Observer:
             "severity": notif.severity,
             "title": notif.title,
             "body": notif.body,
+            "event_type": notif.event_type,
+            "pipeline": notif.pipeline,
+            "iteration": notif.iteration,
+            "verdict": notif.verdict,
+            "summary": notif.summary,
+            "language": notif.language,
         }
 
         with open(self.world.notifications_file, "a", encoding="utf-8") as f:

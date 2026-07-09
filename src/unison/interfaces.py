@@ -418,6 +418,8 @@ class PipelineSpec:
     moa: MoaConfig | None = None  # moa mode: mixture of agents parallel analysis
     webui: WebUiConfig = field(default_factory=lambda: WebUiConfig())  # auto-start web dashboard
     chain: ChainConfig = field(default_factory=lambda: ChainConfig())  # multi-pipeline chaining
+    observer_language: str = "en"  # P10: Language for observer notifications ("en" or "zh")
+    pipeline_name: str = ""        # P10: Human-readable pipeline name
 
     def get(self, role: AgentRole) -> AgentSpec:
         if role not in self.agents:
@@ -806,6 +808,13 @@ class Notification:
     severity: Literal["info", "warn", "error"]
     title: str
     body: str
+    # P10: Structured event fields (all have defaults for backward compatibility)
+    event_type: str = ""        # pipeline_start, phase_done, pipeline_done, stalled, intervention, halted
+    pipeline: str = ""          # Human-readable pipeline name
+    iteration: int = 0          # Current iteration when event fired
+    verdict: str = ""           # PASS or REQUEST_CHANGES
+    summary: str = ""           # One-line summary for Feishu
+    language: str = "en"        # observer_language at time of event (self-describing JSONL)
 
 class DiscordSink(Protocol):
     """Observer 的 Discord 输出。唯一可靠路径：Hermes send_message 工具。"""

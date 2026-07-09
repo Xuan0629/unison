@@ -267,6 +267,13 @@ class Orchestrator:
 
         try:
             # ------------------------------------------------------------------
+            # 2a. P10: Propagate observer config to state (Observer reads state.json)
+            # ------------------------------------------------------------------
+            self._state.observer_language = self.spec.observer_language
+            self._state.pipeline_name = self.spec.pipeline_name
+            self._save_checkpoint()
+
+            # ------------------------------------------------------------------
             # 3. Auto-start Web UI (§webui config)
             # ------------------------------------------------------------------
             self._auto_start_webui()

@@ -193,6 +193,14 @@ class PipelineLoader:
         # passed to _build_chain for validation (moa mode without moa config).
         moa_config = self._build_moa(raw.get("moa"))
 
+        # P10: Load observer language — from top-level or project block
+        project_raw = raw.get("project") or {}
+        observer_language = raw.get("observer_language") or project_raw.get("observer_language", "en")
+        observer_language = self._validate_language(observer_language)
+
+        # P10: Load pipeline name — from project.name or pipeline file stem
+        pipeline_name = project_raw.get("name") or pipeline_file.stem
+
         return PipelineSpec(
             version=version,
             world=world,
@@ -222,6 +230,8 @@ class PipelineLoader:
             moa=moa_config,
             webui=self._build_webui(raw.get("webui")),
             chain=self._build_chain(raw.get("chain"), world.root, moa_config),
+            observer_language=observer_language,
+            pipeline_name=pipeline_name,
         )
 
     # ------------------------------------------------------------------
@@ -522,6 +532,22 @@ class PipelineLoader:
             groups.setdefault(er, []).append(name)
         # Only return groups with multiple agents
         return {role: names for role, names in groups.items() if len(names) > 1}
+
+    @staticmethod
+    def _validate_language(lang: str) -> str:
+        """Validate and normalize observer_language value.
+
+        Only 'en' and 'zh' are supported.  Invalid values are defaulted
+        to 'en' with a warning.
+        """
+        if lang not in ("en", "zh"):
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "Invalid observer_language %r — defaulting to 'en'", lang
+            )
+            return "en"
+        return lang
 
     def _build_parallel_dev(
         self, raw: dict[str, Any] | None

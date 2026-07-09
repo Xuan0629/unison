@@ -105,6 +105,8 @@ class State:
     dag_status: dict | None = None   # V2: DAG 并行阶段状态
     reviewer_verdicts: list[dict] = field(default_factory=list)  # V2: 多 Reviewer 裁决
     runtime_agents: list[dict] = field(default_factory=list)    # V2: 运行时 agent 列表（含 MoA 等动态 agent）
+    observer_language: str = "en"  # P10: Language for observer notifications
+    pipeline_name: str = ""        # P10: Human-readable pipeline name
 
     def __post_init__(self) -> None:
         if self.phase not in VALID_PHASES:
@@ -135,6 +137,8 @@ class State:
             "dag_status": self.dag_status,
             "reviewer_verdicts": self.reviewer_verdicts,
             "runtime_agents": self.runtime_agents,
+            "observer_language": self.observer_language,
+            "pipeline_name": self.pipeline_name,
         }
 
     @classmethod
@@ -167,6 +171,8 @@ class State:
             dag_status=d.get("dag_status"),
             reviewer_verdicts=d.get("reviewer_verdicts", []),
             runtime_agents=d.get("runtime_agents", []),
+            observer_language=d.get("observer_language", "en"),
+            pipeline_name=d.get("pipeline_name", ""),
         )
 
     # ---- State Machine ------------------------------------------------------
