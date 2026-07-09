@@ -969,3 +969,307 @@ agents:
         assert data["phase"] == "init"
         assert data["iteration"] == 0
         assert data["halt_signal"] is False
+
+
+# ============================================================================
+# P8 S2: MoA analyze budget pre-check
+# ============================================================================
+
+
+class TestMoaBudgetPrecheck:
+    """P8 S2: _run_moa_analyze checks budget before dispatching agents."""
+
+    def test_moa_analyze_halt_on_budget_overflow(self, tmp_path):
+        """_run_moa_analyze halts before dispatch when budget is exhausted."""
+        world_root = tmp_path / "project"
+        world_root.mkdir()
+        (world_root / "prd").mkdir()
+        (world_root / "reviews").mkdir()
+        (world_root / ".unison").mkdir(parents=True, exist_ok=True)
+        (world_root / "prompts").mkdir()
+        (world_root / "prd" / "PRD.md").write_text("# PRD")
+        (world_root / "prd" / "tech-design.md").write_text("# Design")
+        (world_root / "prompts" / "developer.md").write_text("Dev prompt")
+        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+        (world_root / "prompts" / "moa-analyzer.md").write_text("Analyze prompt")
+        (world_root / "prompts" / "moa-synthesizer.md").write_text("Synth prompt")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f"""
+version: "1.0"
+mode: moa
+project_root: "{world_root}"
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/reviewer.md"
+moa:
+  agents: 2
+  rounds: 1
+  runtime: claude
+  model: test
+budget:
+  daily_token_limit: 1000
+  per_task_limit: 500
+  overflow_action: halt
+""")
+
+        from unison.pipeline import PipelineLoader
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        orch = Orchestrator(spec=spec)
+        # Exhaust the budget
+        tracker = orch._get_budget_tracker("analyzer")
+        tracker.add_usage(2000)
+        assert tracker.check_budget() is False
+
+        # _run_moa_analyze should halt before dispatching
+        orch._run_moa_analyze(1, spec.moa)
+        assert orch.state().halt_signal is True
+        assert "budget overflow" in (orch.state().halt_reason or "")
+
+    def test_moa_analyze_proceeds_when_budget_ok(self, tmp_path):
+        """_run_moa_analyze proceeds when budget is within limits."""
+        world_root = tmp_path / "project"
+        world_root.mkdir()
+        (world_root / "prd").mkdir()
+        (world_root / "reviews").mkdir()
+        (world_root / ".unison").mkdir(parents=True, exist_ok=True)
+        (world_root / "prompts").mkdir()
+        (world_root / "prd" / "PRD.md").write_text("# PRD")
+        (world_root / "prd" / "tech-design.md").write_text("# Design")
+        (world_root / "prompts" / "developer.md").write_text("Dev prompt")
+        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+        (world_root / "prompts" / "moa-analyzer.md").write_text("Analyze prompt")
+        (world_root / "prompts" / "moa-synthesizer.md").write_text("Synth prompt")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f"""
+version: "1.0"
+mode: moa
+project_root: "{world_root}"
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/reviewer.md"
+moa:
+  agents: 2
+  rounds: 1
+  runtime: claude
+  model: test
+budget:
+  daily_token_limit: 1000000
+  per_task_limit: 500000
+  overflow_action: halt
+""")
+
+        from unison.pipeline import PipelineLoader
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        orch = Orchestrator(spec=spec)
+        # Budget is fine — should NOT halt
+        tracker = orch._get_budget_tracker("analyzer")
+        assert tracker.check_budget() is True
+
+        # _run_moa_analyze should NOT halt on budget (will fail on
+        # missing runner or file output, but that's different from
+        # budget overflow)
+        orch._run_moa_analyze(1, spec.moa)
+        # Should not halt with "budget overflow" — may halt for other
+        # reasons (missing runner output) but not budget
+        reason = orch.state().halt_reason or ""
+        assert "budget overflow" not in reason
+
+
+# ============================================================================
+# P8 S3: Generic parallel fallback failure tracking
+# ============================================================================
+
+
+class TestInvokeAgentsParallelFallback:
+    """P8 S3: Generic fallback logs failures instead of silent pass."""
+
+    def test_missing_runner_is_logged_not_silent(self, tmp_path):
+        """Generic fallback logs a warning when runner is None (was silently ignored)."""
+        from unittest.mock import MagicMock
+
+        world_root = tmp_path / "project"
+        world_root.mkdir()
+        (world_root / "prd").mkdir()
+        (world_root / "reviews").mkdir()
+        (world_root / ".unison").mkdir(parents=True, exist_ok=True)
+        (world_root / "prompts").mkdir()
+        (world_root / "prd" / "PRD.md").write_text("# PRD")
+        (world_root / "prd" / "tech-design.md").write_text("# Design")
+        (world_root / "prompts" / "developer.md").write_text("Dev prompt")
+        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+        (world_root / "prompts" / "planner.md").write_text("Plan prompt")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f"""
+version: "1.0"
+project_root: "{world_root}"
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/reviewer.md"
+""")
+
+        from unison.pipeline import PipelineLoader
+        from unison.interfaces import AgentSpec
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        orch = Orchestrator(spec=spec)
+        # Remove all runners so invoke_one() gets None
+        orch._runners.clear()
+
+        # Create an agent spec with a non-existent runtime
+        agent_specs = [
+            AgentSpec(
+                role="unknown_role",
+                runtime="nonexistent_runtime",
+                model="test",
+                system_prompt_path=Path("prompts/developer.md"),
+            ),
+        ]
+
+        # Should not raise — failures are logged not thrown
+        orch._invoke_agents_parallel(
+            agent_specs, "custom_role", 1, review_phase="dev_review",
+        )
+        # No exception raised = test passes (previously would silently
+        # ignore, now logs warnings internally)
+
+
+# ============================================================================
+# P8 S11: Chain stage mode runtime validation (defense-in-depth)
+# ============================================================================
+
+
+class TestChainModeRuntimeValidation:
+    """P8 S11: _run_chain validates modes before running any stage."""
+
+    def test_invalid_mode_halts_before_any_stage_runs(self, tmp_path):
+        """Invalid mode in chain stage halts at runtime before any stage runs.
+
+        Tests the defense-in-depth runtime check in _run_chain (P8 S11).
+        The load-time check in _build_chain catches this first for
+        PipelineLoader paths; this test constructs the spec directly to
+        verify the runtime gate.
+        """
+        from unison.interfaces import (
+            AgentSpec, BudgetConfig, ChainConfig, ChainStage,
+            MoaConfig, PipelineSpec, SelfHealConfig, World,
+        )
+
+        world_root = tmp_path / "project"
+        world_root.mkdir()
+        (world_root / "prd").mkdir()
+        (world_root / "reviews").mkdir()
+        (world_root / ".unison").mkdir(parents=True, exist_ok=True)
+        (world_root / "prompts").mkdir()
+        (world_root / "prd" / "PRD.md").write_text("# PRD")
+        (world_root / "prd" / "tech-design.md").write_text("# Design")
+        (world_root / "prompts" / "developer.md").write_text("Dev prompt")
+        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+
+        world = World(root=world_root)
+        spec = PipelineSpec(
+            version="1.0",
+            world=world,
+            agents={
+                "developer": AgentSpec(
+                    role="developer", runtime="claude", model="test",
+                    system_prompt_path=Path("prompts/developer.md"),
+                ),
+                "reviewer": AgentSpec(
+                    role="reviewer", runtime="claude", model="test",
+                    system_prompt_path=Path("prompts/reviewer.md"),
+                ),
+            },
+            mode="chain",
+            chain=ChainConfig(stages=[
+                ChainStage(mode="code-dev"),
+                ChainStage(mode="definitively-not-a-real-mode-xyzzy"),
+                ChainStage(mode="code-dev"),
+            ]),
+            budget=BudgetConfig(),
+            self_heal=SelfHealConfig(),
+        )
+
+        orch = Orchestrator(spec=spec)
+        orch._run_chain()
+        assert orch.state().halt_signal is True
+        assert "unknown mode" in (orch.state().halt_reason or "")
+
+    def test_all_valid_modes_proceed(self, tmp_path):
+        """All valid modes pass runtime validation."""
+        world_root = tmp_path / "project"
+        world_root.mkdir()
+        (world_root / "prd").mkdir()
+        (world_root / "reviews").mkdir()
+        (world_root / ".unison").mkdir(parents=True, exist_ok=True)
+        (world_root / "prompts").mkdir()
+        (world_root / "prd" / "PRD.md").write_text("# PRD")
+        (world_root / "prd" / "tech-design.md").write_text("# Design")
+        (world_root / "prompts" / "developer.md").write_text("Dev prompt")
+        (world_root / "prompts" / "reviewer.md").write_text("Review prompt")
+
+        from unison.interfaces import ChainConfig, ChainStage
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f"""
+version: "1.0"
+mode: chain
+project_root: "{world_root}"
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/reviewer.md"
+chain:
+  stages:
+    - mode: code-dev
+    - mode: full-dev
+""")
+
+        from unison.pipeline import PipelineLoader
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        orch = Orchestrator(spec=spec)
+        # Should NOT halt on mode validation (will likely halt on
+        # missing pipeline files or other issues, but NOT "unknown mode")
+        orch._run_chain()
+        reason = orch.state().halt_reason or ""
+        assert "unknown mode" not in reason

@@ -492,6 +492,22 @@ class Orchestrator:
         if self._state.halt_signal:
             return
 
+        # P8 S2: Budget pre-check before dispatching MoA agents.
+        # The standard _invoke_agent_for_role path has a pre-check;
+        # MoA bypassed it entirely — tracking was post-hoc add_usage()
+        # after completion with no gate.
+        tracker = self._get_budget_tracker("analyzer")
+        if not tracker.check_budget():
+            if self.spec.budget.overflow_action == "halt":
+                self.halt(
+                    f"budget overflow before MoA analyze round {round_n}: "
+                    f"daily={tracker.current_usage}/{tracker.daily_limit}",
+                    category="external",
+                )
+                return
+            # overflow_action == "downgrade" — let it run (already
+            # downgraded in _select_runner if applicable).
+
         world = self.spec.world
         reviews_dir = world.reviews_dir
         reviews_dir.mkdir(parents=True, exist_ok=True)
@@ -565,6 +581,19 @@ class Orchestrator:
             )
 
             full_prompt = system_prompt + "\n\n" + "\n".join(prompt_parts)
+
+            # P8 S2: Per-agent budget gate — stop dispatching new agents
+            # when budget is exhausted mid-batch.
+            tracker = self._get_budget_tracker("analyzer")
+            if not tracker.check_budget():
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "MoA analyze round %d: budget exhausted, skipping %s",
+                    round_n, spec.role,
+                )
+                failed_agents.append(spec.role)
+                return
 
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             log_path = world.agent_log(
@@ -672,6 +701,20 @@ class Orchestrator:
             stage_count = len(self.spec.chain.stages)
             self._publish_phase_event("chain_start",
                                       note=f"{stage_count} stages")
+
+            # P8 S11: Validate all stage modes at load time before any
+            # stage runs.  A typo in stage 5's mode would otherwise waste
+            # the wall-clock time of stages 1-4 before halting.
+            from unison.phase_router import PhaseRouter
+            _KNOWN_MODES = set(PhaseRouter.PHASES_BY_MODE.keys()) | {"moa", "chain"}
+            for i, stage in enumerate(self.spec.chain.stages):
+                if stage.mode not in _KNOWN_MODES:
+                    self.halt(
+                        f"chain stage {i}: unknown mode {stage.mode!r}. "
+                        f"Known modes: {', '.join(sorted(_KNOWN_MODES))}",
+                        category="external",
+                    )
+                    return
 
             for i, stage in enumerate(self.spec.chain.stages):
                 if self._state.halt_signal:
@@ -1490,11 +1533,22 @@ class Orchestrator:
             return
 
         # Generic fallback: concurrent invocation for any role
+        # P8 S3: Mirror the MoA pattern — track failed agents, log warnings,
+        # and check result.success (previously all failures were silently
+        # discarded via ``except Exception: pass``).
         world = self.spec.world
+        failed_agents: list[str] = []
 
         def invoke_one(spec: AgentSpec) -> None:
             runner = self._runners.get(spec.runtime)
             if runner is None:
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "invoke_agents_parallel: no runner for runtime %r, "
+                    "skipping %s", spec.runtime, spec.role,
+                )
+                failed_agents.append(spec.role)
                 return
             prompt = self._build_prompt(
                 pipeline_role, iteration, review_phase, agent_spec=spec,
@@ -1504,13 +1558,21 @@ class Orchestrator:
                 pipeline_role, iteration,  # type: ignore[arg-type]
                 f"{timestamp}_{spec.role}",
             )
-            runner.run(
+            result = runner.run(
                 spec=spec,
                 prompt=prompt,
                 workdir=world.root,
                 timeout=self.spec.per_agent_timeout,
                 log_path=log_path,
             )
+            if not result.success:
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "invoke_agents_parallel: %s failed (exit %d): %s",
+                    spec.role, result.exit_code, result.error,
+                )
+                failed_agents.append(spec.role)
             # Budget tracking per agent
             tracker = self._get_budget_tracker(pipeline_role)
             estimated_tokens = estimate_tokens(prompt)
@@ -1524,8 +1586,21 @@ class Orchestrator:
             for future in as_completed(futures):
                 try:
                     future.result()
-                except Exception:
-                    pass  # per-agent failures are non-fatal
+                except Exception as exc:
+                    import logging
+                    _log = logging.getLogger(__name__)
+                    _log.warning(
+                        "invoke_agents_parallel: agent raised exception: %s", exc,
+                    )
+
+        if failed_agents:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "invoke_agents_parallel: %d/%d agents failed: %s",
+                len(failed_agents), len(agent_specs),
+                ", ".join(failed_agents),
+            )
 
     # ------------------------------------------------------------------
     # Pipeline B: multi-planner
