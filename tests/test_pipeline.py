@@ -1510,3 +1510,237 @@ parallel_dev:
         assert spec.reviewer_config is not None
         assert spec.parallel_dev is not None
         assert spec.agents["developer"].context_budget == 100000
+
+
+# ============================================================================
+# P10: Phase 1 — Observer language + pipeline name from YAML
+# ============================================================================
+
+
+class TestPipelineObserverConfig:
+    """P10: Pipeline loader reads observer_language and pipeline_name."""
+
+    @pytest.fixture
+    def _write_pipeline(self, tmp_path):
+        """Helper: write a minimal pipeline.yaml and return the file path."""
+        import yaml
+        pipeline_file = tmp_path / "pipeline.yaml"
+        # Ensure prompt files exist for dry_run / loading
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        for role in ["planner", "developer", "reviewer"]:
+            (prompts_dir / f"{role}.md").write_text(f"# {role} prompt\n")
+        return pipeline_file
+
+    def test_default_observer_language(self, tmp_path):
+        """observer_language defaults to 'en' when not set in YAML."""
+        import yaml
+        from unison.pipeline import PipelineLoader
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        for role in ["developer", "reviewer"]:
+            (prompts_dir / f"{role}.md").write_text(f"# {role}\n")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(yaml.dump({
+            "version": "1.0",
+            "mode": "code-dev",
+            "agents": {
+                "dev": {"role": "coder", "runtime": "codex",
+                        "system_prompt_path": "prompts/developer.md",
+                        "pipeline_role": "developer"},
+                "rev": {"role": "auditor", "runtime": "codex",
+                        "system_prompt_path": "prompts/reviewer.md",
+                        "pipeline_role": "reviewer"},
+            },
+        }))
+
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.observer_language == "en"
+        assert spec.pipeline_name == pipeline_file.stem
+
+    def test_observer_language_from_top_level(self, tmp_path):
+        """observer_language is read from top-level YAML key."""
+        import yaml
+        from unison.pipeline import PipelineLoader
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        for role in ["developer", "reviewer"]:
+            (prompts_dir / f"{role}.md").write_text(f"# {role}\n")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(yaml.dump({
+            "version": "1.0",
+            "mode": "code-dev",
+            "observer_language": "zh",
+            "agents": {
+                "dev": {"role": "coder", "runtime": "codex",
+                        "system_prompt_path": "prompts/developer.md",
+                        "pipeline_role": "developer"},
+                "rev": {"role": "auditor", "runtime": "codex",
+                        "system_prompt_path": "prompts/reviewer.md",
+                        "pipeline_role": "reviewer"},
+            },
+        }))
+
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.observer_language == "zh"
+
+    def test_observer_language_from_project_block(self, tmp_path):
+        """observer_language is read from project block in YAML."""
+        import yaml
+        from unison.pipeline import PipelineLoader
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        for role in ["developer", "reviewer"]:
+            (prompts_dir / f"{role}.md").write_text(f"# {role}\n")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(yaml.dump({
+            "version": "1.0",
+            "mode": "code-dev",
+            "project": {
+                "name": "P10 Test Pipeline",
+                "observer_language": "zh",
+                "test_command": "pytest",
+            },
+            "agents": {
+                "dev": {"role": "coder", "runtime": "codex",
+                        "system_prompt_path": "prompts/developer.md",
+                        "pipeline_role": "developer"},
+                "rev": {"role": "auditor", "runtime": "codex",
+                        "system_prompt_path": "prompts/reviewer.md",
+                        "pipeline_role": "reviewer"},
+            },
+        }))
+
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.observer_language == "zh"
+        assert spec.pipeline_name == "P10 Test Pipeline"
+
+    def test_invalid_observer_language_warns_and_defaults(self, tmp_path):
+        """Invalid observer_language 'fr' logs warning, defaults to 'en'."""
+        import yaml
+        from unison.pipeline import PipelineLoader
+        import logging
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        for role in ["developer", "reviewer"]:
+            (prompts_dir / f"{role}.md").write_text(f"# {role}\n")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(yaml.dump({
+            "version": "1.0",
+            "mode": "code-dev",
+            "observer_language": "fr",
+            "agents": {
+                "dev": {"role": "coder", "runtime": "codex",
+                        "system_prompt_path": "prompts/developer.md",
+                        "pipeline_role": "developer"},
+                "rev": {"role": "auditor", "runtime": "codex",
+                        "system_prompt_path": "prompts/reviewer.md",
+                        "pipeline_role": "reviewer"},
+            },
+        }))
+
+        loader = PipelineLoader()
+        with self._capture_warning() as records:
+            spec = loader.load(pipeline_file)
+        assert spec.observer_language == "en"
+        # Should have warned about invalid language
+        warnings = [r for r in records if "Invalid observer_language" in str(r.message)]
+        assert len(warnings) >= 1
+
+    @staticmethod
+    def _capture_warning():
+        """Capture warnings using logging capture."""
+        import logging
+        import contextlib
+
+        @contextlib.contextmanager
+        def _capture():
+            logger = logging.getLogger("unison.pipeline")
+            old_level = logger.level
+            logger.setLevel(logging.WARNING)
+            records = []
+            handler = logging.handlers.MemoryHandler if hasattr(logging, 'handlers') else None
+
+            class ListHandler(logging.Handler):
+                def emit(self, record):
+                    records.append(record)
+
+            h = ListHandler()
+            logger.addHandler(h)
+            try:
+                yield records
+            finally:
+                logger.removeHandler(h)
+                logger.setLevel(old_level)
+
+        return _capture()
+
+    def test_pipeline_name_from_project(self, tmp_path):
+        """pipeline_name is read from project.name in YAML."""
+        import yaml
+        from unison.pipeline import PipelineLoader
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        for role in ["developer", "reviewer"]:
+            (prompts_dir / f"{role}.md").write_text(f"# {role}\n")
+
+        pipeline_file = tmp_path / "my-awesome-pipeline.yaml"
+        pipeline_file.write_text(yaml.dump({
+            "version": "1.0",
+            "mode": "code-dev",
+            "project": {
+                "name": "Custom Pipeline Name",
+            },
+            "agents": {
+                "dev": {"role": "coder", "runtime": "codex",
+                        "system_prompt_path": "prompts/developer.md",
+                        "pipeline_role": "developer"},
+                "rev": {"role": "auditor", "runtime": "codex",
+                        "system_prompt_path": "prompts/reviewer.md",
+                        "pipeline_role": "reviewer"},
+            },
+        }))
+
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.pipeline_name == "Custom Pipeline Name"
+
+    def test_pipeline_name_fallback_to_stem(self, tmp_path):
+        """pipeline_name falls back to file stem when project.name not set."""
+        import yaml
+        from unison.pipeline import PipelineLoader
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        for role in ["developer", "reviewer"]:
+            (prompts_dir / f"{role}.md").write_text(f"# {role}\n")
+
+        pipeline_file = tmp_path / "p10-test.yaml"
+        pipeline_file.write_text(yaml.dump({
+            "version": "1.0",
+            "mode": "code-dev",
+            "agents": {
+                "dev": {"role": "coder", "runtime": "codex",
+                        "system_prompt_path": "prompts/developer.md",
+                        "pipeline_role": "developer"},
+                "rev": {"role": "auditor", "runtime": "codex",
+                        "system_prompt_path": "prompts/reviewer.md",
+                        "pipeline_role": "reviewer"},
+            },
+        }))
+
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.pipeline_name == "p10-test"

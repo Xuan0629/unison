@@ -1477,8 +1477,9 @@ agents:
 
         events = []
 
-        def _capture_event(phase: str, note: str = "") -> None:
-            events.append((phase, note))
+        def _capture_event(phase: str, note: str = "",
+                           event: str = "") -> None:
+            events.append((phase, note, event))
 
         monkeypatch.setattr(orch, "_run_state_machine", MagicMock())
         monkeypatch.setattr(orch, "_run_moa_pipeline", MagicMock())
@@ -1543,8 +1544,9 @@ agents:
 
         events = []
 
-        def _capture_event(phase: str, note: str = "") -> None:
-            events.append((phase, note))
+        def _capture_event(phase: str, note: str = "",
+                           event: str = "") -> None:
+            events.append((phase, note, event))
 
         call_count = 0
 

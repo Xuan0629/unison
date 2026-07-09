@@ -842,11 +842,11 @@ class Observer:
                 if consecutive >= self._SKIP_CONSECUTIVE_THRESHOLD:
                     break
             elif t.to_phase and "review" in t.to_phase:
-                # A PASS in review resets the counter
+                # A PASS in review resets the counter — stop scanning
+                consecutive = 0
                 break
             # Non-review transitions don't reset the counter
-        else:
-            # Didn't reach threshold
+        if consecutive < self._SKIP_CONSECUTIVE_THRESHOLD:
             return
 
         # --- Threshold met — check minimal satisfaction ---

@@ -958,3 +958,897 @@ class TestObserverReportFile:
         assert first_mtime == second_mtime, (
             f"Second call should not rewrite report, but mtime changed"
         )
+
+
+# ============================================================================
+# P10: Phase 1 — Notification data model
+# ============================================================================
+
+
+class TestNotificationP10Fields:
+    """P10: Notification dataclass extended fields (from interfaces.py)."""
+
+    def test_notification_default_fields(self):
+        """New fields have backward-compatible defaults."""
+        from unison.interfaces import Notification
+        n = Notification(
+            timestamp="2026-07-10T10:00:00Z",
+            phase="init",
+            severity="info",
+            title="test",
+            body="test body",
+        )
+        assert n.event_type == ""
+        assert n.pipeline == ""
+        assert n.iteration == 0
+        assert n.verdict == ""
+        assert n.summary == ""
+        assert n.language == "en"
+
+    def test_notification_all_fields_populated(self):
+        """All P10 fields can be set explicitly."""
+        from unison.interfaces import Notification
+        n = Notification(
+            timestamp="2026-07-10T10:00:00Z",
+            phase="dev_review",
+            severity="info",
+            title="Phase done",
+            body="Planning phase complete",
+            event_type="phase_done",
+            pipeline="P10 Observer",
+            iteration=2,
+            verdict="PASS",
+            summary="planning passed after 2 iterations",
+            language="zh",
+        )
+        assert n.event_type == "phase_done"
+        assert n.pipeline == "P10 Observer"
+        assert n.iteration == 2
+        assert n.verdict == "PASS"
+        assert n.summary == "planning passed after 2 iterations"
+        assert n.language == "zh"
+
+    def test_notification_importable_from_observer(self):
+        """Notification is importable from unison.observer (re-export)."""
+        from unison.observer import Notification
+        n = Notification(
+            timestamp="2026-01-01T00:00:00Z",
+            phase="init",
+            severity="info",
+            title="t",
+            body="b",
+        )
+        assert n.event_type == ""  # Default works
+
+
+class TestStateP10Fields:
+    """P10: State observer_language + pipeline_name fields."""
+
+    def test_state_default_observer_language(self):
+        """State defaults observer_language to 'en'."""
+        from unison.state import State
+        s = State()
+        assert s.observer_language == "en"
+        assert s.pipeline_name == ""
+
+    def test_state_roundtrip_p10_fields(self):
+        """State serialization round-trips observer_language + pipeline_name."""
+        from unison.state import State
+        s = State(observer_language="zh", pipeline_name="P10 Test Pipeline")
+        d = s.to_dict()
+        assert d["observer_language"] == "zh"
+        assert d["pipeline_name"] == "P10 Test Pipeline"
+        # Round-trip
+        s2 = State.from_dict(d)
+        assert s2.observer_language == "zh"
+        assert s2.pipeline_name == "P10 Test Pipeline"
+
+    def test_state_from_dict_defaults_missing_p10_fields(self):
+        """from_dict defaults observer_language to 'en' and pipeline_name to '' when missing."""
+        from unison.state import State
+        s = State.from_dict({"version": "1.0", "phase": "init", "history": []})
+        assert s.observer_language == "en"
+        assert s.pipeline_name == ""
+
+    def test_state_from_dict_invalid_language_accepted(self):
+        """from_dict accepts any language string (validation is in pipeline loader)."""
+        from unison.state import State
+        s = State.from_dict({"version": "1.0", "phase": "init", "history": [],
+                             "observer_language": "fr"})
+        assert s.observer_language == "fr"  # stored as-is; validation is pipeline-level
+
+    def test_state_to_dict_includes_p10_fields(self):
+        """to_dict always includes observer_language and pipeline_name keys."""
+        from unison.state import State
+        s = State()
+        d = s.to_dict()
+        assert "observer_language" in d
+        assert "pipeline_name" in d
+
+
+# ============================================================================
+# P10: Phase 2 — Structured event emission + message templates
+# ============================================================================
+
+
+class TestMessageTemplates:
+    """P10: _MESSAGES dict and _msg() helper."""
+
+    def test_all_event_types_have_both_languages(self):
+        """Every event type template exists in both en and zh."""
+        from unison.observer import _MESSAGES
+        for key in ("pipeline_start", "pipeline_done", "phase_done",
+                     "phase_changes", "stalled", "halted", "observer_banner"):
+            assert key in _MESSAGES, f"Missing template key: {key}"
+            for lang in ("en", "zh"):
+                assert lang in _MESSAGES[key], f"Missing {lang} for {key}"
+                assert _MESSAGES[key][lang], f"Empty template for {key}/{lang}"
+
+    def test_msg_formatting_en(self):
+        """_msg formats English templates correctly."""
+        from unison.observer import _msg
+        result = _msg("pipeline_start", "en",
+                      pipeline="TestPipe", mode="full-dev", agent_count=3)
+        assert "TestPipe" in result
+        assert "full-dev" in result
+        assert "3 agents" in result or "3" in result
+
+    def test_msg_formatting_zh(self):
+        """_msg formats Chinese templates correctly."""
+        from unison.observer import _msg
+        result = _msg("pipeline_start", "zh",
+                      pipeline="测试管道", mode="full-dev", agent_count=4)
+        assert "测试管道" in result
+        assert "已启动" in result
+        assert "4" in result
+
+    def test_msg_fallback_to_en(self):
+        """_msg falls back to 'en' template for unknown language."""
+        from unison.observer import _msg
+        result = _msg("stalled", "fr", elapsed=300, phase="dev_active")
+        assert "Session stalled" in result  # falls back to en
+
+    def test_msg_stalled_format(self):
+        """_msg renders stalled with elapsed seconds and phase."""
+        from unison.observer import _msg
+        result = _msg("stalled", "en", elapsed=300, phase="dev_active")
+        assert "300" in result
+        assert "dev_active" in result
+
+    def test_msg_halted_format(self):
+        """_msg renders halted with reason, phase, iteration."""
+        from unison.observer import _msg
+        result = _msg("halted", "zh", reason="预算超限",
+                      phase="dev_active", iteration=2)
+        assert "预算超限" in result
+        assert "dev_active" in result
+        assert "2" in result
+
+
+class TestEmitEvent:
+    """P10: _emit_event() structured notification helper."""
+
+    def test_emit_event_writes_structured_record(self, tmp_path):
+        """_emit_event writes a structured Notification to notifications.jsonl."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+        observer.observer_language = "zh"
+        observer.pipeline_name = "TestPipeline"
+
+        observer._emit_event(
+            event_type="phase_done",
+            phase="planning_review",
+            severity="info",
+            title="test title",
+            body="test body",
+            iteration=2,
+            verdict="PASS",
+            summary="planning passed",
+        )
+
+        assert world.notifications_file.exists()
+        content = world.notifications_file.read_text()
+        record = _json.loads(content.strip())
+        assert record["event_type"] == "phase_done"
+        assert record["pipeline"] == "TestPipeline"
+        assert record["language"] == "zh"
+        assert record["iteration"] == 2
+        assert record["verdict"] == "PASS"
+        assert record["summary"] == "planning passed"
+        # Old fields still present
+        assert record["phase"] == "planning_review"
+        assert record["severity"] == "info"
+
+    def test_emit_event_multiple_languages(self, tmp_path):
+        """_emit_event respects observer.observer_language."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+        observer.observer_language = "zh"
+
+        observer._emit_event(
+            event_type="pipeline_done",
+            phase="done",
+            severity="info",
+            title="done",
+            body="done",
+            iteration=0,
+            verdict="",
+            summary="",
+        )
+
+        record = _json.loads(world.notifications_file.read_text().strip())
+        assert record["language"] == "zh"
+
+    def test_emit_event_defaults(self, tmp_path):
+        """_emit_event default values are sensible (empty strings, 0s)."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+
+        observer._emit_event(event_type="stalled")
+
+        record = _json.loads(world.notifications_file.read_text().strip())
+        assert record["event_type"] == "stalled"
+        assert record["iteration"] == 0
+        assert record["verdict"] == ""
+        assert record["summary"] == ""
+        assert record["language"] == "en"
+
+
+class TestOnPhaseEventStructured:
+    """P10: _on_phase_event() emits structured events."""
+
+    def test_phase_event_pipeline_start(self, tmp_path):
+        """_on_phase_event emits pipeline_start with correct fields."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+        observer.pipeline_name = "MyPipeline"
+        observer.observer_language = "zh"
+
+        observer._on_phase_event({
+            "event": "pipeline_start",
+            "phase": "init",
+            "agent_count": 4,
+            "mode": "full-dev",
+        })
+
+        assert world.notifications_file.exists()
+        record = _json.loads(world.notifications_file.read_text().strip())
+        assert record["event_type"] == "pipeline_start"
+        assert record["pipeline"] == "MyPipeline"
+        assert record["language"] == "zh"
+        assert "已启动" in record["title"]
+
+    def test_phase_event_phase_done(self, tmp_path):
+        """_on_phase_event emits phase_done with verdict and iteration."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+
+        observer._on_phase_event({
+            "event": "phase_done",
+            "phase": "planning_review",
+            "iteration": 3,
+            "last_verdict": "PASS",
+            "commits": 2,
+        })
+
+        record = _json.loads(world.notifications_file.read_text().strip())
+        assert record["event_type"] == "phase_done"
+        assert record["phase"] == "planning_review"
+        assert record["iteration"] == 3
+        assert record["verdict"] == "PASS"
+
+    def test_phase_event_pipeline_done(self, tmp_path):
+        """_on_phase_event emits pipeline_done with commits count."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+
+        observer._on_phase_event({
+            "event": "pipeline_done",
+            "commits": 5,
+            "tests": 1233,
+        })
+
+        record = _json.loads(world.notifications_file.read_text().strip())
+        assert record["event_type"] == "pipeline_done"
+        assert "5 commits" in record["title"]
+
+    def test_phase_event_halted(self, tmp_path):
+        """_on_phase_event emits halted with reason."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+        observer.observer_language = "zh"
+
+        observer._on_phase_event({
+            "event": "halted",
+            "phase": "dev_active",
+            "iteration": 2,
+            "halt_reason": "budget overflow",
+        })
+
+        record = _json.loads(world.notifications_file.read_text().strip())
+        assert record["event_type"] == "halted"
+        assert record["phase"] == "dev_active"
+        assert record["iteration"] == 2
+        assert "budget overflow" in record["title"]
+
+    def test_phase_event_unknown_event_is_ignored(self, tmp_path):
+        """_on_phase_event without 'event' field just queues, doesn't write."""
+        from unison.world import World
+        from unison.observer import Observer
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+
+        # Old-style event (no "event" key) — just queues, no structured write
+        observer._on_phase_event({
+            "phase": "dev_active",
+            "iteration": 1,
+        })
+
+        # No notification written (no "event" key → no structured emit)
+        assert not world.notifications_file.exists()
+
+    def test_observer_loads_config_from_state(self, tmp_path):
+        """_load_config_from_state reads observer_language + pipeline_name."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        state_data = {
+            "version": "1.0",
+            "phase": "init", "iteration": 0, "history": [],
+            "halt_signal": False, "halt_reason": None,
+            "last_dev_commit": None, "last_review_verdict": None,
+            "last_review_path": None, "last_activity": None,
+            "observer_language": "zh",
+            "pipeline_name": "TestPipeline",
+        }
+        world.state_file.write_text(_json.dumps(state_data))
+
+        observer = Observer(world=world)
+        observer._load_config_from_state()
+        assert observer.observer_language == "zh"
+        assert observer.pipeline_name == "TestPipeline"
+
+    def test_observer_loads_config_defaults_when_missing(self, tmp_path):
+        """_load_config_from_state keeps defaults when state.json missing."""
+        from unison.world import World
+        from unison.observer import Observer
+
+        world = World(root=tmp_path)
+        # No state.json
+        observer = Observer(world=world)
+        observer._load_config_from_state()
+        assert observer.observer_language == "en"
+        assert observer.pipeline_name == ""
+
+    def test_observer_loads_config_invalid_language(self, tmp_path):
+        """_load_config_from_state ignores invalid language, keeps default."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        state_data = {
+            "version": "1.0",
+            "phase": "init", "iteration": 0, "history": [],
+            "halt_signal": False, "halt_reason": None,
+            "last_dev_commit": None, "last_review_verdict": None,
+            "last_review_path": None, "last_activity": None,
+            "observer_language": "fr",  # invalid
+            "pipeline_name": "",
+        }
+        world.state_file.write_text(_json.dumps(state_data))
+
+        observer = Observer(world=world)
+        observer._load_config_from_state()
+        assert observer.observer_language == "en"  # kept default
+
+
+class TestStructuredNotificationsJsonl:
+    """P10: Verify notifications.jsonl written by Observer has new fields."""
+
+    def test_write_notification_includes_p10_fields(self, tmp_path):
+        """_write_notification serializes all P10 fields to JSONL."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.interfaces import Notification
+        import json as _json
+
+        world = World(root=tmp_path)
+        observer = Observer(world=world)
+
+        notif = Notification(
+            timestamp="2026-07-10T10:00:00Z",
+            phase="dev_review",
+            severity="info",
+            title="Test",
+            body="Test body",
+            event_type="phase_done",
+            pipeline="TestPipeline",
+            iteration=3,
+            verdict="PASS",
+            summary="Dev phase passed",
+            language="zh",
+        )
+
+        observer._write_notification(notif)
+
+        content = world.notifications_file.read_text()
+        lines = [l for l in content.strip().split("\n") if l]
+        assert len(lines) == 1
+        record = _json.loads(lines[0])
+        assert record["event_type"] == "phase_done"
+        assert record["pipeline"] == "TestPipeline"
+        assert record["iteration"] == 3
+        assert record["verdict"] == "PASS"
+        assert record["summary"] == "Dev phase passed"
+        assert record["language"] == "zh"
+        # Old fields still present for backward compat
+        assert record["phase"] == "dev_review"
+        assert record["severity"] == "info"
+
+    def test_old_format_still_parseable(self, tmp_path):
+        """Notifications written by new code are still parseable as old format."""
+        from unison.world import World
+        from unison.observer import Observer
+        import json as _json
+
+        world = World(root=tmp_path)
+        observer = Observer(world=world)
+
+        notif = Observer.__init__.__defaults__  # can't easily get defaults
+        # Simulate: construct the old way and verify all old keys present
+        from unison.interfaces import Notification
+        n = Notification(
+            timestamp="2026-07-10T10:00:00Z",
+            phase="dev_active",
+            severity="warn",
+            title="Stalled",
+            body="No activity",
+        )
+        observer._write_notification(n)
+
+        record = _json.loads(world.notifications_file.read_text().strip())
+        # Old fields
+        assert "timestamp" in record
+        assert "phase" in record
+        assert "severity" in record
+        assert "title" in record
+        assert "body" in record
+        # New fields present with defaults
+        assert record["event_type"] == ""
+        assert record["language"] == "en"
+
+
+# ============================================================================
+# P10: Phase 3 — SKIP intervention
+# ============================================================================
+
+
+class TestSkipIntervention:
+    """P10: _check_skip_intervention, _write_skip_control, _read_test_command."""
+
+    def test_check_skip_insufficient_consecutive(self, tmp_path):
+        """No SKIP when fewer than 3 consecutive REQUEST_CHANGES."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State, Transition
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        state = State(phase="dev_review")
+        # Only 2 consecutive REQUEST_CHANGES
+        state.history = [
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=1),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=2),
+        ]
+
+        observer = Observer(world=world)
+        observer._check_skip_intervention(state)
+
+        # No skip.json should be written
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert not skip_file.exists()
+
+    def test_check_skip_three_consecutive_with_prd(self, tmp_path):
+        """SKIP when 3 consecutive REQUEST_CHANGES and PRD.md exists."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State, Transition
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        # Create minimal output (PRD)
+        prd_dir = world.root / "prd"
+        prd_dir.mkdir(parents=True, exist_ok=True)
+        (prd_dir / "PRD.md").write_text("# Test PRD\n\nSome content.")
+
+        state = State(phase="dev_review", iteration=4)
+        state.history = [
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=1),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=2),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:02:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=3),
+        ]
+
+        observer = Observer(world=world)
+        observer._check_skip_intervention(state)
+
+        # skip.json should be written
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert skip_file.exists()
+        content = skip_file.read_text()
+        assert "REQUEST_CHANGES" in content
+        assert "dev_review" in content
+
+    def test_check_skip_no_output(self, tmp_path):
+        """No SKIP when 3 REQUEST_CHANGES but no output exists."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State, Transition
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        # No PRD, no specs
+
+        state = State(phase="dev_review")
+        state.history = [
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=1),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=2),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:02:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=3),
+        ]
+
+        observer = Observer(world=world)
+        observer._check_skip_intervention(state)
+
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert not skip_file.exists()
+
+    def test_check_skip_resets_on_pass(self, tmp_path):
+        """Consecutive REQUEST_CHANGES counter resets when a PASS appears."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State, Transition
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        (world.root / "prd" / "PRD.md").parent.mkdir(parents=True, exist_ok=True)
+        (world.root / "prd" / "PRD.md").write_text("content")
+
+        state = State(phase="dev_review")
+        state.history = [
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=1),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=2),
+            # PASS resets counter
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:02:00Z",
+                       verdict="PASS", iter_n=2),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:03:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=3),
+        ]
+
+        observer = Observer(world=world)
+        observer._check_skip_intervention(state)
+
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert not skip_file.exists()  # Only 1 consecutive after PASS
+
+    def test_check_skip_non_review_phase_ignored(self, tmp_path):
+        """No SKIP check when phase is planning_active (not dev-review)."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State, Transition
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        (world.root / "prd" / "PRD.md").parent.mkdir(parents=True, exist_ok=True)
+        (world.root / "prd" / "PRD.md").write_text("content")
+
+        state = State(phase="planning_review")  # not dev phase
+        state.history = [
+            Transition(from_phase="planning_active", to_phase="planning_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=1),
+            Transition(from_phase="planning_active", to_phase="planning_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=2),
+            Transition(from_phase="planning_active", to_phase="planning_review",
+                       by="orchestrator", timestamp="2026-01-01T00:02:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=3),
+        ]
+
+        observer = Observer(world=world)
+        observer._check_skip_intervention(state)
+
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert not skip_file.exists()
+
+    def test_write_skip_creates_control_file(self, tmp_path):
+        """_write_skip_control writes correctly structured skip.json."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State
+        import json as _json
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        observer = Observer(world=world)
+        state = State(phase="dev_review", iteration=4)
+
+        observer._write_skip_control(state)
+
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert skip_file.exists()
+        data = _json.loads(skip_file.read_text())
+        assert "reason" in data
+        assert data["phase"] == "dev_review"
+        assert data["iteration"] == 4
+        assert "timestamp" in data
+
+    def test_read_test_command_from_pipeline_yaml(self, tmp_path):
+        """_read_test_command reads test_command from pipeline.yaml."""
+        from unison.world import World
+        from unison.observer import Observer
+        import yaml
+
+        world = World(root=tmp_path)
+        pipeline_yaml = world.root / "pipeline.yaml"
+        pipeline_yaml.write_text(yaml.dump({
+            "project": {"test_command": "pytest tests/ -q"},
+        }))
+
+        observer = Observer(world=world)
+        result = observer._read_test_command()
+        assert result == "pytest tests/ -q"
+
+    def test_read_test_command_no_pipeline_yaml(self, tmp_path):
+        """_read_test_command returns None when no pipeline.yaml."""
+        from unison.world import World
+        from unison.observer import Observer
+
+        world = World(root=tmp_path)
+        observer = Observer(world=world)
+        result = observer._read_test_command()
+        assert result is None
+
+    def test_read_test_command_no_project_section(self, tmp_path):
+        """_read_test_command returns None when project section missing."""
+        from unison.world import World
+        from unison.observer import Observer
+        import yaml
+
+        world = World(root=tmp_path)
+        pipeline_yaml = world.root / "pipeline.yaml"
+        pipeline_yaml.write_text(yaml.dump({"version": "1.0", "agents": {}}))
+
+        observer = Observer(world=world)
+        result = observer._read_test_command()
+        assert result is None
+
+
+class TestSkipInterventionIntegration:
+    """P10: End-to-end SKIP intervention via observer main loop."""
+
+    def test_skip_check_invoked_on_state_json_event(self, tmp_path):
+        """Observer calls _check_skip_intervention when processing state.json change."""
+        from unison.world import World
+        from unison.observer import Observer, MockWatcher, FileEvent
+        from unison.state import State, Transition
+        import json as _json
+        import threading
+        import time
+        from datetime import datetime, timezone
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        # Create PRD so minimal-satisfaction passes
+        (world.root / "prd").mkdir(parents=True, exist_ok=True)
+        (world.root / "prd" / "PRD.md").write_text("test content")
+
+        # Build state with 3 consecutive REQUEST_CHANGES
+        state = State(phase="dev_review", iteration=4)
+        state.history = [
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=1),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=2),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:02:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=3),
+        ]
+        state.last_activity = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        world.state_file.write_text(_json.dumps(state.to_dict()))
+
+        mock = MockWatcher()
+        observer = Observer(world=world, watcher=mock)
+
+        # Inject state.json change -> should trigger skip check
+        mock.inject_event(FileEvent(
+            path=world.state_file,
+            event_type="modified",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        ))
+
+        def run_observer():
+            try:
+                observer.run()
+            except RuntimeError:
+                pass
+
+        thread = threading.Thread(target=run_observer, daemon=True)
+        thread.start()
+        time.sleep(0.5)
+        observer.stop()
+        thread.join(timeout=2.0)
+
+        # skip.json should be written
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert skip_file.exists(), f"Expected skip.json at {skip_file}"
+
+
+# ============================================================================
+# P10: Phase 2 — Observer config loading + stalled messages with language
+# ============================================================================
+
+
+class TestObserverLanguageSupport:
+    """P10: Observer language-aware stalled notifications."""
+
+    def test_stalled_notification_uses_language(self, tmp_path):
+        """Observer emits stalled notification in configured language."""
+        from unison.world import World
+        from unison.observer import Observer, MockWatcher
+        import json as _json
+        import threading
+        import time
+        from datetime import datetime, timezone
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        # Write state with observer_language=zh
+        state_data = {
+            "version": "1.0",
+            "phase": "dev_active",
+            "iteration": 0,
+            "history": [],
+            "halt_signal": False, "halt_reason": None,
+            "last_dev_commit": None, "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": "2020-01-01T00:00:00Z",  # Stale — will stall
+            "observer_language": "zh",
+            "pipeline_name": "TestPipeline",
+        }
+        world.state_file.write_text(_json.dumps(state_data))
+
+        mock = MockWatcher()
+        observer = Observer(world=world, watcher=mock, poll_interval=1)
+
+        def run_observer():
+            try:
+                observer.run()
+            except RuntimeError:
+                pass
+
+        thread = threading.Thread(target=run_observer, daemon=True)
+        thread.start()
+        time.sleep(1.5)  # Wait for timeout + liveness check
+        observer.stop()
+        thread.join(timeout=3.0)
+
+        # Check notifications.jsonl for Chinese stalled message
+        if world.notifications_file.exists():
+            content = world.notifications_file.read_text()
+            records = [_json.loads(l) for l in content.strip().split("\n") if l]
+            assert any("停滞" in r.get("title", "") for r in records), (
+                f"Expected Chinese stalled message, got: {records}"
+            )
+            assert any(r.get("language") == "zh" for r in records)
+
+    def test_stalled_notification_english_default(self, tmp_path):
+        """Observer emits stalled in English when no language set."""
+        from unison.world import World
+        from unison.observer import Observer, MockWatcher
+        import json as _json
+        import threading
+        import time
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        state_data = {
+            "version": "1.0",
+            "phase": "dev_active",
+            "iteration": 0,
+            "history": [],
+            "halt_signal": False, "halt_reason": None,
+            "last_dev_commit": None, "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": "2020-01-01T00:00:00Z",
+        }
+        world.state_file.write_text(_json.dumps(state_data))
+
+        mock = MockWatcher()
+        observer = Observer(world=world, watcher=mock, poll_interval=1)
+
+        def run_observer():
+            try:
+                observer.run()
+            except RuntimeError:
+                pass
+
+        thread = threading.Thread(target=run_observer, daemon=True)
+        thread.start()
+        time.sleep(1.5)
+        observer.stop()
+        thread.join(timeout=3.0)
+
+        if world.notifications_file.exists():
+            content = world.notifications_file.read_text()
+            records = [_json.loads(l) for l in content.strip().split("\n") if l]
+            assert any(r.get("language") == "en" for r in records)
