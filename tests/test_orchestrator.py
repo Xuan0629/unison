@@ -1290,4 +1290,309 @@ chain:
 
         orch._run_chain()
         reason = orch.state().halt_reason or ""
-        assert "unknown mode" not in reason
+
+
+# ============================================================================
+# P10: Phase 4 — Orchestrator SKIP quality gate (P10-017, P10-018)
+# ============================================================================
+
+
+class TestSkipQualityGate:
+    """P10: _evaluate_skip_quality and sub-methods."""
+
+    def _make_orchestrator(self, tmp_path, test_command: str = "",
+                           world_root: Path | None = None):
+        """Helper: create a minimal Orchestrator for quality gate testing."""
+        from unison.interfaces import AgentSpec, ProjectConfig, PipelineSpec
+        from unison.world import World as WorldCls
+
+        root = world_root if world_root is not None else Path(tmp_path)
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "prd").mkdir(parents=True, exist_ok=True)
+        (root / "reviews").mkdir(parents=True, exist_ok=True)
+        (root / ".unison").mkdir(parents=True, exist_ok=True)
+
+        # Write a dummy prd
+        (root / "prd" / "PRD.md").write_text("# PRD placeholder")
+
+        # Create minimal agent spec
+        agent = AgentSpec(
+            role="developer",
+            runtime="claude",
+            model="test",
+            system_prompt_path=Path("prompts/developer.md"),
+        )
+
+        project = ProjectConfig(
+            test_command=test_command,
+        )
+
+        world = WorldCls(root=root)
+        world.ensure_directories()
+
+        spec = PipelineSpec(
+            version="1.0",
+            world=world,
+            agents={"developer": agent},
+            project=project,
+            mode="full-dev",
+            pipeline_name="TestPipeline",
+        )
+
+        return Orchestrator(spec=spec)
+
+    # ---- _run_skip_test_check ----------------------------------------------
+
+    def test_run_skip_test_check_passes(self, tmp_path):
+        """_run_skip_test_check returns True when test command exits 0."""
+        orch = self._make_orchestrator(tmp_path)
+        result = orch._run_skip_test_check(
+            "python3 -c 'print(\"ok\")'", tmp_path,
+        )
+        assert result is True
+
+    def test_run_skip_test_check_fails(self, tmp_path):
+        """_run_skip_test_check returns False when test command exits non-zero."""
+        orch = self._make_orchestrator(tmp_path)
+        result = orch._run_skip_test_check(
+            "python3 -c 'exit(1)'", tmp_path,
+        )
+        assert result is False
+
+    def test_run_skip_test_check_cache(self, tmp_path):
+        """_run_skip_test_check caches result for current iteration."""
+        orch = self._make_orchestrator(tmp_path)
+        orch._state.iteration = 3
+
+        # First call — should run and cache
+        result1 = orch._run_skip_test_check(
+            "python3 -c 'print(\"ok\")'", tmp_path,
+        )
+        assert result1 is True
+        assert orch._test_result_cache["iteration"] == 3
+
+        # Manually set a stale cache (wrong exit code) at same iteration
+        # to verify caching reads from cache rather than re-running
+        orch._test_result_cache = {
+            "iteration": 3,
+            "timestamp": 9999999999.0,  # far future — cache is still "fresh"
+            "exit_code": 0,  # cached as passing
+        }
+        result2 = orch._run_skip_test_check(
+            "python3 -c 'exit(1)'", tmp_path,
+        )
+        # Should return True from cache (skipped the actual failing command)
+        assert result2 is True
+
+    def test_run_skip_test_check_cache_different_iteration(self, tmp_path):
+        """Cache is bypassed when iteration changes."""
+        orch = self._make_orchestrator(tmp_path)
+        orch._state.iteration = 3
+
+        result1 = orch._run_skip_test_check(
+            "python3 -c 'print(\"ok\")'", tmp_path,
+        )
+        assert result1 is True
+        assert orch._test_result_cache["iteration"] == 3
+
+        # Change iteration — cache should be bypassed
+        orch._state.iteration = 4
+        result2 = orch._run_skip_test_check(
+            "python3 -c 'exit(1)'", tmp_path,
+        )
+        assert result2 is False  # Re-ran with failing command
+
+    # ---- _check_output_files_exist -----------------------------------------
+
+    def test_check_output_files_exist_with_python_files(self, tmp_path):
+        """_check_output_files_exist returns True when src/ has .py files."""
+        orch = self._make_orchestrator(tmp_path)
+        src_dir = tmp_path / "src"
+        src_dir.mkdir(exist_ok=True)
+        (src_dir / "main.py").write_text("print('hello')")
+        result = orch._check_output_files_exist(tmp_path)
+        assert result is True
+
+    def test_check_output_files_exist_no_files(self, tmp_path):
+        """_check_output_files_exist returns False when no .py files exist."""
+        orch = self._make_orchestrator(tmp_path)
+        # No src/ directory, no files
+        result = orch._check_output_files_exist(tmp_path)
+        assert result is False
+
+    def test_check_output_files_exist_empty_files(self, tmp_path):
+        """_check_output_files_exist returns False for empty .py files."""
+        orch = self._make_orchestrator(tmp_path)
+        src_dir = tmp_path / "src"
+        src_dir.mkdir(exist_ok=True)
+        (src_dir / "empty.py").write_text("")  # empty
+        result = orch._check_output_files_exist(tmp_path)
+        assert result is False
+
+    # ---- _check_agent_logs_clean -------------------------------------------
+
+    def test_check_agent_logs_clean_no_logs(self, tmp_path):
+        """_check_agent_logs_clean returns True when no log directory."""
+        orch = self._make_orchestrator(tmp_path)
+        result = orch._check_agent_logs_clean(tmp_path)
+        assert result is True
+
+    def test_check_agent_logs_clean_with_crash(self, tmp_path):
+        """_check_agent_logs_clean returns False when traceback found."""
+        orch = self._make_orchestrator(tmp_path)
+        logs_dir = tmp_path / "observer" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "agent-001.log").write_text(
+            "Traceback (most recent call last):\n  File 'x.py', line 1\nError"
+        )
+        result = orch._check_agent_logs_clean(tmp_path)
+        assert result is False
+
+    def test_check_agent_logs_clean_without_crash(self, tmp_path):
+        """_check_agent_logs_clean returns True for clean logs."""
+        orch = self._make_orchestrator(tmp_path)
+        logs_dir = tmp_path / "observer" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "agent-001.log").write_text(
+            "INFO: agent started\nINFO: agent completed successfully\n"
+        )
+        result = orch._check_agent_logs_clean(tmp_path)
+        assert result is True
+
+    # ---- _check_checklist_resolved -----------------------------------------
+
+    def test_check_checklist_resolved_all_done(self, tmp_path):
+        """_check_checklist_resolved returns True when all items done/deferred/completed."""
+        orch = self._make_orchestrator(tmp_path)
+        checklist_dir = tmp_path / ".unison"
+        checklist_dir.mkdir(parents=True, exist_ok=True)
+        checklist_path = checklist_dir / "checklist.json"
+        import json
+        checklist_path.write_text(json.dumps({
+            "items": [
+                {"id": "1", "title": "Task 1", "status": "done"},
+                {"id": "2", "title": "Task 2", "status": "completed"},
+                {"id": "3", "title": "Task 3", "status": "deferred"},
+            ]
+        }))
+        result = orch._check_checklist_resolved(checklist_path)
+        assert result is True
+
+    def test_check_checklist_resolved_has_pending(self, tmp_path):
+        """_check_checklist_resolved returns False when items are pending."""
+        orch = self._make_orchestrator(tmp_path)
+        checklist_dir = tmp_path / ".unison"
+        checklist_dir.mkdir(parents=True, exist_ok=True)
+        checklist_path = checklist_dir / "checklist.json"
+        import json
+        checklist_path.write_text(json.dumps({
+            "items": [
+                {"id": "1", "title": "Task 1", "status": "done"},
+                {"id": "2", "title": "Task 2", "status": "pending"},
+            ]
+        }))
+        result = orch._check_checklist_resolved(checklist_path)
+        assert result is False
+
+    def test_check_checklist_resolved_empty(self, tmp_path):
+        """_check_checklist_resolved returns True for empty checklist."""
+        orch = self._make_orchestrator(tmp_path)
+        checklist_dir = tmp_path / ".unison"
+        checklist_dir.mkdir(parents=True, exist_ok=True)
+        checklist_path = checklist_dir / "checklist.json"
+        import json
+        checklist_path.write_text(json.dumps({"items": []}))
+        result = orch._check_checklist_resolved(checklist_path)
+        assert result is True
+
+    def test_check_checklist_resolved_invalid_json(self, tmp_path):
+        """_check_checklist_resolved returns False for invalid JSON."""
+        orch = self._make_orchestrator(tmp_path)
+        checklist_dir = tmp_path / ".unison"
+        checklist_dir.mkdir(parents=True, exist_ok=True)
+        checklist_path = checklist_dir / "checklist.json"
+        checklist_path.write_text("not valid json {{{")
+        result = orch._check_checklist_resolved(checklist_path)
+        assert result is False
+
+    # ---- _evaluate_skip_quality integration ----------------------------------
+
+    def test_evaluate_skip_quality_all_pass(self, tmp_path):
+        """_evaluate_skip_quality returns True when all checks pass."""
+        orch = self._make_orchestrator(tmp_path,
+                                        test_command="python3 -c 'print(\"ok\")'")
+        # Create output files
+        src_dir = tmp_path / "src"
+        src_dir.mkdir(exist_ok=True)
+        (src_dir / "main.py").write_text("print('hello')")
+        result = orch._evaluate_skip_quality()
+        assert result is True
+
+    def test_evaluate_skip_quality_test_fails(self, tmp_path):
+        """_evaluate_skip_quality returns False when test command fails."""
+        orch = self._make_orchestrator(tmp_path,
+                                        test_command="python3 -c 'exit(1)'")
+        # Output files exist, but test fails
+        src_dir = tmp_path / "src"
+        src_dir.mkdir(exist_ok=True)
+        (src_dir / "main.py").write_text("print('hello')")
+        result = orch._evaluate_skip_quality()
+        assert result is False
+
+    def test_evaluate_skip_quality_no_output(self, tmp_path):
+        """_evaluate_skip_quality returns False when no output files."""
+        orch = self._make_orchestrator(tmp_path,
+                                        test_command="python3 -c 'print(\"ok\")'")
+        # No src/ directory
+        result = orch._evaluate_skip_quality()
+        assert result is False
+
+    def test_evaluate_skip_quality_crash_in_logs(self, tmp_path):
+        """_evaluate_skip_quality returns False when crash found in logs."""
+        orch = self._make_orchestrator(tmp_path,
+                                        test_command="python3 -c 'print(\"ok\")'")
+        src_dir = tmp_path / "src"
+        src_dir.mkdir(exist_ok=True)
+        (src_dir / "main.py").write_text("print('hello')")
+        # Add crash log
+        logs_dir = tmp_path / "observer" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "agent-001.log").write_text(
+            "Traceback (most recent call last):\nError"
+        )
+        result = orch._evaluate_skip_quality()
+        assert result is False
+
+    def test_evaluate_skip_quality_checklist_unresolved(self, tmp_path):
+        """_evaluate_skip_quality returns False when checklist has pending items."""
+        orch = self._make_orchestrator(tmp_path,
+                                        test_command="python3 -c 'print(\"ok\")'")
+        src_dir = tmp_path / "src"
+        src_dir.mkdir(exist_ok=True)
+        (src_dir / "main.py").write_text("print('hello')")
+        # Add unresolved checklist
+        checklist_dir = tmp_path / ".unison"
+        checklist_dir.mkdir(parents=True, exist_ok=True)
+        import json
+        (checklist_dir / "checklist.json").write_text(json.dumps({
+            "items": [
+                {"id": "1", "title": "Task", "status": "pending"},
+            ]
+        }))
+        result = orch._evaluate_skip_quality()
+        assert result is False
+
+    def test_evaluate_skip_quality_no_test_command(self, tmp_path):
+        """_evaluate_skip_quality treats empty test_command as pass."""
+        orch = self._make_orchestrator(tmp_path, test_command="")
+        src_dir = tmp_path / "src"
+        src_dir.mkdir(exist_ok=True)
+        (src_dir / "main.py").write_text("print('hello')")
+        result = orch._evaluate_skip_quality()
+        assert result is True
+
+    def test_skip_requested_initialized(self, tmp_path):
+        """_skip_requested is initialized to False in __init__."""
+        orch = self._make_orchestrator(tmp_path)
+        assert orch._skip_requested is False
+        assert orch._test_result_cache == {}

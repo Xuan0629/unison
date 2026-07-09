@@ -857,17 +857,24 @@ class Observer:
         if "dev" not in state.phase:
             return
 
-        # Check for 3+ consecutive REQUEST_CHANGES in history
+        # Check for 3+ consecutive REQUEST_CHANGES in history (dev_review ONLY)
+        # P10-015: planning_review and discuss_review transitions are IGNORED.
+        # Only dev_review has concrete output (code + tests) that can be
+        # quality-checked for SKIP eligibility.
         consecutive = 0
         for t in reversed(state.history):
-            if t.to_phase and "review" in t.to_phase and t.verdict == "REQUEST_CHANGES":
+            if t.to_phase == "dev_review" and t.verdict == "REQUEST_CHANGES":
                 consecutive += 1
                 if consecutive >= self._SKIP_CONSECUTIVE_THRESHOLD:
                     break
-            elif t.to_phase and "review" in t.to_phase:
-                # A PASS in review resets the counter — stop scanning
+            elif t.to_phase == "dev_review":
+                # A PASS in dev_review resets the counter — stop scanning
                 consecutive = 0
                 break
+            elif t.to_phase and "review" in t.to_phase and t.to_phase != "dev_review":
+                # Non-dev-review phases (planning_review, discuss_review) are
+                # skipped — they don't count toward or reset the counter.
+                continue
             # Non-review transitions don't reset the counter
         if consecutive < self._SKIP_CONSECUTIVE_THRESHOLD:
             return

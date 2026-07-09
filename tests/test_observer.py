@@ -2209,3 +2209,190 @@ class TestLastIterationGuard:
         state = State(phase="dev_review")
         result = observer._read_max_iterations_for_phase(state)
         assert result is None
+
+
+# ============================================================================
+# P10: Phase 4 — dev_review-only filter (P10-015)
+# ============================================================================
+
+
+class TestDevReviewOnlyFilter:
+    """P10-015: SKIP trigger only counts dev_review transitions, not planning or discuss."""
+
+    def test_planning_review_requests_ignored(self, tmp_path):
+        """3 REQUEST_CHANGES in planning_review should NOT trigger SKIP."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State, Transition
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        (world.root / "prd").mkdir(parents=True, exist_ok=True)
+        (world.root / "prd" / "PRD.md").write_text("content")
+
+        state = State(phase="planning_review", iteration=3)
+        state.history = [
+            Transition(from_phase="planning_active", to_phase="planning_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=1),
+            Transition(from_phase="planning_active", to_phase="planning_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=2),
+            Transition(from_phase="planning_active", to_phase="planning_review",
+                       by="orchestrator", timestamp="2026-01-01T00:02:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=3),
+        ]
+
+        observer = Observer(world=world)
+        observer._check_skip_intervention(state)
+
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert not skip_file.exists(), (
+            "SKIP should NOT trigger for planning_review REQUEST_CHANGES"
+        )
+
+    def test_discuss_review_requests_ignored(self, tmp_path):
+        """3 REQUEST_CHANGES in discuss_review should NOT trigger SKIP."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State, Transition
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        (world.root / "prd").mkdir(parents=True, exist_ok=True)
+        (world.root / "prd" / "PRD.md").write_text("content")
+
+        state = State(phase="discuss_review", iteration=3)
+        state.history = [
+            Transition(from_phase="discuss_active", to_phase="discuss_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=1),
+            Transition(from_phase="discuss_active", to_phase="discuss_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=2),
+            Transition(from_phase="discuss_active", to_phase="discuss_review",
+                       by="orchestrator", timestamp="2026-01-01T00:02:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=3),
+        ]
+
+        observer = Observer(world=world)
+        observer._check_skip_intervention(state)
+
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert not skip_file.exists(), (
+            "SKIP should NOT trigger for discuss_review REQUEST_CHANGES"
+        )
+
+    def test_mixed_review_phases_only_dev_counts(self, tmp_path):
+        """Only dev_review REQUEST_CHANGES count toward threshold; planning/discuss are skipped."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State, Transition
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        (world.root / "prd").mkdir(parents=True, exist_ok=True)
+        (world.root / "prd" / "PRD.md").write_text("content")
+
+        state = State(phase="dev_review", iteration=4)
+        state.history = [
+            Transition(from_phase="planning_active", to_phase="planning_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=1),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=2),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:02:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=3),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:03:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=4),
+        ]
+
+        observer = Observer(world=world)
+        observer._check_skip_intervention(state)
+
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert skip_file.exists(), (
+            "3 consecutive dev_review REQUEST_CHANGES should trigger SKIP "
+            "even with planning_review mixed in"
+        )
+
+    def test_discuss_review_does_not_reset_counter(self, tmp_path):
+        """discuss_review transitions should NOT reset the dev_review consecutive counter."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State, Transition
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        (world.root / "prd").mkdir(parents=True, exist_ok=True)
+        (world.root / "prd" / "PRD.md").write_text("content")
+
+        state = State(phase="dev_review", iteration=4)
+        # discuss_review REQUEST_CHANGES between dev_review should not reset counter
+        state.history = [
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=1),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=2),
+            Transition(from_phase="discuss_active", to_phase="discuss_review",
+                       by="orchestrator", timestamp="2026-01-01T00:02:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=3),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:03:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=4),
+        ]
+
+        observer = Observer(world=world)
+        observer._check_skip_intervention(state)
+
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert skip_file.exists(), (
+            "discuss_review should not reset dev_review consecutive count — "
+            "3 dev_review REQUEST_CHANGES still triggers SKIP"
+        )
+
+    def test_planning_pass_does_not_affect_dev_counter(self, tmp_path):
+        """PASS in planning_review should NOT reset the dev_review consecutive count."""
+        from unison.world import World
+        from unison.observer import Observer
+        from unison.state import State, Transition
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        (world.root / "prd").mkdir(parents=True, exist_ok=True)
+        (world.root / "prd" / "PRD.md").write_text("content")
+
+        state = State(phase="dev_review", iteration=4)
+        state.history = [
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:00:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=1),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:01:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=2),
+            # Planning review PASS — shouldn't reset dev counter
+            Transition(from_phase="planning_active", to_phase="planning_review",
+                       by="orchestrator", timestamp="2026-01-01T00:02:00Z",
+                       verdict="PASS", iter_n=1),
+            Transition(from_phase="dev_active", to_phase="dev_review",
+                       by="orchestrator", timestamp="2026-01-01T00:03:00Z",
+                       verdict="REQUEST_CHANGES", iter_n=3),
+        ]
+
+        observer = Observer(world=world)
+        observer._check_skip_intervention(state)
+
+        skip_file = world.root / ".unison" / "control" / "skip.json"
+        assert skip_file.exists(), (
+            "planning_review PASS should not reset dev_review consecutive count"
+        )

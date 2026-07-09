@@ -82,6 +82,9 @@ class Orchestrator:
         self._halt_category: str = "stage"  # "stage" or "external" (P0.5)
         self._in_chain: bool = False        # True when running inside _run_chain (P0.6)
         self._chain_depth: int = 0          # recursion guard for nested chains (P0.3)
+        # P10: SKIP control — Observer writes skip.json; orchestrator validates
+        self._skip_requested: bool = False
+        self._test_result_cache: dict = {}  # {timestamp, exit_code} for skip quality gate
 
         # -- cooperative cancellation (DAG mode only) ---------------------------
         self._dag_cancel_event: threading.Event | None = None
@@ -1420,18 +1423,29 @@ class Orchestrator:
             # P10: Convergence has priority over SKIP — if the reviewer is
             # flagging the same findings across iterations, the loop is
             # genuinely stuck and SKIP would mask a real problem.
-            if getattr(self, "_skip_requested", False):
+            # P10: Quality gate — heuristic checks must pass before honoring.
+            if self._skip_requested:
+                import logging
+                _log = logging.getLogger(__name__)
                 self._skip_requested = False
                 if (iteration >= 2 and verdict == "REQUEST_CHANGES"
                         and self._check_convergence(iteration, review_phase)):
-                    logger.warning(
+                    _log.warning(
                         "convergence detected — suppressing SKIP "
                         "(convergence is the stronger signal)"
                     )
                     # Don't force PASS; let the normal convergence check
-                    # below (line 1429) halt the pipeline.
-                else:
+                    # below (line 1437) halt the pipeline.
+                elif self._evaluate_skip_quality():
+                    _log.info(
+                        "SKIP honored — quality gate passed, forcing PASS"
+                    )
                     verdict = "PASS"
+                else:
+                    _log.warning(
+                        "SKIP rejected — quality gate failed, continuing loop"
+                    )
+                    # Don't force PASS; continue loop normally
 
             # A2: Record reviewer stats for sycophancy tracking
             if verdict:
@@ -2643,6 +2657,226 @@ class Orchestrator:
                     pass
                 actions.append(action)
         return actions
+
+    def _evaluate_skip_quality(self) -> bool:
+        """P10: Quality gate for SKIP consumption.
+
+        Runs heuristic checks before honoring a SKIP signal written
+        by the Observer.  All checks must pass for SKIP to be honored.
+
+        Checks:
+          1. Test command passes (exit code 0, cached 60s)
+          2. Output files exist (non-empty .py files in recent diff)
+          3. No crash in agent logs (no traceback markers)
+          4. Checklist resolved (if checklist.json exists)
+
+        Returns:
+            True if all checks pass — SKIP should be honored.
+            False if any check fails — SKIP rejected (loop continues).
+        """
+        import logging
+        _log = logging.getLogger(__name__)
+
+        root = self.spec.world.root
+        failures: list[str] = []
+
+        # ---- 1. Test command check -----------------------------------------
+        test_cmd = self.spec.project.test_command
+        if test_cmd:
+            result = self._run_skip_test_check(test_cmd, root)
+            if not result:
+                failures.append("test_command failed")
+        # (If test_cmd is empty, treat as pass)
+
+        # ---- 2. Output files exist -----------------------------------------
+        if not self._check_output_files_exist(root):
+            failures.append("no output files found in working tree")
+
+        # ---- 3. No crash in agent logs -------------------------------------
+        if not self._check_agent_logs_clean(root):
+            failures.append("crash/traceback detected in agent logs")
+
+        # ---- 4. Checklist resolved (if exists) -----------------------------
+        checklist_path = root / ".unison" / "checklist.json"
+        if checklist_path.exists():
+            if not self._check_checklist_resolved(checklist_path):
+                failures.append("checklist has unresolved items")
+
+        if failures:
+            _log.warning(
+                "SKIP rejected — quality gate failures: %s",
+                ", ".join(failures),
+            )
+            return False
+
+        _log.info(
+            "SKIP honored — all quality checks passed "
+            "(tests=%s, output=%s, logs=%s, checklist=%s)",
+            "N/A" if not test_cmd else "passed",
+            "present",
+            "clean",
+            "resolved" if checklist_path.exists() else "N/A",
+        )
+        return True
+
+    def _run_skip_test_check(self, test_cmd: str, root: Path) -> bool:
+        """P10: Run test_command via subprocess for SKIP quality gate.
+
+        Caches result for 60s to avoid re-running tests on consecutive
+        skip checks within the same iteration.
+        """
+        import logging
+        import time as time_mod
+        _log = logging.getLogger(__name__)
+
+        # Check cache (TTL: 60s, keyed by current iteration)
+        cache_key = self._state.iteration
+        cached = self._test_result_cache.get("iteration")
+        cached_ts = self._test_result_cache.get("timestamp", 0)
+        if (cached == cache_key
+                and time_mod.monotonic() - cached_ts < 60):
+            return bool(self._test_result_cache.get("exit_code") == 0)
+
+        # Run test command
+        try:
+            proc = subprocess.run(
+                test_cmd,
+                shell=True,
+                cwd=str(root),
+                capture_output=True,
+                timeout=120,
+            )
+            passed = proc.returncode == 0
+        except subprocess.TimeoutExpired:
+            _log.warning("SKIP quality gate: test command timed out (120s)")
+            passed = False
+        except (OSError, FileNotFoundError) as exc:
+            _log.warning("SKIP quality gate: test command error: %s", exc)
+            passed = False
+
+        # Cache result
+        self._test_result_cache = {
+            "iteration": cache_key,
+            "timestamp": time_mod.monotonic(),
+            "exit_code": proc.returncode if "proc" in dir() else -1,
+        }
+        return passed
+
+    def _check_output_files_exist(self, root: Path) -> bool:
+        """P10: Verify output files exist in the working tree.
+
+        Checks git diff for recently modified .py files and verifies
+        at least one non-empty source file exists.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", "HEAD~1"],
+                cwd=str(root),
+                capture_output=True, timeout=10, check=False,
+            )
+            if result.returncode != 0:
+                # Try against initial commit
+                result = subprocess.run(
+                    ["git", "diff", "--name-only", "--cached"],
+                    cwd=str(root),
+                    capture_output=True, timeout=10, check=False,
+                )
+            changed = result.stdout.decode().strip()
+            if not changed:
+                # Fallback: check if any .py files exist in src/
+                src_dir = root / "src"
+                if src_dir.exists():
+                    py_files = list(src_dir.rglob("*.py"))
+                    return any(f.stat().st_size > 0 for f in py_files)
+                return False
+            # Verify at least one changed .py file is non-empty
+            for path_str in changed.splitlines():
+                p = root / path_str.strip()
+                if p.exists() and p.suffix == ".py" and p.stat().st_size > 0:
+                    return True
+            return False
+        except (OSError, FileNotFoundError):
+            # git not available — best-effort: check for src/ dir
+            src_dir = root / "src"
+            if not src_dir.exists():
+                return False
+            py_files = list(src_dir.rglob("*.py"))
+            return any(f.stat().st_size > 0 for f in py_files)
+
+    def _check_agent_logs_clean(self, root: Path) -> bool:
+        """P10: Scan latest agent logs for crash/traceback markers.
+
+        Returns False if Traceback markers are found in recent logs.
+        """
+        import logging
+        _log = logging.getLogger(__name__)
+
+        logs_dir = root / "observer" / "logs"
+        if not logs_dir.exists():
+            return True  # No logs → no crashes
+
+        try:
+            log_files = sorted(
+                logs_dir.glob("*.log"),
+                key=lambda p: p.stat().st_mtime, reverse=True,
+            )
+        except OSError:
+            return True
+
+        # Check last 5 log files for traceback markers
+        crash_markers = [
+            "Traceback (most recent call last)",
+            "panic:",
+            "SIGSEGV",
+            "Fatal Python error",
+        ]
+        for log_file in log_files[:5]:
+            try:
+                content = log_file.read_text(encoding="utf-8", errors="replace")
+                for marker in crash_markers:
+                    if marker in content:
+                        _log.warning(
+                            "SKIP quality gate: crash marker %r found in %s",
+                            marker, log_file.name,
+                        )
+                        return False
+            except OSError:
+                continue
+
+        return True
+
+    def _check_checklist_resolved(self, checklist_path: Path) -> bool:
+        """P10: Check that all checklist items are resolved.
+
+        Returns True if all items have status 'done' or 'deferred'.
+        """
+        import json
+        import logging
+        _log = logging.getLogger(__name__)
+
+        try:
+            data = json.loads(checklist_path.read_text(encoding="utf-8"))
+            items = data.get("items", [])
+            if not items:
+                return True
+            unresolved = [
+                item.get("title", item.get("id", "?"))
+                for item in items
+                if item.get("status") not in ("done", "deferred", "completed")
+            ]
+            if unresolved:
+                _log.warning(
+                    "SKIP quality gate: %d unresolved checklist items: %s",
+                    len(unresolved),
+                    ", ".join(unresolved[:5]),
+                )
+                return False
+            return True
+        except (json.JSONDecodeError, OSError) as exc:
+            _log.warning(
+                "SKIP quality gate: could not parse checklist: %s", exc,
+            )
+            return False
 
     # === architect-loop pattern: freeze acceptance criteria ===
     def _freeze_acceptance_criteria(self) -> None:
