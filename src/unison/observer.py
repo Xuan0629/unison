@@ -26,6 +26,56 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
+# P10: Message templates (en / zh)
+# ============================================================================
+
+_MESSAGES: dict[str, dict[str, str]] = {
+    # ---- Pipeline lifecycle ----
+    "pipeline_start": {
+        "en": "🔵 {pipeline} started | {mode} | {agent_count} agents",
+        "zh": "🔵 {pipeline} — 已启动 | {mode} | {agent_count} 个 agent",
+    },
+    "pipeline_done": {
+        "en": "✅ {pipeline} complete — {commits} commits, {tests} tests",
+        "zh": "✅ {pipeline} 完成 — {commits} 次提交, {tests} 个测试",
+    },
+    # ---- Phase lifecycle ----
+    "phase_done": {
+        "en": "🟢 {phase} passed ({iteration} iters) | verdict: {verdict}{commits_detail}",
+        "zh": "🟢 {phase} 阶段通过 ({iteration} 轮) | 判定: {verdict}{commits_detail}",
+    },
+    "phase_changes": {
+        "en": "🟡 {phase} REQUEST_CHANGES ({iteration} iters) | auto-advancing...",
+        "zh": "🟡 {phase} 要求修改 ({iteration} 轮) | 自动推进中...",
+    },
+    # ---- Stalled / halted ----
+    "stalled": {
+        "en": "⚠️ Session stalled — no activity for {elapsed}s in phase {phase}",
+        "zh": "⚠️ 会话停滞 — {phase} 阶段已 {elapsed} 秒无活动",
+    },
+    "halted": {
+        "en": "🔴 Pipeline halted: {reason} | phase: {phase} iter: {iteration}",
+        "zh": "🔴 管道终止: {reason} | 阶段: {phase} 轮次: {iteration}",
+    },
+    # ---- Observer banner ----
+    "observer_banner": {
+        "en": "📡 Unison Observer",
+        "zh": "📡 Unison 观察者",
+    },
+}
+
+
+def _msg(key: str, language: str, **kwargs) -> str:
+    """Look up message template by *key* and *language*, format with kwargs.
+
+    Falls back to 'en' template if the requested language is missing a key.
+    """
+    templates = _MESSAGES.get(key, {})
+    template = templates.get(language) or templates.get("en", key)
+    return template.format(**kwargs)
+
+
+# ============================================================================
 # FileEvent
 # ============================================================================
 
@@ -642,16 +692,18 @@ class Observer:
                 # Process phase event directly — no need to read state.json
                 phase = bus_event.get("phase", "")
                 if not self._check_liveness_from_event(bus_event):
-                    self._write_notification(Notification(
-                        timestamp=datetime.now(timezone.utc).isoformat(),
+                    lang = self.observer_language
+                    body = _msg("stalled", lang,
+                                elapsed=self.stall_threshold_seconds,
+                                phase=phase)
+                    self._emit_event(
+                        event_type="stalled",
                         phase=phase,
                         severity="warn",
-                        title="Session stalled (event bus)",
-                        body=(
-                            f"No activity for {self.stall_threshold_seconds}s+ "
-                            f"in phase {phase}"
-                        ),
-                    ))
+                        title=body,
+                        body=body,
+                        summary=body,
+                    )
                 continue
             except queue.Empty:
                 pass
@@ -665,16 +717,18 @@ class Observer:
                     try:
                         state = State.atomic_read(self.world.state_file)
                         if not self.check_liveness(state):
-                            self._write_notification(Notification(
-                                timestamp=datetime.now(timezone.utc).isoformat(),
+                            lang = self.observer_language
+                            body = _msg("stalled", lang,
+                                        elapsed=self.stall_threshold_seconds,
+                                        phase=state.phase)
+                            self._emit_event(
+                                event_type="stalled",
                                 phase=state.phase,
                                 severity="warn",
-                                title="Session stalled (timed liveness check)",
-                                body=(
-                                    f"No activity for {self.stall_threshold_seconds}s+ "
-                                    f"in phase {state.phase}"
-                                ),
-                            ))
+                                title=body,
+                                body=body,
+                                summary=body,
+                            )
                     except Exception:
                         pass
                 continue
@@ -695,16 +749,18 @@ class Observer:
 
                 state = State.atomic_read(self.world.state_file)
                 if not self.check_liveness(state):
-                    self._write_notification(Notification(
-                        timestamp=datetime.now(timezone.utc).isoformat(),
+                    lang = self.observer_language
+                    body = _msg("stalled", lang,
+                                elapsed=self.stall_threshold_seconds,
+                                phase=state.phase)
+                    self._emit_event(
+                        event_type="stalled",
                         phase=state.phase,
                         severity="warn",
-                        title="Session stalled",
-                        body=(
-                            f"No activity for {self.stall_threshold_seconds}s+ "
-                            f"in phase {state.phase}"
-                        ),
-                    ))
+                        title=body,
+                        body=body,
+                        summary=body,
+                    )
 
             # 处理 notifications.jsonl 变化
             if event.path.name == "notifications.jsonl":
@@ -745,6 +801,37 @@ class Observer:
         except Exception:
             pass  # Non-fatal — use defaults
 
+    def _emit_event(
+        self,
+        event_type: str,
+        phase: str = "",
+        severity: str = "info",
+        title: str = "",
+        body: str = "",
+        iteration: int = 0,
+        verdict: str = "",
+        summary: str = "",
+    ) -> None:
+        """P10: Emit a structured pipeline event to notifications.jsonl.
+
+        Constructs a Notification with all structured fields and writes it
+        via :meth:`_write_notification`.
+        """
+        notif = Notification(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            phase=phase,
+            severity=severity,  # type: ignore[arg-type]
+            title=title,
+            body=body,
+            event_type=event_type,
+            pipeline=self.pipeline_name,
+            iteration=iteration,
+            verdict=verdict,
+            summary=summary,
+            language=self.observer_language,
+        )
+        self._write_notification(notif)
+
     def _on_phase_event(self, event_data: dict) -> None:
         """Callback for event bus ``"phase"`` topic.
 
@@ -752,11 +839,79 @@ class Observer:
         event into the internal queue for processing by the main loop.
         This is intentionally non-blocking — the main loop drains the
         queue at its own pace.
+
+        P10: Also emits structured pipeline events (pipeline_start,
+        phase_done, pipeline_done, halted) directly — the event bus
+        carries enough context that we don't need to wait for a
+        state.json read.
         """
         try:
             self._event_queue.put_nowait(event_data)
         except queue.Full:
             pass  # drop event if queue is full (shouldn't happen)
+
+        # ---- P10: Emit structured events from event bus data ----
+        event_kind = event_data.get("event", "")
+        phase = event_data.get("phase", "")
+        iteration = event_data.get("iteration", 0)
+        verdict = event_data.get("last_verdict", "")
+        note = event_data.get("note", "")
+        halt_signal = event_data.get("halt_signal", False)
+        halt_reason = event_data.get("halt_reason", "")
+        lang = self.observer_language
+
+        if event_kind == "pipeline_start":
+            agent_count = event_data.get("agent_count", 0)
+            mode = event_data.get("mode", "")
+            self._emit_event(
+                event_type="pipeline_start",
+                severity="info",
+                title=_msg("pipeline_start", lang,
+                          pipeline=self.pipeline_name, mode=mode,
+                          agent_count=agent_count),
+                body=f"Pipeline {self.pipeline_name} started in {mode} mode",
+            )
+        elif event_kind == "phase_done":
+            commits = event_data.get("commits", 0)
+            commits_detail = f" | {commits} commits" if commits else ""
+            body = _msg("phase_done", lang,
+                        phase=phase, iteration=iteration,
+                        verdict=verdict or "PASS",
+                        commits_detail=commits_detail)
+            self._emit_event(
+                event_type="phase_done",
+                phase=phase,
+                severity="info",
+                title=body,
+                body=body,
+                iteration=iteration,
+                verdict=verdict or "PASS",
+                summary=body,
+            )
+        elif event_kind == "pipeline_done":
+            commits = event_data.get("commits", 0)
+            tests = event_data.get("tests", 0)
+            self._emit_event(
+                event_type="pipeline_done",
+                severity="info",
+                title=_msg("pipeline_done", lang,
+                          pipeline=self.pipeline_name,
+                          commits=commits, tests=tests),
+                body=f"Pipeline {self.pipeline_name} complete",
+            )
+        elif event_kind == "halted":
+            reason = halt_reason or "unknown"
+            body = _msg("halted", lang,
+                        reason=reason, phase=phase, iteration=iteration)
+            self._emit_event(
+                event_type="halted",
+                phase=phase,
+                severity="error",
+                title=body,
+                body=body,
+                iteration=iteration,
+                summary=body,
+            )
 
     def _check_liveness_from_event(self, event_data: dict) -> bool:
         """Check liveness from an event bus event (no state.json read needed).
@@ -972,16 +1127,18 @@ class Observer:
         if self.world.state_file.exists():
             state = State.atomic_read(self.world.state_file)
             if not self.check_liveness(state):
-                self._write_notification(Notification(
-                    timestamp=datetime.now(timezone.utc).isoformat(),
+                lang = self.observer_language
+                body = _msg("stalled", lang,
+                            elapsed=self.stall_threshold_seconds,
+                            phase=state.phase)
+                self._emit_event(
+                    event_type="stalled",
                     phase=state.phase,
                     severity="warn",
-                    title="Session stalled (post-overflow rescan)",
-                    body=(
-                        f"No activity for {self.stall_threshold_seconds}s+ "
-                        f"in phase {state.phase}"
-                    ),
-                ))
+                    title=body,
+                    body=body,
+                    summary=body,
+                )
 
         # 检查 notifications.jsonl
         if self.world.notifications_file.exists():

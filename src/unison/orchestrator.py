@@ -173,17 +173,22 @@ class Orchestrator:
         self._state.halt_signal = True
         self._state.halt_reason = reason
         self._halt_category = category
-        self._publish_phase_event("halt", note=reason)
+        self._publish_phase_event("halt", note=reason, event="halted")
 
-    def _publish_phase_event(self, phase: str, note: str = "") -> None:
+    def _publish_phase_event(self, phase: str, note: str = "",
+                             event: str = "") -> None:
         """Publish a phase-transition event to the internal event bus.
 
         Used by Observer and SSE to get real-time updates instead of
         polling state.json / checkpoints.
+
+        P10: Adds ``event`` field for structured event types
+        (pipeline_start, phase_done, pipeline_done, halted).
         """
         try:
             bus = get_event_bus()
             bus.publish("phase", {
+                "event": event,
                 "phase": phase,
                 "iteration": self._state.iteration,
                 "halt_signal": self._state.halt_signal,
@@ -191,9 +196,26 @@ class Orchestrator:
                 "last_verdict": self._state.last_review_verdict,
                 "last_commit": self._state.last_dev_commit,
                 "note": note,
+                "mode": self.spec.mode or "code-dev",
+                "agent_count": len(self.spec.agents),
+                "commits": self._count_commits(),
             })
         except Exception:
             pass  # event bus failure is non-fatal
+
+    def _count_commits(self) -> int:
+        """P10: Count commits in the current branch (for pipeline_done summary)."""
+        try:
+            result = subprocess.run(
+                ["git", "rev-list", "--count", "HEAD"],
+                cwd=str(self.spec.world.root),
+                capture_output=True, timeout=10, check=False,
+            )
+            if result.returncode == 0:
+                return int(result.stdout.decode().strip())
+        except Exception:
+            pass
+        return 0
 
     def pre_invoke_cleanup(self) -> None:
         """Run ``git reset --hard HEAD && git clean -fd``.
@@ -333,6 +355,12 @@ class Orchestrator:
         """
         mode = self.spec.mode or "code-dev"
 
+        # P10: Emit pipeline_start event
+        self._publish_phase_event(
+            "init", note=f"pipeline {self.spec.pipeline_name} starting",
+            event="pipeline_start",
+        )
+
         # MoA mode uses a dedicated N-round analyze→synthesize loop
         # driven by MoaConfig.rounds rather than a fixed PhaseRouter
         # sequence (which always emits 4 phases regardless of rounds).
@@ -383,9 +411,13 @@ class Orchestrator:
             # "done" transition and review archiving — the chain emits
             # a single terminal done/archive after all stages complete.
             if not self._in_chain:
+                # P10: Emit pipeline_done before the terminal "done" transition
+                self._publish_phase_event(
+                    "done", note="pipeline complete",
+                    event="pipeline_done",
+                )
                 self._state.transition("done", "orchestrator",
                                        note="pipeline complete")
-                self._publish_phase_event("done", note="pipeline complete")
                 self._archive_reviews()
                 self._save_checkpoint()
 
@@ -480,9 +512,13 @@ class Orchestrator:
             # P0.6: When running inside _run_chain(), suppress per-stage
             # "done" transition and review archiving.
             if not self._in_chain:
+                # P10: Emit pipeline_done before the terminal transition
+                self._publish_phase_event(
+                    "done", note="moa pipeline complete",
+                    event="pipeline_done",
+                )
                 self._state.transition("done", "orchestrator",
                                        note="moa pipeline complete")
-                self._publish_phase_event("done", note="moa pipeline complete")
                 self._archive_reviews()
                 self._save_checkpoint()
 
@@ -937,9 +973,13 @@ class Orchestrator:
             # P0.6: Chain complete — emit one terminal "done" transition
             # and archive reviews once for the entire chain.
             if not self._state.halt_signal:
+                # P10: Emit pipeline_done before the terminal transition
+                self._publish_phase_event(
+                    "done", note="chain complete",
+                    event="pipeline_done",
+                )
                 self._state.transition("done", "orchestrator",
                                        note="chain complete")
-                self._publish_phase_event("done", note="chain complete")
                 self._archive_reviews()
                 self._save_checkpoint()
         finally:
@@ -1418,6 +1458,11 @@ class Orchestrator:
 
             if verdict == "PASS":
                 # Exit loop — review approved
+                # P10: Emit phase_done event
+                self._publish_phase_event(
+                    review_phase, note=f"{review_of} PASS after {iteration} iters",
+                    event="phase_done",
+                )
                 return
 
             if verdict is None:
