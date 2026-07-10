@@ -8,6 +8,7 @@ Architecture reference: ARCHITECTURE.md §3.
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import os
 import shlex
