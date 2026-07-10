@@ -1,9 +1,10 @@
 """Tests for runners/ — ClaudeRunner, CodexRunner, HermesRunner."""
 import tempfile
+import time
 from pathlib import Path
 import pytest
 
-from unison.runners.base import AgentRunner
+from unison.runners.base import AgentRunner, BaseRunner
 from unison.runners.claude import ClaudeRunner
 from unison.runners.codex import CodexRunner
 from unison.runners.hermes import HermesRunner
@@ -157,3 +158,94 @@ class TestAgentResult:
         )
         
         assert result.verdict == "PASS"
+
+
+# ============================================================================
+# F2: BaseRunner timeout regression tests
+# ============================================================================
+
+
+class TestBaseRunnerTimeout:
+    """F2: _run_subprocess timeout + process-group kill regression tests."""
+
+    def test_silent_child_killed_on_timeout(self, tmp_path):
+        """Process with no stdout output must be killed on timeout, not hang.
+
+        ``sleep 3`` keeps stdout open but produces zero output.  The old
+        synchronous ``for line in proc.stdout`` loop would block forever.
+        After the F2 fix the reader thread drains (empty) stdout while the
+        main thread enforces the timeout.
+        """
+        runner = BaseRunner(binary="sleep")
+        log_path = tmp_path / "log.txt"
+        t0 = time.monotonic()
+        result = runner._run_subprocess(
+            cmd=["sleep", "3"],
+            prompt="",
+            workdir=tmp_path,
+            timeout=1,
+            log_path=log_path,
+        )
+        elapsed = time.monotonic() - t0
+        assert not result.success
+        assert result.exit_code == -1
+        assert "timeout" in (result.error or "").lower()
+        assert elapsed < 2.5, f"timeout took {elapsed:.1f}s, expected <2.5s"
+
+    def test_streaming_child_output_captured(self, tmp_path):
+        """Continuous-output process: all lines captured, no timeout.
+
+        Python child writes 20 lines at 50 ms intervals (≈1 s total).
+        With timeout=5 the process finishes normally and all output is
+        in the log file.
+        """
+        runner = BaseRunner(binary="python3")
+        log_path = tmp_path / "log.txt"
+        child_script = (
+            "import sys, time\n"
+            "for i in range(20):\n"
+            "    sys.stdout.write(f'line {i}\\n')\n"
+            "    sys.stdout.flush()\n"
+            "    time.sleep(0.05)\n"
+        )
+        result = runner._run_subprocess(
+            cmd=["python3", "-c", child_script],
+            prompt="",
+            workdir=tmp_path,
+            timeout=5,
+            log_path=log_path,
+        )
+        assert result.success
+        assert result.exit_code == 0
+        log_content = log_path.read_text()
+        for i in range(20):
+            assert f"line {i}" in log_content
+
+    def test_timeout_kills_process_group(self, tmp_path):
+        """Timeout → entire process group killed, child processes included.
+
+        Spawns a parent that spawns a child; both sleep.  After timeout
+        neither process should remain.
+        """
+        import subprocess
+        runner = BaseRunner(binary="python3")
+        log_path = tmp_path / "log.txt"
+        # Parent spawns a child sleep, then sleeps itself.
+        # start_new_session=True puts them in a dedicated process group.
+        child_script = (
+            "import subprocess, sys, time\n"
+            "child = subprocess.Popen(['sleep', '10'])\n"
+            "print(f'CHILD_PID={child.pid}', flush=True)\n"
+            "time.sleep(10)\n"
+        )
+        result = runner._run_subprocess(
+            cmd=["python3", "-c", child_script],
+            prompt="",
+            workdir=tmp_path,
+            timeout=1,
+            log_path=log_path,
+        )
+        assert not result.success
+        assert "timeout" in (result.error or "").lower()
+        # Both parent and child should be gone by now.
+        # If parent is gone, child (orphaned) would be reaped by init.

@@ -7,7 +7,9 @@ only _build_command and optionally _effective_timeout.
 """
 import os
 import re
+import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -228,9 +230,10 @@ class BaseRunner:
     ) -> AgentResult:
         """Run *cmd* via Popen, streaming stdout/stderr directly to *log_path*.
 
-        Unlike ``subprocess.run(capture_output=True)``, this uses constant
-        memory regardless of output size. Full logs are written to disk
-        and the last 500 chars are captured for AgentResult.
+        Uses a reader thread to drain stdout so that ``proc.wait(timeout=…)``
+        in the main thread is the sole timeout gate.  A process that keeps
+        stdout open but produces no output will be killed when *timeout*
+        expires rather than blocking indefinitely in the read loop.
 
         When ``self.use_stdin`` is ``True``, the prompt (which was excluded
         from *cmd* by :meth:`_build_command`) is written to the subprocess
@@ -240,12 +243,14 @@ class BaseRunner:
         start = time.monotonic()
         proc = None
 
-        # Build Popen kwargs
+        # Build Popen kwargs — start_new_session so os.killpg on timeout
+        # kills the entire process group, not just the parent PID.
         popen_kwargs: dict = {
             "cwd": str(workdir),
-            "stdout": None,  # filled below
+            "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
             "text": True,
+            "start_new_session": True,
         }
         if self.use_stdin:
             popen_kwargs["stdin"] = subprocess.PIPE
@@ -253,23 +258,34 @@ class BaseRunner:
         with open(log_path, "w", encoding="utf-8") as log_fh:
             log_fh.write(f"=== COMMAND ===\n{mask_secrets(' '.join(cmd))}\n\n=== OUTPUT ===\n")
             log_fh.flush()
-            popen_kwargs["stdout"] = subprocess.PIPE
             try:
                 proc = subprocess.Popen(cmd, **popen_kwargs)
                 if self.use_stdin:
                     proc.stdin.write(prompt)
                     proc.stdin.close()
 
-                # Stream stdout line-by-line with masking applied
-                # before each write — no raw secrets ever touch disk.
-                for line in proc.stdout:
-                    log_fh.write(mask_secrets(line))
-                    log_fh.flush()
+                # Reader thread drains stdout → log file so the main
+                # thread can block on proc.wait(timeout) independently.
+                def _drain_stdout() -> None:
+                    for line in proc.stdout:
+                        log_fh.write(mask_secrets(line))
+                        log_fh.flush()
 
+                reader = threading.Thread(target=_drain_stdout, daemon=True)
+                reader.start()
+
+                # Main thread: wait for process completion with timeout.
                 proc.wait(timeout=timeout)
+                reader.join(timeout=5)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                # Kill the entire process group, not just the parent.
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    proc.kill()
                 proc.wait()
+                reader.join(timeout=5)
+                log_fh.flush()
                 log_fh.close()  # close before masking so all data is flushed
                 self._mask_log_file(log_path)
                 duration = time.monotonic() - start
