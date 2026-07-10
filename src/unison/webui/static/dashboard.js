@@ -145,7 +145,13 @@ var _lang   = localStorage.getItem("unison-lang")  || "en";
 var _theme  = localStorage.getItem("unison-theme") || "dark";
 var _prev   = null;   // last /api/state snapshot
 var _pollId = null;   // setInterval handle
+var _sse = null;
+var _projectId = localStorage.getItem("unison-project") || "";
 var CIRC    = 314.16; // SVG ring circumference (2 * PI * 50)
+
+function apiUrl(path) {
+  return path + (_projectId ? "?project=" + encodeURIComponent(_projectId) : "");
+}
 
 // ======================================================================
 // 3. HELPERS
@@ -308,9 +314,46 @@ function updateStaticLabels() {
 
 var _sseActive = false;
 
+function loadProjects() {
+  return fetch("/api/projects")
+    .then(function(r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      var projects = data.projects || [];
+      if (!_projectId || !projects.some(function(p) { return p.id === _projectId; })) {
+        _projectId = data.default || (projects[0] && projects[0].id) || "";
+      }
+      var select = document.getElementById("project-select");
+      select.innerHTML = projects.map(function(p) {
+        var label = p.name + " — " + p.path;
+        return '<option value="' + esc(p.id) + '"' + (p.id === _projectId ? ' selected' : '') + '>' + esc(label) + '</option>';
+      }).join("");
+      if (_projectId) localStorage.setItem("unison-project", _projectId);
+    });
+}
+
+function selectProject(projectId) {
+  if (!projectId || projectId === _projectId) return;
+  _projectId = projectId;
+  localStorage.setItem("unison-project", projectId);
+  _prev = null;
+  if (_sse) _sse.close();
+  if (_pollId) {
+    clearInterval(_pollId);
+    _pollId = null;
+  }
+  if (!startSSE()) {
+    poll();
+    _pollId = setInterval(poll, 3000);
+  }
+}
+
 function startSSE() {
   if (!window.EventSource) return false;
-  var sse = new EventSource('/api/events');
+  var sse = new EventSource(apiUrl('/api/events'));
+  _sse = sse;
   sse.onmessage = function(e) {
     var state = JSON.parse(e.data);
     if (!_prev) {
@@ -333,7 +376,7 @@ function startSSE() {
 }
 
 function poll() {
-  fetch("/api/state")
+  fetch(apiUrl("/api/state"))
     .then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
@@ -355,7 +398,7 @@ function poll() {
 // ======================================================================
 
 function sendControl(action) {
-  fetch("/api/control", {
+  fetch(apiUrl("/api/control"), {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({action: action})
@@ -994,7 +1037,7 @@ function restoreSectionStates() {
 // ======================================================================
 
 function exportState() {
-  fetch("/api/state")
+  fetch(apiUrl("/api/state"))
     .then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
@@ -1074,19 +1117,21 @@ function patchHistory(s) {
   restoreTokenSettings();
   restoreSectionStates();
   patchHistory(_prev || {transitions: []});
-  // Try SSE push first, fall back to 3 s polling
-  if (!startSSE()) {
+  loadProjects().then(function() {
+    if (!startSSE()) {
+      poll();
+      _pollId = setInterval(poll, 3000);
+    } else {
+      setTimeout(function () {
+        if (_prev === null) {
+          _sseActive = false;
+          poll();
+          _pollId = setInterval(poll, 3000);
+        }
+      }, 5000);
+    }
+  }).catch(function() {
     poll();
     _pollId = setInterval(poll, 3000);
-  } else {
-    // If SSE connects but never delivers data within 5 s, fall back to polling.
-    // This handles proxy / network setups where EventSource opens but buffers data.
-    setTimeout(function () {
-      if (_prev === null) {
-        _sseActive = false;  // stop SSE from double-initialising on error
-        poll();
-        _pollId = setInterval(poll, 3000);
-      }
-    }, 5000);
-  }
+  });
 })();

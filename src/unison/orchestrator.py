@@ -3426,7 +3426,25 @@ class Orchestrator:
         try:
             s.connect(("127.0.0.1", cfg.port))
             s.close()
-            return  # already running
+            # A shared WebUI may already be serving another project. Register
+            # this project instead of silently binding it to the first one.
+            try:
+                from unison.webui import register_project
+                registered = register_project(self.spec.world.root, port=cfg.port)
+                if not registered:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "WebUI port %s is occupied, but project registration failed",
+                        cfg.port,
+                    )
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "WebUI port %s is occupied; could not register project",
+                    cfg.port,
+                    exc_info=True,
+                )
+            return
         except (socket.timeout, ConnectionRefusedError, OSError):
             pass
         finally:

@@ -15,6 +15,7 @@
   <!-- ================================================================== -->
   <header id="topbar" role="banner">
     <span class="topbar__title" id="topbar-title" aria-live="polite">UNISON</span>
+    <select id="project-select" class="topbar__select" onchange="selectProject(this.value)" aria-label="Select project"></select>
     <button id="export-btn"
             class="topbar__btn topbar__btn--icon"
             onclick="exportState()"

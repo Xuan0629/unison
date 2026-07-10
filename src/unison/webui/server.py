@@ -23,15 +23,19 @@ Design methodology: Universal UI Design System
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
+import tempfile
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from socketserver import ThreadingMixIn
 from string import Template
+from urllib.parse import parse_qs, urlsplit
+from urllib.request import Request, urlopen
 
 from unison.state import State
 
@@ -55,6 +59,118 @@ for _fname in ("dashboard.css", "dashboard.js"):
         _STATIC_CACHE[_fname] = _fp.read_bytes()
 
 # ============================================================================
+# Project registry
+# ============================================================================
+
+
+def _project_id(project_root: Path) -> str:
+    """Return a stable project identity derived from its absolute path."""
+    resolved = str(Path(project_root).expanduser().resolve())
+    return hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:16]
+
+
+class ProjectRegistry:
+    """Persistent registry of projects visible to one WebUI instance."""
+
+    def __init__(self, registry_file: Path | None = None) -> None:
+        self.registry_file = registry_file or (
+            Path.home() / ".unison" / "webui" / "projects.json"
+        )
+        self._lock = threading.RLock()
+
+    def _read(self) -> list[dict]:
+        if not self.registry_file.exists():
+            return []
+        try:
+            raw = json.loads(self.registry_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return []
+        projects = raw.get("projects", []) if isinstance(raw, dict) else []
+        return [
+            project for project in projects
+            if isinstance(project, dict) and project.get("id") and project.get("path")
+        ]
+
+    def _write(self, projects: list[dict]) -> None:
+        self.registry_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps({"projects": projects}, indent=2, ensure_ascii=False)
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=self.registry_file.parent, delete=False
+        ) as tmp:
+            tmp.write(payload)
+            tmp_path = Path(tmp.name)
+        os.replace(tmp_path, self.registry_file)
+
+    def register(self, project_root: Path) -> dict:
+        root = Path(project_root).expanduser().resolve()
+        if not root.is_dir():
+            raise ValueError(f"Project directory does not exist: {root}")
+        entry = {
+            "id": _project_id(root),
+            "name": root.name,
+            "path": str(root),
+            "updated_at": time.time(),
+        }
+        with self._lock:
+            projects = [p for p in self._read() if p.get("id") != entry["id"]]
+            projects.append(entry)
+            self._write(projects)
+        return entry
+
+    def get(self, project_id: str) -> dict | None:
+        with self._lock:
+            for project in self._read():
+                if project.get("id") == project_id:
+                    return project
+        return None
+
+    def list_projects(self) -> list[dict]:
+        with self._lock:
+            projects = self._read()
+        return sorted(projects, key=lambda p: p.get("updated_at", 0), reverse=True)
+
+    def resolve(self, project_id: str | None, default_project: Path | None) -> Path:
+        if project_id:
+            entry = self.get(project_id)
+            if entry is None:
+                raise KeyError(project_id)
+            return Path(entry["path"]).resolve()
+        if default_project is not None:
+            return Path(default_project).expanduser().resolve()
+        projects = self.list_projects()
+        if not projects:
+            raise KeyError("No projects registered")
+        return Path(projects[0]["path"]).resolve()
+
+    def basename_is_unique(self, project_root: Path) -> bool:
+        root = Path(project_root).resolve()
+        matches = [
+            project for project in self.list_projects()
+            if Path(project["path"]).name == root.name
+        ]
+        return len(matches) <= 1
+
+
+def register_project(project_root: Path, port: int = 9099) -> bool:
+    """Register *project_root* with an already-running local WebUI."""
+    body = json.dumps({"path": str(Path(project_root).resolve())}).encode("utf-8")
+    request = Request(
+        f"http://127.0.0.1:{port}/api/projects",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=1.0) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read().decode("utf-8"))
+            return payload.get("project", {}).get("id") == _project_id(project_root)
+    except (OSError, json.JSONDecodeError):
+        return False
+
+
+# ============================================================================
 # Python HTTP handler
 # ============================================================================
 
@@ -63,74 +179,116 @@ class UnisonHandler(BaseHTTPRequestHandler):
     """HTTP handler: /api/state→JSON, /api/events→SSE, /static/*→files, else→HTML."""
 
     project_root: Path = Path(".")
+    registry: ProjectRegistry = ProjectRegistry()
 
     def do_GET(self) -> None:
-        if self.path == "/api/state":
-            self._json_response(self._load_state())
-        elif self.path == "/api/events":
-            self._sse_response()
-        elif self.path.startswith("/static/"):
-            self._static_response(self.path)
-        else:
-            self._html_response()
+        parsed = urlsplit(self.path)
+        try:
+            if parsed.path == "/api/projects":
+                self._json_response(self._load_projects())
+            elif parsed.path == "/api/state":
+                self._json_response(self._load_state(self._request_project_root(parsed.query)))
+            elif parsed.path == "/api/events":
+                self._sse_response(self._request_project_root(parsed.query))
+            elif parsed.path.startswith("/static/"):
+                self._static_response(parsed.path)
+            else:
+                self._html_response()
+        except KeyError as e:
+            self._json_response({"error": f"Unknown project: {e.args[0]}"}, status=404)
 
     def do_POST(self) -> None:
-        """Handle POST /api/control — write a control file for the orchestrator."""
-        if self.path == "/api/control":
+        """Handle project registration and project-scoped controls."""
+        parsed = urlsplit(self.path)
+        if parsed.path in {"/api/control", "/api/projects"}:
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
             try:
                 data = json.loads(body)
-                action = data.get("action", "")
-                result = self._handle_control(action)
+                if parsed.path == "/api/projects":
+                    raw_path = data.get("path")
+                    if not isinstance(raw_path, str) or not raw_path.strip():
+                        raise ValueError("Project path is required")
+                    result = {
+                        "ok": True,
+                        "project": self.registry.register(Path(raw_path)),
+                    }
+                    _notify_sse_clients()
+                else:
+                    result = self._handle_control(
+                        data.get("action", ""),
+                        self._request_project_root(parsed.query),
+                    )
                 self._json_response(result)
+            except KeyError as e:
+                self._json_response(
+                    {"ok": False, "error": f"Unknown project: {e.args[0]}"},
+                    status=404,
+                )
             except (json.JSONDecodeError, ValueError) as e:
                 self._json_response({"ok": False, "error": str(e)})
         else:
             self.send_response(404)
             self.end_headers()
 
+    def _request_project_root(self, query: str) -> Path:
+        project_ids = parse_qs(query).get("project", [])
+        project_id = project_ids[0] if project_ids else None
+        return self.registry.resolve(project_id, self.project_root)
+
+    def _load_projects(self) -> dict:
+        return {
+            "projects": self.registry.list_projects(),
+            "default": _project_id(self.project_root),
+        }
+
     # ------------------------------------------------------------------
     # State assembly
     # ------------------------------------------------------------------
 
-    def _load_state(self) -> dict:
-        """Read latest checkpoint, enrich with budget, agents, tasks, and mode.
-
-        Canonical sources:
-        - phase/iteration/transitions: latest checkpoint
-        - agents: runtime_agents from state, fallback to active pipeline YAML
-        - mode/pipeline_file: active pipeline YAML matched by state.pipeline_name
-        """
-        # Load from ~/.unison/checkpoints/<project>/ (where orchestrator writes)
+    def _load_state(self, project_root: Path | None = None) -> dict:
+        """Read one project's live state and enrich it for the dashboard."""
+        project_root = Path(project_root or self.project_root).resolve()
         import glob
-        checkpoint_dir = Path.home() / ".unison" / "checkpoints" / self.project_root.name
-        state = State()  # default empty
-        if checkpoint_dir.exists():
-            files = sorted(glob.glob(str(checkpoint_dir / "ckpt-*.json")),
-                           key=lambda p: Path(p).stat().st_mtime, reverse=True)
-            if files:
-                try:
-                    state = State.atomic_read(Path(files[0]))
-                except (json.JSONDecodeError, OSError, ValueError):
-                    # Corrupt or unreadable checkpoint -> serve defaults
-                    state = State()
-        data = state.to_dict()
 
-        # Rename for JS clarity
+        state = State()
+        state_file = project_root / ".unison" / "state.json"
+        if state_file.exists():
+            try:
+                state = State.atomic_read(state_file)
+            except (json.JSONDecodeError, OSError, ValueError):
+                state = State()
+        else:
+            # Backward compatibility for projects created before local
+            # state.json became the live WebUI source. A basename-keyed
+            # checkpoint is unsafe once two registered projects share a name.
+            checkpoint_dir = Path.home() / ".unison" / "checkpoints" / project_root.name
+            if self.registry.basename_is_unique(project_root) and checkpoint_dir.exists():
+                files = sorted(
+                    glob.glob(str(checkpoint_dir / "ckpt-*.json")),
+                    key=lambda p: Path(p).stat().st_mtime,
+                    reverse=True,
+                )
+                if files:
+                    try:
+                        state = State.atomic_read(Path(files[0]))
+                    except (json.JSONDecodeError, OSError, ValueError):
+                        state = State()
+
+        data = state.to_dict()
         data["transitions"] = data.pop("history", [])
         data["last_commit"] = data.pop("last_dev_commit", None)
         data["last_verdict"] = data.pop("last_review_verdict", None)
 
-        pipeline = self._load_pipeline_config(state)
+        previous_root = self.project_root
+        self.project_root = project_root
+        try:
+            pipeline = self._load_pipeline_config(state)
+            data["budget"] = self._load_budget()
+            data["agents"] = self._load_agents(pipeline)
+        finally:
+            self.project_root = previous_root
 
-        # Budget (usage from budget.json, limits from pipeline config)
-        data["budget"] = self._load_budget()
-
-        # Agents from runtime state or active pipeline YAML
-        data["agents"] = self._load_agents(pipeline)
-
-        # Derived fields
         data["active_agent"] = _derive_active_agent(state.phase)
         data["tasks"] = _derive_tasks(state.history)
         if pipeline and isinstance(pipeline, dict):
@@ -153,6 +311,11 @@ class UnisonHandler(BaseHTTPRequestHandler):
             data["pipeline_file"] = state.pipeline_name or None
             data["config"] = {"mode": data["mode"], "pipeline_file": data["pipeline_file"]}
 
+        data["project"] = {
+            "id": _project_id(project_root),
+            "name": project_root.name,
+            "path": str(project_root),
+        }
         return data
 
     def _derive_mode(self, agents: list) -> str:
@@ -289,9 +452,9 @@ class UnisonHandler(BaseHTTPRequestHandler):
     # Response helpers
     # ------------------------------------------------------------------
 
-    def _json_response(self, data: dict) -> None:
+    def _json_response(self, data: dict, status: int = 200) -> None:
         body = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
@@ -324,7 +487,7 @@ class UnisonHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def _handle_control(self, action: str) -> dict:
+    def _handle_control(self, action: str, project_root: Path | None = None) -> dict:
         """Write a control-file to ``.unison/control/`` for the orchestrator.
 
         The orchestrator polls this directory at phase boundaries and
@@ -336,7 +499,8 @@ class UnisonHandler(BaseHTTPRequestHandler):
             return {"ok": False, "error":
                     f"Unknown action: {action}. Valid: {', '.join(sorted(valid))}"}
 
-        control_dir = self.project_root / ".unison" / "control"
+        root = Path(project_root or self.project_root).resolve()
+        control_dir = root / ".unison" / "control"
         control_dir.mkdir(parents=True, exist_ok=True)
 
         control_file = control_dir / f"{action}.json"
@@ -347,7 +511,7 @@ class UnisonHandler(BaseHTTPRequestHandler):
 
         return {"ok": True, "action": action}
 
-    def _sse_response(self) -> None:
+    def _sse_response(self, project_root: Path | None = None) -> None:
         """Stream state changes to an SSE (Server-Sent Events) client.
 
         Sends the current state immediately, then pushes a new event
@@ -369,7 +533,7 @@ class UnisonHandler(BaseHTTPRequestHandler):
 
         try:
             # --- initial state -------------------------------------------------
-            data = self._load_state()
+            data = self._load_state(project_root)
             payload = f"data: {json.dumps(data)}\n\n".encode("utf-8")
             self.wfile.write(payload)
             self.wfile.flush()
@@ -378,7 +542,7 @@ class UnisonHandler(BaseHTTPRequestHandler):
             while True:
                 try:
                     my_queue.get(timeout=15)  # block, but wake for keepalive
-                    data = self._load_state()
+                    data = self._load_state(project_root)
                     payload = f"data: {json.dumps(data)}\n\n".encode("utf-8")
                     self.wfile.write(payload)
                     self.wfile.flush()
@@ -530,7 +694,16 @@ _sse_stop = threading.Event()
 _sse_thread: threading.Thread | None = None
 
 
-def _sse_monitor(project_root: Path, interval: float = 0.25) -> None:
+def _notify_sse_clients() -> None:
+    with _sse_clients_lock:
+        for client_queue in _sse_clients:
+            try:
+                client_queue.put_nowait(True)
+            except queue.Full:
+                pass
+
+
+def _sse_monitor(registry: ProjectRegistry, interval: float = 0.25) -> None:
     """Watch for phase changes and notify all SSE clients.
 
     Phase 6: Subscribes to the internal event bus for real-time push.
@@ -549,49 +722,42 @@ def _sse_monitor(project_root: Path, interval: float = 0.25) -> None:
 
         def _on_phase(event_data: dict) -> None:
             """Push phase event to all SSE clients."""
-            with _sse_clients_lock:
-                for q in _sse_clients:
-                    try:
-                        q.put_nowait(True)
-                    except queue.Full:
-                        pass
+            _notify_sse_clients()
 
         bus.subscribe("phase", _on_phase)
     except Exception:
         _on_phase = None  # event bus unavailable, fall back to polling
 
-    # ---- Fallback: checkpoint-file polling ------------------------------------
-    checkpoint_dir = Path.home() / ".unison" / "checkpoints" / project_root.name
-    last_mtime = 0.0
+    # ---- Fallback: poll every registered project's live state -----------------
+    last_mtimes: dict[str, float] = {}
 
     while not _sse_stop.is_set():
         _sse_stop.wait(interval)
-        # When event bus is active, the polling interval can be longer
-        # since we get real-time push.  Use a 5 s poll as fallback.
         poll_interval = 5.0 if _on_phase is not None else interval
-        if _on_phase is None or _sse_stop.wait(poll_interval - interval if poll_interval > interval else 0):
-            # _sse_stop was set during the extra wait
+        if _on_phase is None or _sse_stop.wait(
+            poll_interval - interval if poll_interval > interval else 0
+        ):
             if _sse_stop.is_set():
                 break
         try:
-            if not checkpoint_dir.exists():
-                continue
-            files = sorted(
-                glob.glob(str(checkpoint_dir / "ckpt-*.json")),
-                key=lambda p: Path(p).stat().st_mtime,
-                reverse=True,
-            )
-            if not files:
-                continue
-            mtime = Path(files[0]).stat().st_mtime
-            if mtime > last_mtime:
-                last_mtime = mtime
-                with _sse_clients_lock:
-                    for q in _sse_clients:
-                        try:
-                            q.put_nowait(True)
-                        except queue.Full:
-                            pass
+            changed = False
+            for project in registry.list_projects():
+                root = Path(project["path"])
+                state_file = root / ".unison" / "state.json"
+                mtime = state_file.stat().st_mtime if state_file.exists() else 0.0
+                if not mtime:
+                    checkpoint_dir = Path.home() / ".unison" / "checkpoints" / root.name
+                    files = sorted(
+                        glob.glob(str(checkpoint_dir / "ckpt-*.json")),
+                        key=lambda p: Path(p).stat().st_mtime,
+                        reverse=True,
+                    )
+                    mtime = Path(files[0]).stat().st_mtime if files else 0.0
+                if mtime > last_mtimes.get(project["id"], 0.0):
+                    last_mtimes[project["id"]] = mtime
+                    changed = True
+            if changed:
+                _notify_sse_clients()
         except OSError:
             continue
 
@@ -616,13 +782,14 @@ def serve(project_root: str, port: int = 9099) -> None:
     global _sse_stop, _sse_thread
 
     UnisonHandler.project_root = Path(project_root).resolve()
+    UnisonHandler.registry = ProjectRegistry()
+    UnisonHandler.registry.register(UnisonHandler.project_root)
 
-    # Start background monitor that pushes checkpoint-change signals to
-    # connected SSE clients.
+    # Start background monitor that pushes changes for every registered project.
     _sse_stop.clear()
     _sse_thread = threading.Thread(
         target=_sse_monitor,
-        args=(UnisonHandler.project_root,),
+        args=(UnisonHandler.registry,),
         daemon=True,
     )
     _sse_thread.start()

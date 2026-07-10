@@ -5,13 +5,128 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from unison.webui import (
+    ProjectRegistry,
     _derive_active_agent,
     _derive_tasks,
     _mark_last_status,
+    _project_id,
     _task_label,
     _phase_agent,
 )
 from unison.state import Transition, State
+
+
+# ============================================================================
+# Multi-project registry — stable path identity and isolation
+# ============================================================================
+
+
+class TestProjectRegistry:
+    def test_project_id_uses_resolved_path_not_basename(self, tmp_path):
+        left = tmp_path / "left" / "project"
+        right = tmp_path / "right" / "project"
+        left.mkdir(parents=True)
+        right.mkdir(parents=True)
+
+        assert _project_id(left) != _project_id(right)
+        assert _project_id(left) == _project_id(left.resolve())
+
+    def test_register_persists_and_lists_projects(self, tmp_path):
+        registry_file = tmp_path / "webui" / "projects.json"
+        project = tmp_path / "sample"
+        project.mkdir()
+        registry = ProjectRegistry(registry_file)
+
+        entry = registry.register(project)
+        reloaded = ProjectRegistry(registry_file)
+
+        assert reloaded.get(entry["id"])["path"] == str(project.resolve())
+        assert reloaded.list_projects() == [entry]
+
+    def test_resolve_defaults_to_configured_single_project(self, tmp_path):
+        registry = ProjectRegistry(tmp_path / "projects.json")
+        project = tmp_path / "sample"
+        project.mkdir()
+        entry = registry.register(project)
+
+        assert registry.resolve(None, default_project=project) == project.resolve()
+        assert registry.resolve(entry["id"], default_project=None) == project.resolve()
+
+    def test_unknown_project_id_is_rejected(self, tmp_path):
+        registry = ProjectRegistry(tmp_path / "projects.json")
+        with pytest.raises(KeyError):
+            registry.resolve("not-registered", default_project=None)
+
+    def test_legacy_checkpoint_is_not_used_for_duplicate_basenames(self, tmp_path):
+        import json
+        from unison.webui import UnisonHandler
+
+        left = tmp_path / "left" / "project"
+        right = tmp_path / "right" / "project"
+        left.mkdir(parents=True)
+        right.mkdir(parents=True)
+        registry = ProjectRegistry(tmp_path / "projects.json")
+        registry.register(left)
+        registry.register(right)
+
+        checkpoint_dir = Path.home() / ".unison" / "checkpoints" / "project"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint = checkpoint_dir / "ckpt-multi-project-test.json"
+        checkpoint.write_text(json.dumps({
+            "version": "2.0",
+            "phase": "dev_active",
+            "iteration": 9,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+        }))
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = left
+        handler.registry = registry
+        try:
+            with patch.object(handler, "_load_pipeline_config", return_value=None), \
+                 patch.object(handler, "_load_budget", return_value={}), \
+                 patch.object(handler, "_load_agents", return_value=[]):
+                data = handler._load_state(left)
+        finally:
+            checkpoint.unlink(missing_ok=True)
+
+        assert data["phase"] == "init"
+
+    def test_load_state_isolated_for_same_basename_projects(self, tmp_path):
+        import json
+        from unison.webui import UnisonHandler
+
+        left = tmp_path / "left" / "project"
+        right = tmp_path / "right" / "project"
+        for root, phase, name in (
+            (left, "dev_active", "left-run"),
+            (right, "planning_review", "right-run"),
+        ):
+            state_dir = root / ".unison"
+            state_dir.mkdir(parents=True)
+            (state_dir / "state.json").write_text(json.dumps({
+                "version": "2.0",
+                "phase": phase,
+                "iteration": 1,
+                "history": [],
+                "halt_signal": False,
+                "halt_reason": None,
+                "pipeline_name": name,
+            }))
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = left
+        with patch.object(handler, "_load_pipeline_config", return_value=None), \
+             patch.object(handler, "_load_budget", return_value={}), \
+             patch.object(handler, "_load_agents", return_value=[]):
+            left_state = handler._load_state(left)
+            right_state = handler._load_state(right)
+
+        assert left_state["phase"] == "dev_active"
+        assert right_state["phase"] == "planning_review"
+        assert left_state["project"]["id"] != right_state["project"]["id"]
 
 
 # ============================================================================

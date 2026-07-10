@@ -12,24 +12,30 @@ that previously imported from the single-file ``unison.webui`` module.
 
 from unison.webui.server import (
     PAGE,
+    ProjectRegistry,
     ThreadedHTTPServer,
     UnisonHandler,
     _derive_active_agent,
     _derive_tasks,
     _mark_last_status,
     _phase_agent,
+    _project_id,
     _task_label,
+    register_project,
     serve,
 )
 
 __all__ = [
     "PAGE",
+    "ProjectRegistry",
     "ThreadedHTTPServer",
     "UnisonHandler",
     "_derive_active_agent",
     "_derive_tasks",
     "_mark_last_status",
     "_phase_agent",
+    "_project_id",
     "_task_label",
+    "register_project",
     "serve",
 ]
