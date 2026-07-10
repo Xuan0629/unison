@@ -361,7 +361,7 @@ class PipelineLoader:
                     f"Invalid runtime '{runtime}' for agent '{key}'"
                 )
 
-            result[role] = AgentSpec(
+            result[key] = AgentSpec(
                 role=role,
                 runtime=runtime,
                 model=ad.get("model", ""),

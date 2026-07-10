@@ -376,9 +376,10 @@ class Orchestrator:
         self.spec.world.root.mkdir(parents=True, exist_ok=True)
 
         # ------------------------------------------------------------------
-        # 2. Acquire lock (§10)
+        # 2. Acquire lock (§10) — F5: use project_id not basename
         # ------------------------------------------------------------------
-        project_name = self.spec.world.root.name
+        resolved_root = str(self.spec.world.root.resolve())
+        project_name = hashlib.sha256(resolved_root.encode("utf-8")).hexdigest()[:16]
         if not self._lock_mgr.acquire(project_name):
             self.halt(f"Could not acquire lock for project: {project_name}",
                       category="external")
@@ -1676,7 +1677,7 @@ class Orchestrator:
                 _log.warning(
                     "plan-review loop exhausted after %d iterations — "
                     "auto-advancing to next phase", max_iter)
-                self._state.last_review_verdict = "PASS"
+                self._state.last_review_verdict = "EXHAUSTED"
                 # P10-007: Emit phase_done on exhaustion paths
                 self._publish_phase_event(
                     review_phase, note=f"{review_of} exhausted after {max_iter} iters",
@@ -1688,7 +1689,7 @@ class Orchestrator:
                     phase=review_phase,
                     severity="warn",
                     title=f"{review_phase} exhausted after {max_iter} iters (auto-advance)",
-                    verdict="PASS",
+                    verdict="EXHAUSTED",
                     iteration=max_iter,
                     summary=f"{review_of} exhausted | {commits} commits | iter {max_iter}",
                 )
@@ -1699,7 +1700,7 @@ class Orchestrator:
                 _log.warning(
                     "discuss-review loop exhausted after %d iterations — "
                     "auto-advancing to next phase", max_iter)
-                self._state.last_review_verdict = "PASS"
+                self._state.last_review_verdict = "EXHAUSTED"
                 # P10-007: Emit phase_done on exhaustion paths
                 self._publish_phase_event(
                     review_phase, note=f"{review_of} exhausted after {max_iter} iters",
@@ -1711,7 +1712,7 @@ class Orchestrator:
                     phase=review_phase,
                     severity="warn",
                     title=f"{review_phase} exhausted after {max_iter} iters (auto-advance)",
-                    verdict="PASS",
+                    verdict="EXHAUSTED",
                     iteration=max_iter,
                     summary=f"{review_of} exhausted | {commits} commits | iter {max_iter}",
                 )

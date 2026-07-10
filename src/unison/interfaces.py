@@ -39,7 +39,7 @@ Phase: TypeAlias = Literal[
 ]
 AgentRole: TypeAlias = str
 Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
-Verdict: TypeAlias = Literal["PASS", "REQUEST_CHANGES"]
+Verdict: TypeAlias = Literal["PASS", "REQUEST_CHANGES", "EXHAUSTED"]
 Actor: TypeAlias = AgentRole | Literal["orchestrator", "observer", "harness_optimizer", "sean"]
 ProjectLanguage: TypeAlias = Literal["python", "node", "rust", "go", "custom"]
 
