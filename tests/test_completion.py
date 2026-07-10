@@ -256,6 +256,162 @@ class TestGitCompletionDetector:
 
 
 # ============================================================================
+# F7: pre_commit comparison — no false success on no-op runs
+# ============================================================================
+
+
+class TestPreCommitDetection:
+    """F7: CompletionDetector with pre_commit baseline.
+
+    Agent non-zero exit with no new commit → success=False.
+    Previously, any existing HEAD commit triggered success=True.
+    """
+
+    def test_no_new_commit_with_pre_commit_returns_failure(self, tmp_path):
+        """pre_commit == current HEAD, no artifact → success=False."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"],
+                       cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"],
+                       cwd=tmp_path, capture_output=True)
+
+        # Create initial commit
+        (tmp_path / "existing.txt").write_text("pre-existing")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "initial"],
+                       cwd=tmp_path, capture_output=True)
+
+        pre_commit = subprocess.run(
+            ["git", "log", "-1", "--format=%H"],
+            cwd=tmp_path, capture_output=True, text=True,
+        ).stdout.strip()
+
+        # Agent runs but produces no new commit
+        log_path = tmp_path / "log.txt"
+        log_path.write_text("Agent exited with error, no changes made")
+
+        detector = GitCompletionDetector()
+        result = detector.detect(
+            workspace=tmp_path,
+            expected_iter=1,
+            role="developer",
+            log_path=log_path,
+            pre_commit=pre_commit,
+        )
+
+        # F7: no new commit, no artifact → success=False
+        assert result.success is False
+        assert result.commit == pre_commit
+
+    def test_new_commit_with_pre_commit_returns_success(self, tmp_path):
+        """HEAD advanced past pre_commit → success=True."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"],
+                       cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"],
+                       cwd=tmp_path, capture_output=True)
+
+        # Initial commit
+        (tmp_path / "existing.txt").write_text("pre-existing")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "initial"],
+                       cwd=tmp_path, capture_output=True)
+
+        pre_commit = subprocess.run(
+            ["git", "log", "-1", "--format=%H"],
+            cwd=tmp_path, capture_output=True, text=True,
+        ).stdout.strip()
+
+        # Agent makes a new commit
+        (tmp_path / "new_feature.py").write_text("def foo(): pass")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "agent work"],
+                       cwd=tmp_path, capture_output=True)
+
+        log_path = tmp_path / "log.txt"
+        log_path.write_text("Agent completed successfully")
+
+        detector = GitCompletionDetector()
+        result = detector.detect(
+            workspace=tmp_path,
+            expected_iter=1,
+            role="developer",
+            log_path=log_path,
+            pre_commit=pre_commit,
+        )
+
+        assert result.success is True
+        assert result.commit != pre_commit
+
+    def test_reviewer_artifact_without_commit_succeeds(self, tmp_path):
+        """Reviewer writes verdict file but no new commit → success (artifact fallback)."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"],
+                       cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"],
+                       cwd=tmp_path, capture_output=True)
+
+        (tmp_path / "existing.txt").write_text("pre-existing")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "initial"],
+                       cwd=tmp_path, capture_output=True)
+
+        pre_commit = subprocess.run(
+            ["git", "log", "-1", "--format=%H"],
+            cwd=tmp_path, capture_output=True, text=True,
+        ).stdout.strip()
+
+        # Reviewer writes verdict file but doesn't commit it
+        reviews_dir = tmp_path / "reviews"
+        reviews_dir.mkdir()
+        (reviews_dir / "iter-1.md").write_text("---\nverdict: PASS\n---")
+
+        log_path = tmp_path / "log.txt"
+        log_path.write_text("Reviewer output")
+
+        detector = GitCompletionDetector()
+        result = detector.detect(
+            workspace=tmp_path,
+            expected_iter=1,
+            role="reviewer",
+            log_path=log_path,
+            pre_commit=pre_commit,
+        )
+
+        # Artifact exists → success even without new commit
+        assert result.success is True
+
+    def test_backward_compat_no_pre_commit(self, tmp_path):
+        """Without pre_commit: falls back to "any commit exists" behavior."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"],
+                       cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"],
+                       cwd=tmp_path, capture_output=True)
+
+        (tmp_path / "file.txt").write_text("content")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "initial"],
+                       cwd=tmp_path, capture_output=True)
+
+        log_path = tmp_path / "log.txt"
+        log_path.write_text("Agent output")
+
+        detector = GitCompletionDetector()
+        result = detector.detect(
+            workspace=tmp_path,
+            expected_iter=1,
+            role="developer",
+            log_path=log_path,
+            # No pre_commit → backward-compatible behavior
+        )
+
+        # Old behavior: any commit → success
+        assert result.success is True
+        assert result.commit is not None
+
+
+# ============================================================================
 # Phase 4: review-path helper
 # ============================================================================
 

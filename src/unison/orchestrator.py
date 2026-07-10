@@ -1789,6 +1789,11 @@ class Orchestrator:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         log_path = world.agent_log(role, iteration, timestamp)  # type: ignore[arg-type]
 
+        # F7: Record baseline HEAD before agent invocation so
+        # CompletionDetector can distinguish "agent produced new work"
+        # from "a commit already existed on HEAD".
+        pre_commit = self._detector._get_commit(world.root)
+
         # 6. Run agent subprocess
         result = runner.run(
             spec=effective_spec,
@@ -1815,6 +1820,7 @@ class Orchestrator:
             expected_iter=iteration,
             role=role,
             log_path=log_path,
+            pre_commit=pre_commit,
         )
 
         if detected.commit:
