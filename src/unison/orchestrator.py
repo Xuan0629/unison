@@ -1536,6 +1536,28 @@ class Orchestrator:
                     _log.warning(
                         "SKIP rejected — quality gate failed, continuing loop"
                     )
+                    # P10-021: Write redirect.json so Observer can inspect
+                    # and potentially issue a corrective REDIRECT in P11.
+                    redirect_data = {
+                        "reason": (
+                            f"SKIP rejected in {review_phase} iter {iteration}: "
+                            "quality gate failed — tests/output/logs/checklist "
+                            "did not meet minimum bar"
+                        ),
+                        "corrective_prompt": "",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                    redirect_path = (
+                        self.spec.world.root / ".unison" / "control" / "redirect.json"
+                    )
+                    try:
+                        redirect_path.parent.mkdir(parents=True, exist_ok=True)
+                        redirect_path.write_text(
+                            __import__("json").dumps(redirect_data), encoding="utf-8"
+                        )
+                        _log.info("Wrote redirect.json: %s", redirect_data["reason"])
+                    except OSError:
+                        _log.warning("Failed to write redirect.json")
                     # Don't force PASS; continue loop normally
 
             # A2: Record reviewer stats for sycophancy tracking
@@ -1616,6 +1638,21 @@ class Orchestrator:
                     "plan-review loop exhausted after %d iterations — "
                     "auto-advancing to next phase", max_iter)
                 self._state.last_review_verdict = "PASS"
+                # P10-007: Emit phase_done on exhaustion paths
+                self._publish_phase_event(
+                    review_phase, note=f"{review_of} exhausted after {max_iter} iters",
+                    event="phase_done",
+                )
+                commits = self._count_commits()
+                self._write_lifecycle_notification(
+                    event_type="phase_done",
+                    phase=review_phase,
+                    severity="warn",
+                    title=f"{review_phase} exhausted after {max_iter} iters (auto-advance)",
+                    verdict="PASS",
+                    iteration=max_iter,
+                    summary=f"{review_of} exhausted | {commits} commits | iter {max_iter}",
+                )
                 return
             if active_phase.startswith("discuss"):
                 import logging
@@ -1624,6 +1661,21 @@ class Orchestrator:
                     "discuss-review loop exhausted after %d iterations — "
                     "auto-advancing to next phase", max_iter)
                 self._state.last_review_verdict = "PASS"
+                # P10-007: Emit phase_done on exhaustion paths
+                self._publish_phase_event(
+                    review_phase, note=f"{review_of} exhausted after {max_iter} iters",
+                    event="phase_done",
+                )
+                commits = self._count_commits()
+                self._write_lifecycle_notification(
+                    event_type="phase_done",
+                    phase=review_phase,
+                    severity="warn",
+                    title=f"{review_phase} exhausted after {max_iter} iters (auto-advance)",
+                    verdict="PASS",
+                    iteration=max_iter,
+                    summary=f"{review_of} exhausted | {commits} commits | iter {max_iter}",
+                )
                 return
             self.halt(
                 f"Max iterations ({max_iter}) reached in {review_of} loop "

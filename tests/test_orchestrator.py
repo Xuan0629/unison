@@ -1908,3 +1908,190 @@ class TestOrchestratorLifecycleNotifications:
         r = _json.loads(nf.read_text().strip())
         assert r["language"] == "zh"
         assert r["pipeline"] == "自定义管道"
+
+
+# ============================================================================
+# P10-023: phase_done on exhaustion paths + redirect.json on SKIP rejection
+# ============================================================================
+
+
+class TestP10023ExhaustionAndSkipRedirect:
+    """P10-023: phase_done written on planning/discuss exhaustion;
+    redirect.json written when SKIP quality gate fails."""
+
+    def _make_orchestrator(
+        self, tmp_path, max_planning: int = 3, max_discuss: int = 3,
+    ) -> Orchestrator:
+        """Create a minimal Orchestrator for exhaustion/redirect testing."""
+        from unison.interfaces import AgentSpec, ProjectConfig, PipelineSpec
+        from unison.world import World as WorldCls
+
+        root = Path(tmp_path)
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "prd").mkdir(parents=True, exist_ok=True)
+        (root / "reviews").mkdir(parents=True, exist_ok=True)
+        (root / ".unison").mkdir(parents=True, exist_ok=True)
+        (root / "prd" / "PRD.md").write_text("# PRD placeholder")
+
+        # Write a dummy review file so _parse_verdict finds it
+        (root / "reviews" / "planning-review-1.md").write_text(
+            "## Verdict\n\nREQUEST_CHANGES\n\n## Findings\n\n- Test finding\n"
+        )
+
+        agent = AgentSpec(
+            role="developer",
+            runtime="claude",
+            model="test",
+            system_prompt_path=Path("prompts/developer.md"),
+        )
+
+        project = ProjectConfig()
+
+        world = WorldCls(root=root)
+        world.ensure_directories()
+
+        spec = PipelineSpec(
+            version="1.0",
+            world=world,
+            agents={"developer": agent},
+            project=project,
+            mode="full-dev",
+            pipeline_name="TestPipeline",
+            max_planning_iterations=max_planning,
+            max_discuss_iterations=max_discuss,
+        )
+
+        return Orchestrator(spec=spec)
+
+    # ---- phase_done on planning exhaustion ----------------------------------
+
+    def test_phase_done_on_planning_exhaustion(self, tmp_path, monkeypatch):
+        """_run_loop writes phase_done when planning loop exhausts."""
+        import json as _json
+
+        orch = self._make_orchestrator(tmp_path, max_planning=1)
+
+        # Simulate one iteration with REQUEST_CHANGES verdict, then loop exhausts
+        monkeypatch.setattr(orch, "_invoke_agent_for_role", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_parse_verdict", lambda *a, **kw: "REQUEST_CHANGES")
+        monkeypatch.setattr(orch, "_check_control_files", lambda: [])
+        monkeypatch.setattr(orch, "_check_redirect_file", lambda: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_check_convergence", lambda *a, **kw: False)
+        monkeypatch.setattr(orch, "_check_pipeline_timeout", lambda: None)
+
+        orch._run_loop(
+            "planning_active", "planning_review", "planning", "planner",
+        )
+
+        # Verify phase_done was written to notifications.jsonl
+        nf = tmp_path / "observer" / "notifications.jsonl"
+        assert nf.exists(), "notifications.jsonl should exist after exhaustion"
+        records = [
+            _json.loads(l) for l in nf.read_text().strip().split("\n") if l
+        ]
+        phase_done_events = [r for r in records if r["event_type"] == "phase_done"]
+        assert len(phase_done_events) >= 1, (
+            f"Expected phase_done event, got: {records}"
+        )
+        r = phase_done_events[-1]
+        assert r["verdict"] == "PASS"
+        assert "exhausted" in r["title"], (
+            f"Expected 'exhausted' in title, got: {r['title']}"
+        )
+
+    def test_phase_done_on_discuss_exhaustion(self, tmp_path, monkeypatch):
+        """_run_loop writes phase_done when discuss loop exhausts."""
+        import json as _json
+
+        orch = self._make_orchestrator(tmp_path, max_discuss=1)
+
+        monkeypatch.setattr(orch, "_invoke_agent_for_role", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_parse_verdict", lambda *a, **kw: "REQUEST_CHANGES")
+        monkeypatch.setattr(orch, "_check_control_files", lambda: [])
+        monkeypatch.setattr(orch, "_check_redirect_file", lambda: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_check_convergence", lambda *a, **kw: False)
+        monkeypatch.setattr(orch, "_check_pipeline_timeout", lambda: None)
+
+        orch._run_loop(
+            "discuss_active", "discuss_review", "discuss", "planner",
+        )
+
+        nf = tmp_path / "observer" / "notifications.jsonl"
+        assert nf.exists(), "notifications.jsonl should exist after exhaustion"
+        records = [
+            _json.loads(l) for l in nf.read_text().strip().split("\n") if l
+        ]
+        phase_done_events = [r for r in records if r["event_type"] == "phase_done"]
+        assert len(phase_done_events) >= 1, (
+            f"Expected phase_done event, got: {records}"
+        )
+        r = phase_done_events[-1]
+        assert r["verdict"] == "PASS"
+        assert "exhausted" in r["title"], (
+            f"Expected 'exhausted' in title, got: {r['title']}"
+        )
+
+    # ---- redirect.json on SKIP rejection -----------------------------------
+
+    def test_redirect_json_on_skip_rejection(self, tmp_path, monkeypatch):
+        """When _evaluate_skip_quality returns False, redirect.json is written."""
+        import json as _json
+
+        orch = self._make_orchestrator(tmp_path, max_planning=3)
+
+        # Force SKIP request and quality gate failure
+        orch._skip_requested = True
+        monkeypatch.setattr(orch, "_evaluate_skip_quality", lambda: False)
+        monkeypatch.setattr(orch, "_invoke_agent_for_role", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_parse_verdict", lambda *a, **kw: "REQUEST_CHANGES")
+        monkeypatch.setattr(orch, "_check_control_files", lambda: [])
+        monkeypatch.setattr(orch, "_check_redirect_file", lambda: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_check_convergence", lambda *a, **kw: False)
+        monkeypatch.setattr(orch, "_check_pipeline_timeout", lambda: None)
+
+        orch._run_loop(
+            "planning_active", "planning_review", "planning", "planner",
+        )
+
+        redirect_path = tmp_path / ".unison" / "control" / "redirect.json"
+        assert redirect_path.exists(), (
+            "redirect.json should be written when SKIP quality gate fails"
+        )
+        data = _json.loads(redirect_path.read_text(encoding="utf-8"))
+        assert "reason" in data
+        assert "SKIP rejected" in data["reason"]
+        assert "corrective_prompt" in data
+        assert "timestamp" in data
+
+    def test_redirect_json_has_correct_schema(self, tmp_path, monkeypatch):
+        """redirect.json written on SKIP rejection has all required fields."""
+        import json as _json
+
+        orch = self._make_orchestrator(tmp_path, max_planning=3)
+        orch._skip_requested = True
+        monkeypatch.setattr(orch, "_evaluate_skip_quality", lambda: False)
+        monkeypatch.setattr(orch, "_invoke_agent_for_role", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_parse_verdict", lambda *a, **kw: "REQUEST_CHANGES")
+        monkeypatch.setattr(orch, "_check_control_files", lambda: [])
+        monkeypatch.setattr(orch, "_check_redirect_file", lambda: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_check_convergence", lambda *a, **kw: False)
+        monkeypatch.setattr(orch, "_check_pipeline_timeout", lambda: None)
+
+        orch._run_loop(
+            "planning_active", "planning_review", "planning", "planner",
+        )
+
+        redirect_path = tmp_path / ".unison" / "control" / "redirect.json"
+        data = _json.loads(redirect_path.read_text(encoding="utf-8"))
+
+        # Schema: {"reason": "...", "corrective_prompt": "...", "timestamp": "..."}
+        assert isinstance(data["reason"], str) and len(data["reason"]) > 0
+        assert isinstance(data["corrective_prompt"], str)
+        assert isinstance(data["timestamp"], str)
+        # timestamp should be valid ISO 8601
+        from datetime import datetime as dt
+        dt.fromisoformat(data["timestamp"])
