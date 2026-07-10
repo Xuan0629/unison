@@ -74,12 +74,17 @@ class FileCheckpointManager:
     # -- list ------------------------------------------------------------------
 
     def list_checkpoints(self, project: str) -> list[Path]:
-        """Return checkpoint paths for *project*, sorted by filename.
+        """Return checkpoint paths for *project*, sorted by mtime (most recent last).
 
-        Filenames embed the iteration number as the primary sort key, so
-        the list is naturally ordered from earliest to latest.
+        F4: Sort by modification time, not filename.  Filename-based sorting
+        produces the wrong order when iteration numbers have different digit
+        widths (``1, 10, 2`` instead of ``1, 2, 10``).
         """
         project_dir = self.base_dir / project
         if not project_dir.is_dir():
             return []
-        return sorted(project_dir.glob("ckpt-*.json"))
+        checkpoints = sorted(
+            project_dir.glob("ckpt-*.json"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        return checkpoints
