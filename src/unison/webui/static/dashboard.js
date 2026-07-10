@@ -39,6 +39,11 @@ var L = {
       init: "Init",
       planning_active: "Planning",
       planning_review: "Plan Review",
+      discuss_active: "Discussion",
+      discuss_review: "Discussion Review",
+      "spec-check": "Spec Check",
+      moa_analyze: "MoA Analysis",
+      moa_synthesize: "MoA Synthesis",
       dev_active: "Developing",
       dev_review: "Code Review",
       review_active: "Reviewing",
@@ -57,6 +62,10 @@ var L = {
       "design-debate": "Design Debate",
       "inspect-only": "Inspect",
       "agent-fix": "Agent Fix",
+      "greenfield": "Greenfield",
+      "spec-driven": "Spec Driven",
+      "moa": "MoA",
+      "chain": "Chain",
       "migrate": "Migrate"
     }
   },
@@ -97,6 +106,11 @@ var L = {
       init: "初始化",
       planning_active: "规划中",
       planning_review: "规划审查",
+      discuss_active: "讨论中",
+      discuss_review: "讨论审查",
+      "spec-check": "规格检查",
+      moa_analyze: "MoA 分析",
+      moa_synthesize: "MoA 合成",
       dev_active: "开发中",
       dev_review: "代码审查",
       review_active: "审查中",
@@ -115,6 +129,10 @@ var L = {
       "design-debate": "设计讨论",
       "inspect-only": "审查",
       "agent-fix": "修复",
+      "greenfield": "绿地开发",
+      "spec-driven": "规格驱动",
+      "moa": "MoA",
+      "chain": "链式",
       "migrate": "迁移"
     }
   }
@@ -279,7 +297,7 @@ function updateStaticLabels() {
   // Also update config and history if already rendered
   if (_prev) {
     patchPipelineConfig(_prev);
-    patchHistory();
+    patchHistory(_prev || {transitions: []});
   }
 }
 
@@ -379,7 +397,7 @@ function patchAll(s) {
   patchError(s);
   patchLog(s);
   patchEmptyState(s);
-  patchHistory();
+  patchHistory(s);
   updateStaticLabels();
 }
 
@@ -408,7 +426,7 @@ function diffPatch(prev, next) {
 
   if (!arraysEqual(prev.tasks,       next.tasks))       patchTasks(next);
   if (!arraysEqual(prev.agents,      next.agents))      { patchAgents(next); patchPipelineConfig(next); patchEmptyState(next); /* patchGauges disabled */ }
-  if (!arraysEqual(prev.transitions, next.transitions)) { patchTimeline(next); patchTasks(next); patchLog(next); patchEmptyState(next); }
+  if (!arraysEqual(prev.transitions, next.transitions)) { patchTimeline(next); patchTasks(next); patchLog(next); patchHistory(next); patchEmptyState(next); }
 
   // Detect phase transition to "done" or "halt" for history save
   if (prev.phase !== "done" && prev.phase !== "halt" && (next.phase === "done" || next.phase === "halt")) {
@@ -662,26 +680,24 @@ function patchAgents(s) {
 
 function patchPipelineConfig(s) {
   var el = document.getElementById("pipeline-config");
-  var agents = s.agents || [];
-  if (!agents.length) {
-    el.innerHTML = '<div class="history-item--empty">' + esc(t("noAgents")) + '</div>';
-    return;
-  }
+  var cfg = s.config || {};
+  var rows = [
+    ["Mode", cfg.mode || s.mode],
+    ["Pipeline", cfg.pipeline_file || s.pipeline_file],
+    ["Planning max", cfg.max_planning_iterations],
+    ["Discuss max", cfg.max_discuss_iterations],
+    ["Dev max", cfg.max_dev_iterations],
+    ["Timeout", cfg.pipeline_timeout ? String(cfg.pipeline_timeout) + "s" : null]
+  ];
   var html = "";
-  for (var i = 0; i < agents.length; i++) {
-    var a = agents[i];
-    var dotCls = "config-agent__dot config-agent__dot--";
-    if (a.role === "planner")       dotCls += "planner";
-    else if (a.role === "developer") dotCls += "developer";
-    else if (a.role === "reviewer")  dotCls += "reviewer";
-    else                             dotCls += "default";
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i][1] === undefined || rows[i][1] === null || rows[i][1] === "") continue;
     html += '<div class="config-agent">';
-    html += '<span class="' + dotCls + '" aria-hidden="true"></span>';
-    html += '<span class="config-agent__role">' + esc(a.role) + '</span>';
-    html += '<span class="config-agent__meta">' + esc(a.runtime || "") + ' / ' + esc(a.model || "") + '</span>';
+    html += '<span class="config-agent__role">' + esc(rows[i][0]) + '</span>';
+    html += '<span class="config-agent__meta">' + esc(String(rows[i][1])) + '</span>';
     html += '</div>';
   }
-  el.innerHTML = html;
+  el.innerHTML = html || '<div class="history-item--empty">No config data</div>';
 }
 
 // -- 9k. Error panel ---------------------------------------------------
@@ -809,87 +825,79 @@ function patchPipelineFlow(s) {
   if (!el) return;
 
   var phase = s.phase || "init";
-  var cat = phaseCategory(s.halt_signal ? "halt" : phase);
+  var mode = s.mode || "code-dev";
+  var displayPhase = s.halt_signal ? "halt" : phase;
 
-  // Map phase category to flow stage index (0=init, 1=planning, 2=dev, 3=done)
-  var stageMap = {init: 0, planning: 1, moa: 2, discuss: 2, dev: 2, review: 2, done: 3, halt: -1};
-  var activeIdx = stageMap.hasOwnProperty(cat) ? stageMap[cat] : -1;
+  var phasesByMode = {
+    "code-dev": ["init", "dev", "done"],
+    "agent-fix": ["init", "dev", "done"],
+    "greenfield": ["init", "dev", "done"],
+    "inspect-only": ["init", "review", "done"],
+    "design-debate": ["init", "planning", "done"],
+    "full-dev": ["init", "planning", "discuss", "dev", "done"],
+    "migrate": ["init", "planning", "discuss", "dev", "done"],
+    "spec-driven": ["init", "planning", "review", "discuss", "dev", "done"],
+    "moa": ["init", "moa", "done"],
+    "chain": ["init", "planning", "dev", "done"]
+  };
 
-  var phases = [
-    {key: "init",     label: t("phases.init")},
-    {key: "planning", label: t("phases.planning_active")},
-    {key: "dev",      label: t("phases.dev_active")},
-    {key: "done",     label: t("phases.done")}
-  ];
+  var phases = (phasesByMode[mode] || phasesByMode["code-dev"]).map(function(key) {
+    var labelKey = key === "planning" ? "planning_active"
+      : key === "discuss" ? "discuss_active"
+      : key === "dev" ? "dev_active"
+      : key === "review" ? "dev_review"
+      : key === "moa" ? "moa_analyze"
+      : key === "done" ? "done"
+      : "init";
+    return {key: key, label: t("phases." + labelKey)};
+  });
 
-  var BW  = 130;   // box width
-  var BH  = 30;    // box height
-  var GAP = 36;    // arrow gap between boxes
-  var PX  = 8;     // horizontal padding
-  var PY  = 14;    // vertical padding
+  function phaseBucket(p) {
+    if (!p) return "init";
+    if (p === "done" || p === "halt") return p;
+    if (p.indexOf("planning") === 0) return "planning";
+    if (p.indexOf("discuss") === 0) return "discuss";
+    if (p.indexOf("moa") === 0) return "moa";
+    if (p.indexOf("dev") === 0) return "dev";
+    if (p.indexOf("review") >= 0 || p === "spec-check") return mode === "spec-driven" ? "review" : "dev";
+    return "init";
+  }
 
-  var totalW = 4 * BW + 3 * GAP + 2 * PX;
+  var activeKey = phaseBucket(displayPhase);
+  var activeIdx = phases.findIndex(function(p) { return p.key === activeKey; });
+  if (displayPhase === "halt") activeIdx = -1;
+
+  var BW  = 130;
+  var BH  = 30;
+  var GAP = 24;
+  var PX  = 8;
+  var PY  = 14;
+
+  var totalW = phases.length * BW + Math.max(0, phases.length - 1) * GAP + 2 * PX;
   var totalH = 80;
 
   var html = '<svg class="pipeline-flow__svg" viewBox="0 0 ' + totalW + ' ' + totalH + '"'
            + ' aria-label="Pipeline flow diagram" role="img">';
 
-  for (var i = 0; i < 4; i++) {
+  for (var i = 0; i < phases.length; i++) {
     var x = PX + i * (BW + GAP);
     var y = PY;
-
-    // Box state: active, done, or pending
     var state;
-    if (activeIdx === -1) {
-      state = "done";                         // halt: all dimmed
-    } else if (i < activeIdx) {
-      state = "done";
-    } else if (i === activeIdx) {
-      state = "active";
-    } else {
-      state = "pending";
-    }
+    if (activeIdx === -1) state = "done";
+    else if (i < activeIdx) state = "done";
+    else if (i === activeIdx) state = "active";
+    else state = "pending";
 
-    // Box rect
-    html += '<rect class="pf-box pf-box--' + state + '"'
-         + ' x="' + x + '" y="' + y + '"'
-         + ' width="' + BW + '" height="' + BH + '"'
-         + ' rx="6"/>';
+    html += '<rect class="pf-box pf-box--' + state + '" x="' + x + '" y="' + y + '" width="' + BW + '" height="' + BH + '" rx="6"/>';
+    html += '<text class="pf-label pf-label--' + state + '" x="' + (x + BW / 2) + '" y="' + (y + BH / 2 + 1) + '" text-anchor="middle" dominant-baseline="central">' + esc(phases[i].label) + '</text>';
 
-    // Box label
-    html += '<text class="pf-label pf-label--' + state + '"'
-         + ' x="' + (x + BW / 2) + '" y="' + (y + BH / 2 + 1) + '"'
-         + ' text-anchor="middle" dominant-baseline="central">'
-         + esc(phases[i].label) + '</text>';
-
-    // Arrow to next box (skip after last)
-    if (i < 3) {
+    if (i < phases.length - 1) {
       var ax1 = x + BW;
       var ax2 = x + BW + GAP;
       var ay  = y + BH / 2;
-
-      var arrowState;
-      if (activeIdx === -1) {
-        arrowState = "done";
-      } else if (i < activeIdx) {
-        arrowState = "done";
-      } else if (i === activeIdx) {
-        arrowState = "active";
-      } else {
-        arrowState = "pending";
-      }
-
-      // Arrow line
-      html += '<line class="pf-arrow pf-arrow--' + arrowState + '"'
-           + ' x1="' + ax1 + '" y1="' + ay + '"'
-           + ' x2="' + (ax2 - 7) + '" y2="' + ay + '"'
-           + ' stroke-width="2"/>';
-
-      // Arrow head
-      html += '<polygon class="pf-arrow pf-arrow--' + arrowState + '"'
-           + ' points="' + (ax2 - 7) + ',' + (ay - 5)
-           + ' ' + ax2 + ',' + ay
-           + ' ' + (ax2 - 7) + ',' + (ay + 5) + '"/>';
+      var arrowState = activeIdx === -1 ? "done" : (i < activeIdx ? "done" : (i === activeIdx ? "active" : "pending"));
+      html += '<line class="pf-arrow pf-arrow--' + arrowState + '" x1="' + ax1 + '" y1="' + ay + '" x2="' + (ax2 - 7) + '" y2="' + ay + '" stroke-width="2"/>';
+      html += '<polygon class="pf-arrow pf-arrow--' + arrowState + '" points="' + (ax2 - 7) + ',' + (ay - 5) + ' ' + ax2 + ',' + ay + ' ' + (ax2 - 7) + ',' + (ay + 5) + '"/>';
     }
   }
 
@@ -1029,27 +1037,27 @@ function saveHistoryEntry(s) {
   // Cap at 50 entries
   if (history.length > 50) history = history.slice(0, 50);
   localStorage.setItem("unison-history", JSON.stringify(history));
-  patchHistory();
+  patchHistory(_prev || {transitions: []});
 }
 
-function patchHistory() {
+function patchHistory(s) {
   var el = document.getElementById("history-list");
   if (!el) return;
-  var history = loadHistory();
-  if (!history.length) {
+  var trans = (s && s.transitions) ? s.transitions : [];
+  if (!trans.length) {
     el.innerHTML = '<div class="history-item--empty" id="no-history-label">' + esc(t("noHistory")) + '</div>';
     return;
   }
-  // Show last 10 entries
-  var recent = history.slice(0, 10);
+  var recent = trans.slice(-10).reverse();
   var html = "";
   for (var i = 0; i < recent.length; i++) {
     var h = recent[i];
+    var phaseKey = h.to_phase || "init";
     html += '<div class="history-item">';
     html += '<span class="history-item__dot" aria-hidden="true"></span>';
-    html += '<span class="history-item__title">' + esc(h.title) + '</span>';
-    html += '<span class="history-item__meta">' + esc(t("phasesCount", {n: h.phaseCount})) + '</span>';
-    html += '<span class="history-item__date">' + esc(fmtDate(h.date)) + '</span>';
+    html += '<span class="history-item__title">' + esc(t("phases." + phaseKey)) + '</span>';
+    html += '<span class="history-item__meta">' + esc(h.note || "") + '</span>';
+    html += '<span class="history-item__date">' + esc(fmtTime(h.timestamp)) + '</span>';
     html += '</div>';
   }
   el.innerHTML = html;
@@ -1065,7 +1073,7 @@ function patchHistory() {
   applyLang();
   restoreTokenSettings();
   restoreSectionStates();
-  patchHistory();
+  patchHistory(_prev || {transitions: []});
   // Try SSE push first, fall back to 3 s polling
   if (!startSSE()) {
     poll();

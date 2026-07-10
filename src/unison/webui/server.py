@@ -95,7 +95,13 @@ class UnisonHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
 
     def _load_state(self) -> dict:
-        """Read latest checkpoint, enrich with budget, agents, tasks, and mode."""
+        """Read latest checkpoint, enrich with budget, agents, tasks, and mode.
+
+        Canonical sources:
+        - phase/iteration/transitions: latest checkpoint
+        - agents: runtime_agents from state, fallback to active pipeline YAML
+        - mode/pipeline_file: active pipeline YAML matched by state.pipeline_name
+        """
         # Load from ~/.unison/checkpoints/<project>/ (where orchestrator writes)
         import glob
         checkpoint_dir = Path.home() / ".unison" / "checkpoints" / self.project_root.name
@@ -116,25 +122,36 @@ class UnisonHandler(BaseHTTPRequestHandler):
         data["last_commit"] = data.pop("last_dev_commit", None)
         data["last_verdict"] = data.pop("last_review_verdict", None)
 
+        pipeline = self._load_pipeline_config(state)
+
         # Budget (usage from budget.json, limits from pipeline config)
         data["budget"] = self._load_budget()
 
-        # Agents from pipeline YAML
-        data["agents"] = self._load_agents()
+        # Agents from runtime state or active pipeline YAML
+        data["agents"] = self._load_agents(pipeline)
 
         # Derived fields
         data["active_agent"] = _derive_active_agent(state.phase)
         data["tasks"] = _derive_tasks(state.history)
-        data["mode"] = self._derive_mode(data.get("agents", []))
-
-        # Derive pipeline name from the active YAML symlink
-        pipeline_link = self.project_root / "pipeline.yaml"
-        if pipeline_link.is_symlink():
-            data["pipeline_file"] = Path(os.readlink(str(pipeline_link))).name
-        elif pipeline_link.exists():
-            data["pipeline_file"] = "pipeline.yaml"
+        if pipeline and isinstance(pipeline, dict):
+            data["mode"] = pipeline.get("mode") or self._derive_mode(data.get("agents", []))
+            data["pipeline_file"] = pipeline.get("__file__")
+            raw_project_cfg = pipeline.get("project")
+            project_cfg: dict = raw_project_cfg if isinstance(raw_project_cfg, dict) else {}
+            data["config"] = {
+                "mode": data["mode"],
+                "pipeline_file": data["pipeline_file"],
+                "max_iterations": pipeline.get("max_iterations", project_cfg.get("max_iterations")),
+                "max_planning_iterations": pipeline.get("max_planning_iterations", project_cfg.get("max_planning_iterations")),
+                "max_discuss_iterations": pipeline.get("max_discuss_iterations", project_cfg.get("max_discuss_iterations")),
+                "max_dev_iterations": pipeline.get("max_dev_iterations", project_cfg.get("max_dev_iterations")),
+                "pipeline_timeout": pipeline.get("pipeline_timeout"),
+                "test_command": project_cfg.get("test_command"),
+            }
         else:
-            data["pipeline_file"] = None
+            data["mode"] = self._derive_mode(data.get("agents", []))
+            data["pipeline_file"] = state.pipeline_name or None
+            data["config"] = {"mode": data["mode"], "pipeline_file": data["pipeline_file"]}
 
         return data
 
@@ -185,14 +202,15 @@ class UnisonHandler(BaseHTTPRequestHandler):
             "per_task_limit": per_task_limit,
         }
 
-    def _load_agents(self) -> list[dict]:
+    def _load_agents(self, pipeline: dict | None = None) -> list[dict]:
         """Extract agent specs from state.runtime_agents or pipeline YAML.
 
         The Orchestrator writes ``runtime_agents`` to state for modes
         with dynamically-created agents (MoA, design-debate, etc.).
         Falls back to pipeline YAML agents when runtime data is absent.
         """
-        pipeline = self._load_pipeline_config()
+        if pipeline is None:
+            pipeline = self._load_pipeline_config()
         if not pipeline:
             return []
 
@@ -227,16 +245,29 @@ class UnisonHandler(BaseHTTPRequestHandler):
                 })
         return agents
 
-    def _load_pipeline_config(self) -> dict | None:
-        """Load the first valid pipeline YAML containing an 'agents' key.
+    def _load_pipeline_config(self, state: State | None = None) -> dict | None:
+        """Load the active pipeline YAML.
 
-        Searches pipeline.yaml, webui-v2-dev.yaml, then any other *.yaml.
+        Resolution order:
+        1. project_root/pipeline.yaml symlink/file
+        2. file whose stem matches state.pipeline_name (search root + pipelines/)
+        3. fallback scan of root/pipelines YAMLs, newest first
         """
-        candidates = [
-            self.project_root / "pipeline.yaml",
-            self.project_root / "webui-v2-dev.yaml",
-        ]
-        for yf in sorted(self.project_root.glob("*.yaml")):
+        candidates: list[Path] = []
+
+        pipeline_link = self.project_root / "pipeline.yaml"
+        if pipeline_link.exists() or pipeline_link.is_symlink():
+            candidates.append(pipeline_link)
+
+        if state is not None and getattr(state, "pipeline_name", ""):
+            pname = state.pipeline_name
+            for yf in list(self.project_root.glob("*.yaml")) + list((self.project_root / "pipelines").glob("*.yaml")):
+                if yf.stem == pname and yf not in candidates:
+                    candidates.append(yf)
+
+        fallback = list(self.project_root.glob("*.yaml")) + list((self.project_root / "pipelines").glob("*.yaml"))
+        fallback = sorted(fallback, key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+        for yf in fallback:
             if yf not in candidates:
                 candidates.append(yf)
 
@@ -248,6 +279,7 @@ class UnisonHandler(BaseHTTPRequestHandler):
                 with open(candidate, "r", encoding="utf-8") as f:
                     raw = yaml.safe_load(f)
                 if isinstance(raw, dict) and "agents" in raw:
+                    raw["__file__"] = candidate.name
                     return raw
             except Exception:
                 continue

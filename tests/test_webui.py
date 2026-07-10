@@ -527,24 +527,41 @@ class TestLoadState:
         # Default state phase is "init", so active_agent should be None
         assert data["active_agent"] is None
 
-    def test_budget_structure(self, tmp_path):
+    def test_load_state_uses_pipeline_mode_when_available(self, tmp_path):
         from unison.webui import UnisonHandler
+        import json
+
+        checkpoint_dir = Path.home() / ".unison" / "checkpoints" / tmp_path.name
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        ckpt_file = checkpoint_dir / "ckpt-0001.json"
+        ckpt_file.write_text(json.dumps({
+            "version": "2.0",
+            "phase": "planning_review",
+            "iteration": 2,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "pipeline_name": "p10b-fix"
+        }))
+        pipelines = tmp_path / "pipelines"
+        pipelines.mkdir()
+        (pipelines / "p10b-fix.yaml").write_text("mode: full-dev\nagents:\n  planner:\n    runtime: claude\n  plan_reviewer:\n    runtime: codex\n")
 
         handler = UnisonHandler.__new__(UnisonHandler)
         handler.project_root = tmp_path
-
-        with patch.object(handler, "_load_budget", return_value={
-            "daily_used": 1000, "daily_limit": 50000,
-            "per_task_used": 500, "per_task_limit": 10000,
-        }):
-            with patch.object(handler, "_load_agents", return_value=[]):
+        try:
+            with patch.object(handler, "_load_budget", return_value={
+                "daily_used": 0, "daily_limit": 1_000_000,
+                "per_task_used": 0, "per_task_limit": 200_000,
+            }):
                 data = handler._load_state()
+        finally:
+            import shutil
+            if checkpoint_dir.exists():
+                shutil.rmtree(checkpoint_dir)
 
-        budget = data["budget"]
-        assert budget["daily_used"] == 1000
-        assert budget["daily_limit"] == 50000
-        assert budget["per_task_used"] == 500
-        assert budget["per_task_limit"] == 10000
+        assert data["mode"] == "full-dev"
+        assert data["pipeline_file"] == "p10b-fix.yaml"
 
 
 # ============================================================================
@@ -716,23 +733,22 @@ class TestLoadPipelineConfig:
         # All files fail → returns None
         assert result is None
 
-    def test_prefers_pipeline_yaml_over_others(self, tmp_path):
+    def test_prefers_pipeline_named_in_state_over_root_yaml(self, tmp_path):
         from unison.webui import UnisonHandler
+        from unison.state import State
 
-        # Create pipeline.yaml (with agents — first candidate)
-        (tmp_path / "pipeline.yaml").write_text("agents: {planner: {runtime: claude}}")
-        # Also create another yaml
-        (tmp_path / "other.yaml").write_text("agents: {developer: {runtime: claude}}")
+        (tmp_path / "old.yaml").write_text("mode: code-dev\nagents:\n  developer:\n    runtime: claude\n")
+        pipelines = tmp_path / "pipelines"
+        pipelines.mkdir()
+        (pipelines / "p10b-fix.yaml").write_text("mode: code-dev\nagents:\n  developer:\n    runtime: claude\n  reviewer:\n    runtime: codex\n")
 
         handler = UnisonHandler.__new__(UnisonHandler)
         handler.project_root = tmp_path
 
-        with patch("unison.webui.yaml", create=True) as mock_yaml:
-            mock_yaml.safe_load.return_value = {
-                "agents": {"planner": {"runtime": "claude"}}
-            }
-            result = handler._load_pipeline_config()
-        assert result["agents"] == {"planner": {"runtime": "claude"}}
+        state = State(pipeline_name="p10b-fix")
+        result = handler._load_pipeline_config(state)
+        assert result is not None
+        assert result["__file__"] == "p10b-fix.yaml"
 
 
 # ============================================================================

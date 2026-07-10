@@ -38,6 +38,8 @@ class TestClaudeRunner:
         assert "claude" in cmd
         assert "-p" in cmd
         assert "--dangerously-skip-permissions" in cmd
+        assert "--model" in cmd
+        assert "deepseek-v4-pro" in cmd
         assert "Implement feature X" in cmd
 
 
@@ -69,6 +71,8 @@ class TestCodexRunner:
         assert "codex" in cmd
         assert "exec" in cmd
         assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+        assert "--model" in cmd
+        assert "gpt-5.5" in cmd
         assert "Review this code" in cmd
 
 
