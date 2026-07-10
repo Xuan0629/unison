@@ -50,14 +50,18 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 with open(_TEMPLATE_DIR / "dashboard.html", "r", encoding="utf-8") as _f:
     _HTML_CONTENT = _f.read()
 
-PAGE = Template(_HTML_CONTENT)  # kept for backward compat
-
 # Cache static file contents at module load time
 _STATIC_CACHE: dict[str, bytes] = {}
 for _fname in ("dashboard.css", "dashboard.js"):
     _fp = _STATIC_DIR / _fname
     if _fp.exists():
         _STATIC_CACHE[_fname] = _fp.read_bytes()
+
+_ASSET_VERSION = hashlib.sha256(
+    b"".join(_STATIC_CACHE.get(name, b"") for name in sorted(_STATIC_CACHE))
+).hexdigest()[:12]
+_HTML_CONTENT = _HTML_CONTENT.replace("__ASSET_VERSION__", _ASSET_VERSION)
+PAGE = Template(_HTML_CONTENT)  # kept for backward compat
 
 # ============================================================================
 # Project registry
@@ -288,6 +292,10 @@ class UnisonHandler(BaseHTTPRequestHandler):
         self.project_root = project_root
         try:
             pipeline = self._load_pipeline_config(state)
+            pipeline_file_hint: str | None = None
+            pipeline_link = project_root / "pipeline.yaml"
+            if pipeline is None and pipeline_link.is_symlink():
+                pipeline_file_hint = Path(os.readlink(pipeline_link)).name
             data["budget"] = self._load_budget(pipeline)
             data["agents"] = self._load_agents(state, pipeline)
         finally:
@@ -312,7 +320,7 @@ class UnisonHandler(BaseHTTPRequestHandler):
             }
         else:
             data["mode"] = self._derive_mode(data.get("agents", []))
-            data["pipeline_file"] = state.pipeline_name or None
+            data["pipeline_file"] = pipeline_file_hint or state.pipeline_name or None
             data["config"] = {"mode": data["mode"], "pipeline_file": data["pipeline_file"]}
 
         data["project"] = {

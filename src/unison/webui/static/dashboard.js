@@ -340,32 +340,52 @@ function selectProject(projectId) {
   localStorage.setItem("unison-project", projectId);
   _prev = null;
   patchHistory({runs: []});
-  if (_sse) _sse.close();
+  _sseActive = false;
+  if (_sse) {
+    _sse.close();
+    _sse = null;
+  }
   if (_pollId) {
     clearInterval(_pollId);
     _pollId = null;
   }
+  // Do not wait for the asynchronous SSE handshake to refresh the UI.
+  poll();
+  loadRunHistory();
   if (!startSSE()) {
-    poll();
     _pollId = setInterval(poll, 3000);
+  }
+}
+
+function applyState(state, requestedProject) {
+  if (requestedProject !== _projectId) return;
+  if (state.project && state.project.id && state.project.id !== _projectId) return;
+  var previous = _prev;
+  var projectChanged = !previous || !previous.project || !state.project ||
+    previous.project.id !== state.project.id;
+  // Set the canonical snapshot before rendering. patchAll() calls helpers
+  // that consult _prev, so leaving the old project here creates mixed UI.
+  _prev = state;
+  if (projectChanged) {
+    patchAll(state);
+  } else {
+    diffPatch(previous, state);
   }
 }
 
 function startSSE() {
   if (!window.EventSource) return false;
+  var requestedProject = _projectId;
   var sse = new EventSource(apiUrl('/api/events'));
   _sse = sse;
   sse.onmessage = function(e) {
-    var state = JSON.parse(e.data);
-    if (!_prev) {
-      patchAll(state);
-    } else {
-      diffPatch(_prev, state);
-    }
-    _prev = state;
+    if (_sse !== sse) return;
+    applyState(JSON.parse(e.data), requestedProject);
   };
   sse.onerror = function() {
     sse.close();
+    if (_sse !== sse) return;
+    _sse = null;
     if (_sseActive) {
       _sseActive = false;
       poll();
@@ -377,18 +397,14 @@ function startSSE() {
 }
 
 function poll() {
+  var requestedProject = _projectId;
   fetch(apiUrl("/api/state"))
     .then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     })
     .then(function (state) {
-      if (!_prev) {
-        patchAll(state);
-      } else {
-        diffPatch(_prev, state);
-      }
-      _prev = state;
+      applyState(state, requestedProject);
     })
     .catch(function (_) { /* retry next tick */ });
 }
@@ -608,9 +624,8 @@ function patchActive(s) {
   var det   = document.getElementById("active-detail");
   var phase = s.phase || "init";
 
-  // Remove working animation by default
-  panel.removeAttribute("id");
-  panel.id = "active-panel";
+  // Keep the DOM id stable; use a modifier class for animation state.
+  panel.classList.remove("active-panel--working");
 
   if (s.halt_signal) {
     panel.removeAttribute("hidden");
@@ -637,8 +652,7 @@ function patchActive(s) {
     det.textContent = t("phases." + phase) + " · " + t("iteration") + " " + (s.iteration || 0);
 
     // Breathing glow while working
-    panel.removeAttribute("id");
-    panel.id = "active-panel--working";
+    panel.classList.add("active-panel--working");
   } else {
     panel.removeAttribute("hidden");
     msg.textContent = t("phases." + phase);
@@ -1062,13 +1076,18 @@ function exportState() {
 // ======================================================================
 
 function loadRunHistory() {
+  var requestedProject = _projectId;
   fetch(apiUrl("/api/runs"))
     .then(function(r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     })
-    .then(patchHistory)
-    .catch(function() { patchHistory({runs: []}); });
+    .then(function(data) {
+      if (requestedProject === _projectId) patchHistory(data);
+    })
+    .catch(function() {
+      if (requestedProject === _projectId) patchHistory({runs: []});
+    });
 }
 
 function patchHistory(data) {

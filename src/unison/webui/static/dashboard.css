@@ -1038,7 +1038,7 @@ body {
   50%      { border-left-color: var(--accent-dim); box-shadow: var(--shadow-glow); }
 }
 
-#active-panel--working {
+.active-panel--working {
   animation: breathe 2.5s ease-in-out infinite;
 }
 
