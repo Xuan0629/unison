@@ -288,8 +288,8 @@ class UnisonHandler(BaseHTTPRequestHandler):
         self.project_root = project_root
         try:
             pipeline = self._load_pipeline_config(state)
-            data["budget"] = self._load_budget()
-            data["agents"] = self._load_agents(pipeline)
+            data["budget"] = self._load_budget(pipeline)
+            data["agents"] = self._load_agents(state, pipeline)
         finally:
             self.project_root = previous_root
 
@@ -334,12 +334,10 @@ class UnisonHandler(BaseHTTPRequestHandler):
             return "code-dev"
         return "inspect-only"
 
-    def _load_budget(self) -> dict:
-        """Return {daily_used, daily_limit, per_task_used, per_task_limit}.
-
-        Usage comes from budget.json; limits come from pipeline YAML config
-        (falling back to sensible defaults).
-        """
+    def _load_budget(self, pipeline: dict | None = None) -> dict:
+        """Return usage plus limits, reusing a supplied pipeline snapshot."""
+        if pipeline is None:
+            pipeline = self._load_pipeline_config()
         daily_used = 0
         per_task_used = 0
         budget_path = self.project_root / ".unison" / "budget.json"
@@ -356,7 +354,6 @@ class UnisonHandler(BaseHTTPRequestHandler):
 
         daily_limit = 1_000_000
         per_task_limit = 200_000
-        pipeline = self._load_pipeline_config()
         if pipeline:
             bc = pipeline.get("budget")
             if isinstance(bc, dict):
@@ -370,35 +367,22 @@ class UnisonHandler(BaseHTTPRequestHandler):
             "per_task_limit": per_task_limit,
         }
 
-    def _load_agents(self, pipeline: dict | None = None) -> list[dict]:
-        """Extract agent specs from state.runtime_agents or pipeline YAML.
-
-        The Orchestrator writes ``runtime_agents`` to state for modes
-        with dynamically-created agents (MoA, design-debate, etc.).
-        Falls back to pipeline YAML agents when runtime data is absent.
-        """
-        if pipeline is None:
-            pipeline = self._load_pipeline_config()
-        if not pipeline:
-            return []
-
-        # Priority 1: runtime agents from state (covers MoA + any dynamic mode)
-        state = State()
-        state_file = self.project_root / ".unison" / "state.json"
-        if state_file.exists():
+    def _load_agents(
+        self, state: State | None = None, pipeline: dict | None = None
+    ) -> list[dict]:
+        """Use runtime agents from a supplied state, else one pipeline snapshot."""
+        if state is None:
+            state_file = self.project_root / ".unison" / "state.json"
             try:
                 state = State.atomic_read(state_file)
-            except Exception:
-                import logging
-                _log = logging.getLogger(__name__)
-                _log.warning(
-                    "_load_agents: failed to read state.json, "
-                    "falling back to pipeline YAML agents", exc_info=True,
-                )
+            except (json.JSONDecodeError, OSError, ValueError):
+                state = State()
+        if pipeline is None:
+            pipeline = self._load_pipeline_config(state)
         if state.runtime_agents:
             return state.runtime_agents
-
-        # Priority 2: pipeline YAML agents (static fallback)
+        if not pipeline:
+            return []
         agents_raw = pipeline.get("agents")
         if not isinstance(agents_raw, dict):
             return []

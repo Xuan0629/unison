@@ -129,6 +129,65 @@ class TestProjectRegistry:
         assert left_state["project"]["id"] != right_state["project"]["id"]
 
 
+class TestUnifiedDataSources:
+    def test_load_state_reads_active_pipeline_once(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+        handler.registry = ProjectRegistry(tmp_path / "projects.json")
+        pipeline = {
+            "__file__": "active.yaml",
+            "mode": "full-dev",
+            "agents": {
+                "planner": {"runtime": "claude", "model": "planner-model"},
+                "developer": {"runtime": "claude", "model": "dev-model"},
+            },
+            "budget": {"daily_token_limit": 123, "per_task_limit": 45},
+        }
+
+        with patch.object(handler, "_load_pipeline_config", return_value=pipeline) as load_config:
+            data = handler._load_state(tmp_path)
+
+        load_config.assert_called_once()
+        assert data["mode"] == "full-dev"
+        assert data["config"]["mode"] == "full-dev"
+        assert data["pipeline_file"] == "active.yaml"
+        assert data["config"]["pipeline_file"] == "active.yaml"
+        assert data["budget"]["daily_limit"] == 123
+        assert data["budget"]["per_task_limit"] == 45
+        assert [agent["model"] for agent in data["agents"]] == [
+            "planner-model", "dev-model",
+        ]
+
+    def test_runtime_agents_come_from_loaded_state_not_second_file_read(self, tmp_path):
+        import json
+        from unison.webui import UnisonHandler
+
+        state_dir = tmp_path / ".unison"
+        state_dir.mkdir()
+        (state_dir / "state.json").write_text(json.dumps({
+            "version": "2.0", "phase": "dev_active", "iteration": 1,
+            "history": [], "halt_signal": False, "halt_reason": None,
+            "pipeline_name": "active",
+            "runtime_agents": [{
+                "role": "developer", "runtime": "claude", "model": "actual-model",
+            }],
+        }))
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+        handler.registry = ProjectRegistry(tmp_path / "projects.json")
+
+        with patch.object(handler, "_load_pipeline_config", return_value={
+            "__file__": "active.yaml", "mode": "code-dev",
+            "agents": {"developer": {"runtime": "claude", "model": "yaml-model"}},
+        }), patch("unison.webui.server.State.atomic_read", wraps=State.atomic_read) as read_state:
+            data = handler._load_state(tmp_path)
+
+        assert read_state.call_count == 1
+        assert data["agents"][0]["model"] == "actual-model"
+
+
 # ============================================================================
 # _derive_active_agent — phase → active agent role
 # ============================================================================
