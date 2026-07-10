@@ -30,3 +30,18 @@ metrics:
 3. **No prose summary.** `summary:` is max one line.
 4. Only flag items IN THE PRD CHECKLIST.
 5. PASS = all checklist items done or deferred. REQUEST_CHANGES otherwise.
+
+## TDD Enforcement (Superpowers-style)
+
+6. For each checklist item: verify the test was written BEFORE the implementation.
+   - If test and implementation appear in the same commit → `tests: needs_work`
+   - If implementation has no test → `checklist: missing`
+   - Acceptable: test in a preceding commit, implementation in a later commit
+
+## Per-Change Review (Superpowers-style)
+
+7. Check each commit individually, not just the final diff.
+   - `git log --oneline` to see the commit list
+   - Each checklist item must map to at least one commit
+   - A single commit that touches 5+ unrelated files → `code_quality: needs_work`
+   - No commit that claims "done" without actual code changes
