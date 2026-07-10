@@ -623,8 +623,8 @@ agents:
 """)
         loader = PipelineLoader()
         spec = loader.load(pipeline_file)
-        assert "orchestrator" in spec.agents
-        assert spec.agents["orchestrator"].role == "orchestrator"
+        assert "orchestrator_agent" in spec.agents
+        assert spec.agents["orchestrator_agent"].role == "orchestrator"
 
     def test_planner_not_in_required_pipeline_roles(self):
         """planner 不在 REQUIRED_PIPELINE_ROLES 中（可选角色）。"""

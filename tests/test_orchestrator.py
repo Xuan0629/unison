@@ -2040,7 +2040,7 @@ class TestP10023ExhaustionAndSkipRedirect:
             f"Expected phase_done event, got: {records}"
         )
         r = phase_done_events[-1]
-        assert r["verdict"] == "PASS"
+        assert r["verdict"] == "EXHAUSTED"
         assert "exhausted" in r["title"], (
             f"Expected 'exhausted' in title, got: {r['title']}"
         )
@@ -2073,7 +2073,7 @@ class TestP10023ExhaustionAndSkipRedirect:
             f"Expected phase_done event, got: {records}"
         )
         r = phase_done_events[-1]
-        assert r["verdict"] == "PASS"
+        assert r["verdict"] == "EXHAUSTED"
         assert "exhausted" in r["title"], (
             f"Expected 'exhausted' in title, got: {r['title']}"
         )
