@@ -2140,3 +2140,186 @@ class TestP10023ExhaustionAndSkipRedirect:
         # timestamp should be valid ISO 8601
         from datetime import datetime as dt
         dt.fromisoformat(data["timestamp"])
+
+
+# ============================================================================
+# F1: Risk matrix + snapshot wiring
+# ============================================================================
+
+
+class TestRiskMatrixWiring:
+    """F1: SnapshotManager + RiskEvaluator wired into orchestrator."""
+
+    def _make_spec(self, tmp_path: Path, **snapshot_overrides) -> PipelineSpec:
+        """Build a minimal PipelineSpec, optionally overriding snapshot config."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "developer.md").write_text("# Developer")
+        (prompts_dir / "reviewer.md").write_text("# Reviewer")
+
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+
+        # Apply snapshot config overrides
+        if snapshot_overrides:
+            from unison.interfaces import SnapshotConfig
+            from dataclasses import replace
+            snap = replace(spec.snapshots, **snapshot_overrides)
+            spec = replace(spec, snapshots=snap)
+        return spec
+
+    def test_snapshot_mgr_created_when_enabled(self, tmp_path):
+        """snapshots.enabled=True (default) → _snapshot_mgr is not None."""
+        spec = self._make_spec(tmp_path)
+        orch = Orchestrator(spec=spec)
+        assert orch._snapshot_mgr is not None
+        assert orch._risk_evaluator is not None
+
+    def test_snapshot_mgr_none_when_disabled(self, tmp_path):
+        """snapshots.enabled=False → _snapshot_mgr is None."""
+        spec = self._make_spec(tmp_path, enabled=False)
+        orch = Orchestrator(spec=spec)
+        assert orch._snapshot_mgr is None
+        assert orch._risk_evaluator is None
+
+    def test_risk_evaluator_uses_risk_matrix_config(self, tmp_path):
+        """RiskEvaluator initialised with spec.risk_matrix and workspace."""
+        spec = self._make_spec(tmp_path)
+        orch = Orchestrator(spec=spec)
+        evaluator = orch._risk_evaluator
+        assert evaluator is not None
+        assert evaluator.matrix == spec.risk_matrix
+        assert evaluator.workspace == spec.world.root
+
+    def test_snapshot_mgr_uses_snapshot_config(self, tmp_path):
+        """SnapshotManager uses retention_hours and max_slots from config."""
+        spec = self._make_spec(tmp_path, retention_hours=24, max_slots=50)
+        orch = Orchestrator(spec=spec)
+        mgr = orch._snapshot_mgr
+        assert mgr is not None
+        assert mgr.retention_hours == 24
+        assert mgr.max_slots == 50
+
+    def test_get_git_diff_files_empty_on_no_changes(self, tmp_path):
+        """No uncommitted changes → empty list."""
+        import subprocess
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t.com"],
+            cwd=tmp_path, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "T"],
+            cwd=tmp_path, capture_output=True,
+        )
+        (tmp_path / "file.txt").write_text("content")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"],
+                       cwd=tmp_path, capture_output=True)
+
+        files = Orchestrator._get_git_diff_files(tmp_path)
+        assert files == []
+
+    def test_get_git_diff_files_detects_modified(self, tmp_path):
+        """Modified file after commit → (path, MODIFY)."""
+        import subprocess
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t.com"],
+            cwd=tmp_path, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "T"],
+            cwd=tmp_path, capture_output=True,
+        )
+        (tmp_path / "file.txt").write_text("initial")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"],
+                       cwd=tmp_path, capture_output=True)
+
+        # Modify file without committing
+        (tmp_path / "file.txt").write_text("modified")
+
+        from unison.interfaces import Operation
+        files = Orchestrator._get_git_diff_files(tmp_path)
+        assert len(files) >= 1
+        assert ("file.txt", Operation.MODIFY) in files
+
+    def test_get_git_diff_files_detects_new_file(self, tmp_path):
+        """New untracked file → (path, CREATE) via --name-status."""
+        import subprocess
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t.com"],
+            cwd=tmp_path, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "T"],
+            cwd=tmp_path, capture_output=True,
+        )
+        (tmp_path / "existing.txt").write_text("existing")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"],
+                       cwd=tmp_path, capture_output=True)
+
+        # New file (untracked won't show in diff --name-status HEAD unless staged)
+        # We test staged new file (git add)
+        (tmp_path / "new_file.py").write_text("new")
+        subprocess.run(["git", "add", "new_file.py"], cwd=tmp_path, capture_output=True)
+
+        from unison.interfaces import Operation
+        files = Orchestrator._get_git_diff_files(tmp_path)
+        assert len(files) >= 1
+        assert ("new_file.py", Operation.CREATE) in files
+
+    def test_l3_path_triggers_halt_in_evaluate(self, tmp_path):
+        """External L3 path (sudo/system-critical) → halt via risk evaluator."""
+        from unison.risk_engine import RuleEngineRiskEvaluator
+        from unison.interfaces import RiskMatrixConfig, Operation
+
+        matrix = RiskMatrixConfig(
+            system_critical_paths=["/etc/passwd"],
+        )
+        evaluator = RuleEngineRiskEvaluator(matrix=matrix, workspace=tmp_path)
+
+        result = evaluator.evaluate(
+            operation=Operation.MODIFY,
+            path="/etc/passwd",
+        )
+        assert result.halted is True
+        assert result.level.value == "halt"
+
+    def test_safe_workspace_path_does_not_halt(self, tmp_path):
+        """Workspace-only change → no halt from risk evaluator."""
+        from unison.risk_engine import RuleEngineRiskEvaluator
+        from unison.interfaces import RiskMatrixConfig, Operation
+
+        matrix = RiskMatrixConfig()
+        evaluator = RuleEngineRiskEvaluator(matrix=matrix, workspace=tmp_path)
+
+        ws_file = tmp_path / "safe.py"
+        ws_file.write_text("hello")
+
+        result = evaluator.evaluate(
+            operation=Operation.MODIFY,
+            path=str(ws_file),
+        )
+        assert result.halted is False
+        # L2 = workspace modify (observer_evaluate)
+        assert result.level.value == "observer_evaluate"

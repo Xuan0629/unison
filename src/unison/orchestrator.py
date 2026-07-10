@@ -22,7 +22,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from unison.interfaces import AgentResult, MoaConfig, Notification, PipelineSpec, RedirectControl, ReviewVerdict, VerdictParseError
+from unison.interfaces import AgentResult, MoaConfig, Notification, Operation, PipelineSpec, RedirectControl, ReviewVerdict, VerdictParseError
 from unison.phase_router import PhaseRouter
 from unison.pipeline import PipelineValidationError
 from unison.prompt_registry import PromptRegistry
@@ -43,6 +43,8 @@ from unison.runners.codex import CodexRunner
 from unison.runners.hermes import HermesRunner
 from unison.runners.openclaw import OpenClawRunner
 from unison.run_history import RunHistoryStore
+from unison.risk_engine import RuleEngineRiskEvaluator
+from unison.snapshot import FileSnapshotManager
 
 
 # ============================================================================
@@ -104,6 +106,22 @@ class Orchestrator:
         self._checkpoint_mgr = FileCheckpointManager(
             base_dir=Path.home() / ".unison" / "checkpoints"
         )
+
+        # F1: Risk matrix + snapshot safety net
+        snap_config = self.spec.snapshots
+        self._snapshot_mgr: FileSnapshotManager | None = None
+        self._risk_evaluator: RuleEngineRiskEvaluator | None = None
+        if snap_config.enabled:
+            self._snapshot_mgr = FileSnapshotManager(
+                base_dir=Path.home() / ".unison" / "snapshots",
+                retention_hours=snap_config.retention_hours,
+                max_slots=snap_config.max_slots,
+                exclude_patterns=list(snap_config.exclude_patterns),
+            )
+            self._risk_evaluator = RuleEngineRiskEvaluator(
+                matrix=self.spec.risk_matrix,
+                workspace=self.spec.world.root,
+            )
 
         # -- observer tracking (P8 S10) ----------------------------------------
         self._observer_proc: subprocess.Popen | None = None
@@ -1782,6 +1800,12 @@ class Orchestrator:
         if self._state.halt_signal:
             return
 
+        # F1a: Pre-invoke snapshot of external paths (safety net).
+        # Only active when snapshots.enabled=True (default).
+        snapshot_ids: list[str] = []
+        if self._snapshot_mgr is not None:
+            snapshot_ids = self._snapshot_external_paths(role, iteration)
+
         # 4. Build prompt (uses BudgetTracker for token budget)
         prompt = self._build_prompt(role, iteration, review_phase=review_phase)
 
@@ -1802,6 +1826,13 @@ class Orchestrator:
             timeout=self.spec.per_agent_timeout,
             log_path=log_path,
         )
+
+        # F1b: Post-invoke risk evaluation — scan git diff for external
+        # changes, evaluate risk, restore + halt on L3.
+        if self._risk_evaluator is not None and self._snapshot_mgr is not None:
+            halted = self._evaluate_post_invoke_risk(world.root, snapshot_ids)
+            if halted:
+                return
 
         # 7. Timeout-recovery: Claude Code often times out at 600s with
         # valid work already on disk (tested in 4 of 5 Claude invocations
@@ -1879,6 +1910,120 @@ class Orchestrator:
         else:
             # Fix failed — record but don't halt (preserve existing behavior)
             pass
+
+    # ------------------------------------------------------------------
+    # F1: Risk matrix + snapshot safety net
+    # ------------------------------------------------------------------
+
+    def _snapshot_external_paths(
+        self, role: str, iteration: int
+    ) -> list[str]:
+        """Snapshot external paths before agent invocation.
+
+        Returns a list of audit_ids for later restoration.
+        """
+        audit_ids: list[str] = []
+        mgr = self._snapshot_mgr
+        if mgr is None:
+            return audit_ids
+
+        for ext_path in self.spec.snapshots.external_paths:
+            expanded = Path(ext_path).expanduser().resolve()
+            if not expanded.exists():
+                continue
+            try:
+                record = mgr.snapshot(
+                    path=expanded,
+                    operation=Operation.MODIFY,
+                    agent=role,  # type: ignore[arg-type]
+                    iteration=iteration,
+                )
+                audit_ids.append(record.audit_id)
+            except (ValueError, OSError):
+                # Path excluded or unreadable — skip
+                continue
+        return audit_ids
+
+    def _evaluate_post_invoke_risk(
+        self, workspace: Path, snapshot_ids: list[str]
+    ) -> bool:
+        """Scan git diff for external changes, evaluate risk, restore on L3.
+
+        Returns True if execution was halted (L3 violation → restore).
+        """
+        evaluator = self._risk_evaluator
+        mgr = self._snapshot_mgr
+        if evaluator is None or mgr is None:
+            return False
+
+        # Get list of files changed by the agent
+        changed_files = self._get_git_diff_files(workspace)
+        if not changed_files:
+            return False
+
+        halted = False
+        for path, op in changed_files:
+            evaluation = evaluator.evaluate(operation=op, path=path)
+            if evaluation.halted:
+                # L3 violation — restore from snapshot and halt pipeline
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.error(
+                    "L3 risk violation: %s — restoring snapshots and halting",
+                    evaluation.reason,
+                )
+                for audit_id in snapshot_ids:
+                    try:
+                        mgr.restore(audit_id)
+                    except (KeyError, FileNotFoundError):
+                        continue
+                self.halt(
+                    f"L3 risk violation: {evaluation.reason}",
+                    category="stage",
+                )
+                halted = True
+                break
+
+        return halted
+
+    @staticmethod
+    def _get_git_diff_files(workspace: Path) -> list[tuple[str, Operation]]:
+        """Return list of (path, operation) for files changed since last commit.
+
+        Uses ``git diff --name-status``.  Maps status letters to Operation:
+        A → CREATE, M → MODIFY, D → DELETE, R → MODIFY (rename target).
+        """
+        result: list[tuple[str, Operation]] = []
+        try:
+            proc = subprocess.run(
+                ["git", "diff", "--name-status", "HEAD"],
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if proc.returncode != 0:
+                return result
+            for line in proc.stdout.strip().splitlines():
+                if not line.strip():
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 2:
+                    continue
+                status = parts[0][0]  # first char: A, M, D, R
+                filepath = parts[-1]  # last field = file path
+                if status == "A":
+                    op = Operation.CREATE
+                elif status == "D":
+                    op = Operation.DELETE
+                elif status in ("M", "R"):
+                    op = Operation.MODIFY
+                else:
+                    op = Operation.MODIFY
+                result.append((filepath, op))
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass
+        return result
 
     # ------------------------------------------------------------------
     # Pipeline B: multi-agent parallel invocation (§PRD-parallel-system)
