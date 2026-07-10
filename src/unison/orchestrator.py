@@ -2757,6 +2757,19 @@ class Orchestrator:
         # Prepend the task to system_prompt so the LLM sees it first
         full_system = f"{task}\n\n{system_prompt}"
 
+        # P10: Pre-generated review package (Superpowers-style, -10% reviewer work)
+        # Reviewers get a pre-built bundle instead of running git/log commands.
+        if role == "reviewer":
+            self._generate_review_package(iteration, review_phase)
+            full_system += (
+                "\n\n## Review Package\n"
+                "A pre-generated review bundle is at:\n"
+                f"  .unison/review-package-{iteration}.md\n"
+                "It contains: git diff (staged), git log (this iteration), "
+                "checklist status, and test results.\n"
+                "Do NOT run git commands. Read the bundle instead."
+            )
+
         # DEV-3: Inject dev-notes.md for cross-iteration context
         dev_notes = ""
         if role == "developer":
@@ -2803,6 +2816,75 @@ class Orchestrator:
         prompt = self._inject_checklist_into_prompt(prompt, role)
 
         return prompt
+
+    def _generate_review_package(self, iteration: int, review_phase: str) -> None:
+        """P10: Pre-build review context bundle (Superpowers-style).
+
+        Writes ``.unison/review-package-{iteration}.md`` containing git diff,
+        git log, checklist status, and test results so the reviewer doesn't
+        waste tokens running git/log commands.
+        """
+        root = self.spec.world.root
+        unison_dir = root / ".unison"
+        unison_dir.mkdir(parents=True, exist_ok=True)
+        bundle_path = unison_dir / f"review-package-{iteration}.md"
+
+        lines: list[str] = [
+            f"# Review Package — Iteration {iteration}",
+            f"phase: {review_phase}",
+            "",
+            "## Git Log (this iteration)",
+        ]
+
+        # Git log — last 5 commits
+        try:
+            log = subprocess.run(
+                ["git", "log", "--oneline", "-5"],
+                cwd=str(root), capture_output=True, text=True, timeout=10,
+            )
+            if log.returncode == 0:
+                lines.append("```")
+                lines.append(log.stdout.strip())
+                lines.append("```")
+        except Exception:
+            lines.append("(git log unavailable)")
+
+        # Git diff (staged + unstaged)
+        lines.extend(["", "## Git Diff"])
+        try:
+            diff = subprocess.run(
+                ["git", "diff", "HEAD"],
+                cwd=str(root), capture_output=True, text=True, timeout=10,
+            )
+            if diff.returncode == 0 and diff.stdout.strip():
+                lines.append("```diff")
+                lines.append(diff.stdout[:8192])  # cap at 8KB
+                if len(diff.stdout) > 8192:
+                    lines.append("... [truncated]")
+                lines.append("```")
+            else:
+                lines.append("(no diff)")
+        except Exception:
+            lines.append("(git diff unavailable)")
+
+        # Checklist status
+        lines.extend(["", "## Checklist"])
+        checklist_path = root / ".unison" / "checklist.json"
+        if checklist_path.exists():
+            try:
+                import json as _json
+                cl = _json.loads(checklist_path.read_text())
+                items = cl.get("items", [])
+                for item in items:
+                    status = item.get("status", "?")
+                    icon = {"done": "✅", "deferred": "⏸️", "pending": "⬜", "in_progress": "🔄"}.get(status, "❓")
+                    lines.append(f"- {icon} [{status}] {item.get('id', '?')}: {item.get('title', '?')}")
+            except Exception:
+                lines.append("(checklist read error)")
+        else:
+            lines.append("(no checklist)")
+
+        bundle_path.write_text("\n".join(lines), encoding="utf-8")
 
     # ==================================================================
     # Internal: helpers
