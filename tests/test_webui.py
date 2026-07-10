@@ -963,3 +963,174 @@ class TestHandleControl:
         handler._handle_control("pause")
         assert control_dir.exists()
         assert control_dir.is_dir()
+
+
+# ============================================================================
+# Run history — native records and dynamic legacy migration
+# ============================================================================
+
+
+class TestRunHistoryStore:
+    def test_native_run_is_updated_in_place(self, tmp_path):
+        from unison.run_history import RunHistoryStore
+
+        store = RunHistoryStore(tmp_path)
+        store.start("run-1", pipeline_name="alpha", mode="code-dev")
+        store.finish(
+            "run-1", status="done", phase="done", iteration=2,
+            verdict="PASS", commit="abc123",
+        )
+
+        runs = store.list_runs(migrate=False)
+        assert len(runs) == 1
+        assert runs[0]["pipeline_name"] == "alpha"
+        assert runs[0]["status"] == "done"
+        assert runs[0]["verdict"] == "PASS"
+        assert runs[0]["legacy"] is False
+
+    def test_dynamic_migration_uses_actual_pipeline_names(self, tmp_path):
+        import json
+        from unison.run_history import RunHistoryStore
+
+        observer = tmp_path / "observer"
+        observer.mkdir()
+        notifications = observer / "notifications.jsonl"
+        notifications.write_text("\n".join([
+            json.dumps({
+                "timestamp": "2026-01-02T00:00:00+00:00",
+                "event_type": "pipeline_start", "pipeline": "custom-new",
+                "phase": "init", "iteration": 0,
+            }),
+            json.dumps({
+                "timestamp": "2026-01-02T00:05:00+00:00",
+                "event_type": "pipeline_done", "pipeline": "custom-new",
+                "phase": "done", "iteration": 1, "verdict": "PASS",
+            }),
+            json.dumps({
+                "timestamp": "2026-01-03T00:00:00+00:00",
+                "event_type": "pipeline_start", "pipeline": "custom-new",
+                "phase": "init", "iteration": 0,
+            }),
+            json.dumps({
+                "timestamp": "2026-01-03T00:07:00+00:00",
+                "event_type": "halted", "pipeline": "custom-new",
+                "phase": "dev_review", "iteration": 2,
+            }),
+        ]))
+        pipelines = tmp_path / "pipelines"
+        pipelines.mkdir()
+        (pipelines / "older-user-task.yaml").write_text(
+            "version: '2.0'\nmode: inspect-only\nagents: {}\n"
+        )
+
+        store = RunHistoryStore(tmp_path)
+        runs = store.list_runs(migrate=True)
+
+        assert [run["pipeline_name"] for run in runs].count("custom-new") == 2
+        assert {run["pipeline_name"] for run in runs} == {
+            "custom-new", "older-user-task",
+        }
+        custom_runs = [run for run in runs if run["pipeline_name"] == "custom-new"]
+        assert [run["status"] for run in custom_runs] == ["halted", "done"]
+        assert all(run["source"] == "notifications" for run in custom_runs)
+        by_name = {run["pipeline_name"]: run for run in runs}
+        assert by_name["older-user-task"]["status"] == "unknown"
+        assert by_name["older-user-task"]["legacy"] is True
+
+    def test_migration_is_idempotent(self, tmp_path):
+        from unison.run_history import RunHistoryStore
+
+        pipelines = tmp_path / "pipelines"
+        pipelines.mkdir()
+        (pipelines / "user-defined.yaml").write_text(
+            "version: '2.0'\nmode: code-dev\nagents: {}\n"
+        )
+        store = RunHistoryStore(tmp_path)
+
+        first = store.list_runs(migrate=True)
+        second = store.list_runs(migrate=True)
+
+        assert len(first) == 1
+        assert second == first
+
+    def test_duplicate_start_and_orphan_terminal_are_separate_runs(self, tmp_path):
+        import json
+        from unison.run_history import RunHistoryStore
+
+        observer = tmp_path / "observer"
+        observer.mkdir()
+        (observer / "notifications.jsonl").write_text("\n".join([
+            json.dumps({
+                "timestamp": "2026-02-01T00:00:00+00:00",
+                "event_type": "pipeline_start", "pipeline": "repeatable",
+            }),
+            json.dumps({
+                "timestamp": "2026-02-01T00:01:00+00:00",
+                "event_type": "pipeline_start", "pipeline": "repeatable",
+            }),
+            json.dumps({
+                "timestamp": "2026-02-01T00:02:00+00:00",
+                "event_type": "pipeline_done", "pipeline": "repeatable",
+                "phase": "done",
+            }),
+            json.dumps({
+                "timestamp": "2026-02-02T00:02:00+00:00",
+                "event_type": "halted", "pipeline": "orphan-terminal",
+                "phase": "dev_review", "summary": "stopped",
+            }),
+        ]))
+
+        runs = RunHistoryStore(tmp_path).list_runs(migrate=True)
+        repeatable = [run for run in runs if run["pipeline_name"] == "repeatable"]
+        orphan = next(run for run in runs if run["pipeline_name"] == "orphan-terminal")
+
+        assert len(repeatable) == 2
+        assert {run["status"] for run in repeatable} == {"running", "done"}
+        assert orphan["status"] == "halted"
+        assert orphan["halt_reason"] == "stopped"
+
+    def test_ambiguous_basename_skips_global_legacy_checkpoints(self, tmp_path):
+        import json
+        from unison.run_history import RunHistoryStore
+
+        left = tmp_path / "left" / "project"
+        right = tmp_path / "right" / "project"
+        left.mkdir(parents=True)
+        right.mkdir(parents=True)
+        registry_file = tmp_path / "projects.json"
+        registry_file.write_text(json.dumps({"projects": [
+            {"id": "left", "path": str(left)},
+            {"id": "right", "path": str(right)},
+        ]}))
+
+        checkpoint_dir = tmp_path / "checkpoints" / "project"
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "ckpt-1.json").write_text(json.dumps({
+            "version": "2.0", "pipeline_name": "wrong-project-run",
+            "phase": "done", "iteration": 1, "history": [],
+        }))
+
+        store = RunHistoryStore(
+            left, registry_file=registry_file, checkpoint_base=tmp_path / "checkpoints"
+        )
+        runs = store.list_runs(migrate=True)
+
+        assert all(run["pipeline_name"] != "wrong-project-run" for run in runs)
+
+    def test_webui_state_includes_persistent_runs(self, tmp_path):
+        from unison.run_history import RunHistoryStore
+        from unison.webui import UnisonHandler
+
+        RunHistoryStore(tmp_path).start(
+            "run-1", pipeline_name="actual-user-run", mode="code-dev"
+        )
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+        handler.registry = ProjectRegistry(tmp_path / "projects.json")
+
+        with patch.object(handler, "_load_pipeline_config", return_value=None), \
+             patch.object(handler, "_load_budget", return_value={}), \
+             patch.object(handler, "_load_agents", return_value=[]):
+            data = handler._load_state(tmp_path)
+
+        assert data["runs"][0]["pipeline_name"] == "actual-user-run"

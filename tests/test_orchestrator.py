@@ -116,6 +116,51 @@ agents:
         assert state.halt_signal is True
         assert state.halt_reason == "Test halt"
 
+    def test_run_history_records_terminal_state(self, tmp_path):
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "2.0"
+mode: code-dev
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: test
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "developer.md").write_text("# Developer")
+        (prompts_dir / "reviewer.md").write_text("# Reviewer")
+        spec = PipelineLoader().load(pipeline_file)
+        orchestrator = Orchestrator(spec=spec)
+        orchestrator._lock_mgr = MagicMock()
+        orchestrator._lock_mgr.acquire.return_value = True
+        orchestrator._auto_start_webui = MagicMock()
+        orchestrator._auto_start_observer = MagicMock()
+        orchestrator._stop_observer = MagicMock()
+        orchestrator._run_bootstrap = MagicMock()
+
+        def complete():
+            orchestrator._state.transition("done", "orchestrator", verdict="PASS")
+
+        orchestrator._run_state_machine = complete
+        final = orchestrator.run()
+
+        from unison.run_history import RunHistoryStore
+        runs = RunHistoryStore(tmp_path).list_runs(migrate=False)
+        assert final.phase == "done"
+        assert len(runs) == 1
+        assert runs[0]["pipeline_name"] == "pipeline"
+        assert runs[0]["status"] == "done"
+        assert runs[0]["verdict"] == "PASS"
+
     def test_orchestrator_pre_invoke_cleanup(self, tmp_path):
         """Orchestrator.pre_invoke_cleanup() runs git reset + clean."""
         world = World(root=tmp_path)

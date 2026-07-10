@@ -38,6 +38,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request, urlopen
 
 from unison.state import State
+from unison.run_history import RunHistoryStore
 
 # ============================================================================
 # Load HTML template from file (replaces the old embedded string literal)
@@ -188,6 +189,9 @@ class UnisonHandler(BaseHTTPRequestHandler):
                 self._json_response(self._load_projects())
             elif parsed.path == "/api/state":
                 self._json_response(self._load_state(self._request_project_root(parsed.query)))
+            elif parsed.path == "/api/runs":
+                root = self._request_project_root(parsed.query)
+                self._json_response({"runs": RunHistoryStore(root).list_runs()})
             elif parsed.path == "/api/events":
                 self._sse_response(self._request_project_root(parsed.query))
             elif parsed.path.startswith("/static/"):
@@ -316,6 +320,7 @@ class UnisonHandler(BaseHTTPRequestHandler):
             "name": project_root.name,
             "path": str(project_root),
         }
+        data["runs"] = RunHistoryStore(project_root).list_runs()
         return data
 
     def _derive_mode(self, agents: list) -> str:

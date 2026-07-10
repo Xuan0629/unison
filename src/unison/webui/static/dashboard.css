@@ -500,6 +500,10 @@ body {
   background: var(--green);
 }
 
+.history-item__dot--running { background: var(--blue); }
+.history-item__dot--halted { background: var(--red); }
+.history-item__dot--unknown { background: var(--fg-dim); }
+
 .history-item__title {
   flex: 1;
   overflow: hidden;

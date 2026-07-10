@@ -303,7 +303,7 @@ function updateStaticLabels() {
   // Also update config and history if already rendered
   if (_prev) {
     patchPipelineConfig(_prev);
-    patchHistory(_prev || {transitions: []});
+    loadRunHistory();
   }
 }
 
@@ -339,6 +339,7 @@ function selectProject(projectId) {
   _projectId = projectId;
   localStorage.setItem("unison-project", projectId);
   _prev = null;
+  patchHistory({runs: []});
   if (_sse) _sse.close();
   if (_pollId) {
     clearInterval(_pollId);
@@ -440,7 +441,7 @@ function patchAll(s) {
   patchError(s);
   patchLog(s);
   patchEmptyState(s);
-  patchHistory(s);
+  loadRunHistory();
   updateStaticLabels();
 }
 
@@ -469,11 +470,10 @@ function diffPatch(prev, next) {
 
   if (!arraysEqual(prev.tasks,       next.tasks))       patchTasks(next);
   if (!arraysEqual(prev.agents,      next.agents))      { patchAgents(next); patchPipelineConfig(next); patchEmptyState(next); /* patchGauges disabled */ }
-  if (!arraysEqual(prev.transitions, next.transitions)) { patchTimeline(next); patchTasks(next); patchLog(next); patchHistory(next); patchEmptyState(next); }
+  if (!arraysEqual(prev.transitions, next.transitions)) { patchTimeline(next); patchTasks(next); patchLog(next); patchEmptyState(next); }
 
-  // Detect phase transition to "done" or "halt" for history save
-  if (prev.phase !== "done" && prev.phase !== "halt" && (next.phase === "done" || next.phase === "halt")) {
-    saveHistoryEntry(next);
+  if ((prev.phase !== "done" && prev.phase !== "halt") && (next.phase === "done" || next.halt_signal)) {
+    loadRunHistory();
   }
 }
 
@@ -1058,49 +1058,39 @@ function exportState() {
 
 
 // ======================================================================
-// 14. HISTORY TASKS  (localStorage-based completed run log)
+// 14. HISTORY TASKS  (persistent server-side run records)
 // ======================================================================
 
-function loadHistory() {
-  try {
-    var raw = localStorage.getItem("unison-history");
-    return raw ? JSON.parse(raw) : [];
-  } catch (e) { return []; }
+function loadRunHistory() {
+  fetch(apiUrl("/api/runs"))
+    .then(function(r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(patchHistory)
+    .catch(function() { patchHistory({runs: []}); });
 }
 
-function saveHistoryEntry(s) {
-  var entry = {
-    title: s.pipeline_file || s.mode || "code-dev",
-    date: new Date().toISOString(),
-    phaseCount: (s.transitions || []).length,
-    verdict: s.last_verdict || "done"
-  };
-  var history = loadHistory();
-  history.unshift(entry);
-  // Cap at 50 entries
-  if (history.length > 50) history = history.slice(0, 50);
-  localStorage.setItem("unison-history", JSON.stringify(history));
-  patchHistory(_prev || {transitions: []});
-}
-
-function patchHistory(s) {
+function patchHistory(data) {
   var el = document.getElementById("history-list");
   if (!el) return;
-  var trans = (s && s.transitions) ? s.transitions : [];
-  if (!trans.length) {
+  var runs = (data && data.runs) ? data.runs : [];
+  if (!runs.length) {
     el.innerHTML = '<div class="history-item--empty" id="no-history-label">' + esc(t("noHistory")) + '</div>';
     return;
   }
-  var recent = trans.slice(-10).reverse();
   var html = "";
-  for (var i = 0; i < recent.length; i++) {
-    var h = recent[i];
-    var phaseKey = h.to_phase || "init";
+  for (var i = 0; i < runs.length; i++) {
+    var run = runs[i];
+    var status = run.status || "unknown";
+    var meta = status;
+    if (run.verdict) meta += " · " + run.verdict;
+    if (run.legacy) meta += " · legacy";
     html += '<div class="history-item">';
-    html += '<span class="history-item__dot" aria-hidden="true"></span>';
-    html += '<span class="history-item__title">' + esc(t("phases." + phaseKey)) + '</span>';
-    html += '<span class="history-item__meta">' + esc(h.note || "") + '</span>';
-    html += '<span class="history-item__date">' + esc(fmtTime(h.timestamp)) + '</span>';
+    html += '<span class="history-item__dot history-item__dot--' + esc(status) + '" aria-hidden="true"></span>';
+    html += '<span class="history-item__title">' + esc(run.pipeline_name || run.id) + '</span>';
+    html += '<span class="history-item__meta">' + esc(meta) + '</span>';
+    html += '<span class="history-item__date">' + esc(fmtDate(run.finished_at || run.started_at)) + '</span>';
     html += '</div>';
   }
   el.innerHTML = html;
@@ -1116,7 +1106,7 @@ function patchHistory(s) {
   applyLang();
   restoreTokenSettings();
   restoreSectionStates();
-  patchHistory(_prev || {transitions: []});
+  patchHistory({runs: []});
   loadProjects().then(function() {
     if (!startSSE()) {
       poll();

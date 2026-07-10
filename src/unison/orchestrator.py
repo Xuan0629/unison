@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +41,7 @@ from unison.runners.claude import ClaudeRunner
 from unison.runners.codex import CodexRunner
 from unison.runners.hermes import HermesRunner
 from unison.runners.openclaw import OpenClawRunner
+from unison.run_history import RunHistoryStore
 
 
 # ============================================================================
@@ -79,6 +81,9 @@ class Orchestrator:
         self.spec = spec
         self.dry_run = dry_run
         self._state = State()
+        self._run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        self._run_history = RunHistoryStore(self.spec.world.root)
+        self._run_history_started = False
         self._halt_category: str = "stage"  # "stage" or "external" (P0.5)
         self._in_chain: bool = False        # True when running inside _run_chain (P0.6)
         self._chain_depth: int = 0          # recursion guard for nested chains (P0.3)
@@ -277,6 +282,38 @@ class Orchestrator:
         except OSError:
             logger.warning("Failed to write lifecycle notification to %s", nf)
 
+    def _start_run_history(self) -> None:
+        if self._run_history_started:
+            return
+        try:
+            self._run_history.start(
+                self._run_id,
+                pipeline_name=self.spec.pipeline_name,
+                mode=self.spec.mode or "code-dev",
+            )
+            self._run_history_started = True
+        except OSError:
+            pass
+
+    def _finish_run_history(self) -> None:
+        if not self._run_history_started:
+            return
+        status = "halted" if self._state.halt_signal else (
+            "done" if self._state.phase == "done" else "unknown"
+        )
+        try:
+            self._run_history.finish(
+                self._run_id,
+                status=status,
+                phase=self._state.phase,
+                iteration=self._state.iteration,
+                verdict=self._state.last_review_verdict,
+                commit=self._state.last_dev_commit,
+                halt_reason=self._state.halt_reason,
+            )
+        except OSError:
+            pass
+
     def pre_invoke_cleanup(self) -> None:
         """Run ``git reset --hard HEAD && git clean -fd``.
 
@@ -354,6 +391,7 @@ class Orchestrator:
             self._state.observer_language = self.spec.observer_language
             self._state.pipeline_name = self.spec.pipeline_name
             self._save_checkpoint()
+            self._start_run_history()
 
             # ------------------------------------------------------------------
             # 3. Auto-start Web UI (§webui config)
@@ -383,6 +421,7 @@ class Orchestrator:
             # the finally block for lock release.
             pass
         finally:
+            self._finish_run_history()
             # ------------------------------------------------------------------
             # 5. Stop Observer (P8 S10: prevent orphan accumulation)
             # ------------------------------------------------------------------
