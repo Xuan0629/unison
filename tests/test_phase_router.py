@@ -48,12 +48,12 @@ class TestPhaseRouterKnownModes:
     @pytest.mark.parametrize("mode,expected_names", [
         ("code-dev",      ["dev"]),
         ("full-dev",      ["planning", "discuss", "dev"]),
-        ("design-debate", ["planning"]),
-        ("inspect-only",  ["review"]),
+        ("design-debate", ["planning", "discuss", "dev"]),
+        ("inspect-only",  ["dev"]),
         ("agent-fix",     ["dev"]),
         ("migrate",       ["planning", "discuss", "dev"]),
         ("greenfield",    ["dev"]),
-        ("spec-driven",   ["planning", "spec-check", "discuss", "dev"]),
+        ("spec-driven",   ["planning", "discuss", "dev"]),
     ])
     def test_mode_phase_sequence(self, mode, expected_names):
         """Each mode returns the expected ordered phase names."""
@@ -66,12 +66,12 @@ class TestPhaseRouterKnownModes:
     @pytest.mark.parametrize("mode,expected_active_phases", [
         ("code-dev",      ["dev_active"]),
         ("full-dev",      ["planning_active", "discuss_active", "dev_active"]),
-        ("design-debate", ["planning_active"]),
-        ("inspect-only",  ["dev_review"]),
+        ("design-debate", ["planning_active", "discuss_active", "dev_active"]),
+        ("inspect-only",  ["dev_active"]),
         ("agent-fix",     ["dev_active"]),
         ("migrate",       ["planning_active", "discuss_active", "dev_active"]),
         ("greenfield",    ["dev_active"]),
-        ("spec-driven",   ["planning_active", "spec-check", "discuss_active", "dev_active"]),
+        ("spec-driven",   ["planning_active", "discuss_active", "dev_active"]),
     ])
     def test_mode_active_phases(self, mode, expected_active_phases):
         """Each mode returns the expected active_phase values."""
@@ -127,17 +127,17 @@ class TestPhaseRouterBackwardCompat:
         assert phases[0].name == "planning"
 
     def test_inspect_only_has_review_phase(self):
-        """inspect-only: a single review phase (old: _run_review_only)."""
+        """inspect-only: maps to custom (dev phase) P13."""
         phases = PhaseRouter.get_phases("inspect-only")
-        assert len(phases) == 1
-        assert phases[0].name == "review"
+        assert len(phases) == 1  # P13: maps to custom
+        assert phases[0].name == "dev"  # P13: maps to custom
         assert phases[0].active_phase == "dev_review"
         assert phases[0].role == "reviewer"
 
     def test_spec_driven_has_four_phases(self):
-        """spec-driven: planning → spec-check → discuss → dev."""
+        """spec-driven: maps to dev:standard (planning → discuss → dev) P13."""
         phases = PhaseRouter.get_phases("spec-driven")
-        assert len(phases) == 4
+        assert len(phases) == 3  # P13: maps to dev:standard
         assert phases[0].name == "planning"
         assert phases[1].name == "spec-check"
         assert phases[2].name == "discuss"
