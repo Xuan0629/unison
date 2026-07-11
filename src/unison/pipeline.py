@@ -449,6 +449,7 @@ class PipelineLoader:
             "overflow_action",
             "halt_action",
             "downgrade_map",
+            "tier_upgrade",
         ):
             if key in raw:
                 kwargs[key] = raw[key]

@@ -235,6 +235,9 @@ class BudgetConfig:
     downgrade_map: dict[str, dict[str, str]] = field(default_factory=lambda: {
         "reviewer": {"from": "codex", "to": "claude", "model": "claude-sonnet-5"}
     })
+    tier_upgrade: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Keys per inner dict: "from", "to", "reasoning_effort".
+    # Example: {"developer": {"from": "claude", "to": "codex", "reasoning_effort": "xhigh"}}
 
 @dataclass(frozen=True)
 class SnapshotConfig:
