@@ -90,19 +90,19 @@ class YamlFrontmatterParser:
         """
         raw_text = review_path.read_text(encoding="utf-8")
 
-        # 提取 YAML frontmatter（以 --- 开头/结尾）
-        if not raw_text.startswith("---"):
-            raise VerdictParseError(
-                f"Missing YAML frontmatter in {review_path}"
-            )
-
-        parts = raw_text.split("---", 2)
-        if len(parts) < 3:
-            raise VerdictParseError(
-                f"Missing closing --- for YAML frontmatter in {review_path}"
-            )
-
-        yaml_text = parts[1]
+        # 提取 YAML frontmatter。支持两种格式：
+        # 1. --- 分隔的 YAML frontmatter（传统 reviewer）
+        # 2. 裸 YAML（dev-reviewer prompt 紧凑格式）
+        yaml_text: str
+        if raw_text.startswith("---"):
+            parts = raw_text.split("---", 2)
+            if len(parts) < 3:
+                raise VerdictParseError(
+                    f"Missing closing --- for YAML frontmatter in {review_path}"
+                )
+            yaml_text = parts[1]
+        else:
+            yaml_text = raw_text
 
         # 使用 regex 解析，替代 yaml.safe_load（避免 LLM 输出中 #、url(#id) 等字符导致 YAML 解析崩溃）
         data = _parse_frontmatter_regex(yaml_text)
@@ -156,5 +156,11 @@ class YamlFrontmatterParser:
         # PASS + 0 findings → suspicious
         if result.verdict == "PASS" and len(result.findings) == 0:
             result.suspicious = True
+
+        # PASS but dimensions show needs_work → suspicious
+        dims = data.get("dimensions", {})
+        if result.verdict == "PASS" and isinstance(dims, dict):
+            if any(v == "needs_work" for v in dims.values()):
+                result.suspicious = True
 
         return result

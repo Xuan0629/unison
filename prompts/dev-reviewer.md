@@ -29,7 +29,15 @@ metrics:
 2. **No "I checked", "I found", "I verified".** Just the YAML.
 3. **No prose summary.** `summary:` is max one line.
 4. Only flag items IN THE PRD CHECKLIST.
-5. PASS = all checklist items done or deferred. REQUEST_CHANGES otherwise.
+5. PASS = all checklist items done or deferred AND all dimensions pass. If ANY dimension is `needs_work`, verdict MUST be REQUEST_CHANGES.
+6. If tests: needs_work, DO NOT give PASS.
+7. Wrap output in YAML frontmatter delimiters:
+
+```yaml
+---
+verdict: ...
+...
+---
 
 ## TDD Enforcement (Superpowers-style)
 
