@@ -34,6 +34,9 @@ class SnapshotRecord:
         operation: The operation that triggered the snapshot.
         agent: The agent role that requested the snapshot.
         iteration: The iteration number.
+        project_id: Hash of project root (P12c).
+        pipeline_name: Pipeline name (P12c).
+        run_id: Run identifier (P12c).
     """
 
     audit_id: str
@@ -43,6 +46,9 @@ class SnapshotRecord:
     operation: Operation
     agent: AgentRole
     iteration: int
+    project_id: str = ""
+    pipeline_name: str = ""
+    run_id: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +132,9 @@ class FileSnapshotManager:
             "operation": record.operation.value,
             "agent": record.agent,
             "iteration": record.iteration,
+            "project_id": record.project_id,        # P12c
+            "pipeline_name": record.pipeline_name,  # P12c
+            "run_id": record.run_id,                # P12c
         }
 
     def _dict_to_record(self, d: dict[str, Any]) -> SnapshotRecord:
@@ -137,6 +146,9 @@ class FileSnapshotManager:
             operation=Operation(d["operation"]),
             agent=d["agent"],
             iteration=d["iteration"],
+            project_id=d.get("project_id", ""),
+            pipeline_name=d.get("pipeline_name", ""),
+            run_id=d.get("run_id", ""),
         )
 
     # ------------------------------------------------------------------

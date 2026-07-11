@@ -4276,21 +4276,35 @@ class Orchestrator:
         return ""
 
     def _archive_reviews(self) -> None:
-        """P0-1: Archive old review files to reviews/archive/YYYY-MM-DD/ at pipeline done.
+        """P0-1: Archive old review files at pipeline done.
 
-        Prevents stale review clutter from confusing future agent invocations.
-        Archives only when phase transitions to done (not during active loops).
+        P12c: Archives run-scoped review directory to
+        ``reviews/archive/<pipeline_key>/<run_id>/``, preserving pipeline
+        identity. Falls back to legacy flat archiving when no run context.
         """
         import shutil
         from datetime import datetime
         
+        ctx = getattr(self, "_run_ctx", None)
+        if ctx is not None:
+            # P12c: move entire run-scoped review dir to archive
+            reviews_dir = self.spec.world.reviews_dir_for(ctx)
+            if not reviews_dir.exists():
+                return
+            archive_dir = (
+                self.spec.world.root / "reviews" / "archive"
+                / ctx.pipeline_key / ctx.run_id
+            )
+            archive_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(reviews_dir), str(archive_dir))
+            return
+
+        # Legacy: flat archiving for non-run-scoped pipelines
         reviews_dir = self.spec.world.root / "reviews"
         if not reviews_dir.exists():
             return
-        
         archive_dir = reviews_dir / "archive" / datetime.now().strftime("%Y-%m-%d")
         archive_dir.mkdir(parents=True, exist_ok=True)
-        
         for f in reviews_dir.glob("iter-*.md"):
             shutil.move(str(f), str(archive_dir / f.name))
         for f in reviews_dir.glob("plan-iter-*.md"):
