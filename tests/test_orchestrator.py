@@ -2504,3 +2504,164 @@ agents:
         # No downgrade — overflow_action=halt means don't swap
         assert spec.runtime == "codex"
         assert spec.model == "gpt-5.5"
+
+
+# ============================================================================
+# P12b: Multi-hop downgrade chains — _select_runner cascades through tiers
+# ============================================================================
+
+
+class TestMultiHopDowngrade:
+    """P12b: downgrade_map entries can be lists for multi-hop cascading."""
+
+    def _make_orchestrator(self, tmp_path, downgrade_map=None, overflow_action="downgrade"):
+        """Helper to create an orchestrator with list-type downgrade_map."""
+        world = World(root=tmp_path)
+        pipeline_file = tmp_path / "pipeline.yaml"
+
+        # Build downgrade_map YAML for list entries
+        dm_yaml = ""
+        if downgrade_map:
+            dm_yaml = "  downgrade_map:\n"
+            for role, entry in downgrade_map.items():
+                if isinstance(entry, list):
+                    dm_yaml += f"    {role}:\n"
+                    for hop in entry:
+                        dm_yaml += f'      - from: "{hop["from"]}"\n'
+                        dm_yaml += f'        to: "{hop["to"]}"\n'
+                        if "model" in hop:
+                            dm_yaml += f'        model: "{hop["model"]}"\n'
+                else:
+                    dm_yaml += f'    {role}:\n'
+                    dm_yaml += f'      from: "{entry["from"]}"\n'
+                    dm_yaml += f'      to: "{entry["to"]}"\n'
+                    if "model" in entry:
+                        dm_yaml += f'      model: "{entry["model"]}"\n'
+
+        pipeline_file.write_text(f"""
+version: "1.0"
+project_root: "."
+per_agent_timeout: 600
+budget:
+  overflow_action: {overflow_action}
+{dm_yaml}
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "developer.md").write_text("# Developer")
+        (prompts_dir / "reviewer.md").write_text("# Reviewer")
+
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        orch = Orchestrator(spec=spec)
+        return orch
+
+    def test_multi_hop_first_tier_applied(self, tmp_path):
+        """First downgrade call applies the first hop in the list."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={
+                "reviewer": [
+                    {"from": "codex", "to": "claude", "model": "claude-sonnet-5"},
+                    {"from": "claude", "to": "hermes", "model": "deepseek-v4-pro"},
+                ]
+            },
+        )
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+        orch._budget_tracker.add_usage(int(0.9 * orch._budget_tracker.daily_limit))
+
+        runner, spec = orch._select_runner("reviewer")
+        assert spec.runtime == "claude"
+        assert spec.model == "claude-sonnet-5"
+        assert orch._tier_level.get("reviewer") == 1
+
+    def test_multi_hop_cascades_to_second_tier(self, tmp_path):
+        """Second call when budget still tight cascades to next hop."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={
+                "reviewer": [
+                    {"from": "codex", "to": "claude", "model": "claude-sonnet-5"},
+                    {"from": "claude", "to": "hermes", "model": "deepseek-v4-pro"},
+                ]
+            },
+        )
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+        orch._budget_tracker.add_usage(int(0.9 * orch._budget_tracker.daily_limit))
+
+        # First call — tier 0 → 1
+        r1, s1 = orch._select_runner("reviewer")
+        assert s1.runtime == "claude"
+        assert orch._tier_level.get("reviewer") == 1
+
+        # Second call — tier 1 → 2 (cascade)
+        r2, s2 = orch._select_runner("reviewer")
+        assert s2.runtime == "hermes"
+        assert s2.model == "deepseek-v4-pro"
+        assert orch._tier_level.get("reviewer") == 2
+
+    def test_multi_hop_exhausted_stays_on_original(self, tmp_path):
+        """When all tiers exhausted, original spec is used."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={
+                "reviewer": [
+                    {"from": "codex", "to": "claude"},
+                ]
+            },
+        )
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+        orch._budget_tracker.add_usage(int(0.9 * orch._budget_tracker.daily_limit))
+
+        # First call — tier 0 → 1
+        orch._select_runner("reviewer")
+        assert orch._tier_level.get("reviewer") == 1
+
+        # Second call — all tiers exhausted, use original
+        runner, spec = orch._select_runner("reviewer")
+        assert spec.runtime == "codex"
+        assert spec.model == "gpt-5.5"
+
+    def test_multi_hop_no_downgrade_when_budget_ok(self, tmp_path):
+        """Multi-hop list: no downgrade when budget below 80%."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={
+                "reviewer": [
+                    {"from": "codex", "to": "claude", "model": "sonnet"},
+                    {"from": "claude", "to": "hermes"},
+                ]
+            },
+        )
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+        # Budget well below 80%
+
+        runner, spec = orch._select_runner("reviewer")
+        assert spec.runtime == "codex"
+        assert spec.model == "gpt-5.5"
+
+    def test_multi_hop_backward_compat_single_dict(self, tmp_path):
+        """Single dict entry still works (not broken by list support)."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={
+                "reviewer": {"from": "codex", "to": "claude", "model": "haiku"}
+            },
+        )
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+        orch._budget_tracker.add_usage(int(0.9 * orch._budget_tracker.daily_limit))
+
+        runner, spec = orch._select_runner("reviewer")
+        assert spec.runtime == "claude"
+        assert spec.model == "haiku"
