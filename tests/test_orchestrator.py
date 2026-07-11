@@ -1615,11 +1615,12 @@ class TestSkipQualityGate:
         src_dir = tmp_path / "src"
         src_dir.mkdir(exist_ok=True)
         (src_dir / "main.py").write_text("print('hello')")
-        # Add unresolved checklist
+        # Add unresolved checklist — write to scoped path (P1-2: new runs
+        # no longer fall back to legacy checklist.json)
         checklist_dir = tmp_path / ".unison"
         checklist_dir.mkdir(parents=True, exist_ok=True)
         import json
-        (checklist_dir / "checklist.json").write_text(json.dumps({
+        (checklist_dir / "checklist-TestPipeline.json").write_text(json.dumps({
             "items": [
                 {"id": "1", "title": "Task", "status": "pending"},
             ]
