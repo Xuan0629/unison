@@ -747,7 +747,9 @@ class PipelineLoader:
         # Modes in PhaseRouter.PHASES_BY_MODE plus special modes that
         # are handled outside _run_state_machine.
         from unison.phase_router import PhaseRouter
-        _VALID_CHAIN_MODES = set(PhaseRouter.PHASES_BY_MODE.keys()) | {
+        # P13: Also accept deprecated mode names for backward compatibility.
+        from unison.phase_router import _DEPRECATED_MODE_ALIASES
+        _VALID_CHAIN_MODES = set(PhaseRouter.PHASES_BY_MODE.keys()) | set(_DEPRECATED_MODE_ALIASES.keys()) | {
             "moa",    # handled by _run_moa_pipeline
             "dag",    # handled by DAG scheduler
         }
