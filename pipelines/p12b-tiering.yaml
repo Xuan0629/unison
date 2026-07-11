@@ -1,0 +1,38 @@
+# P12b: Conditional Model Tiering
+# Full pipeline: plan → discuss → dev
+# P0 fixes validated — first feature pipeline after state isolation
+
+version: "2.0"
+mode: full-dev
+project_root: ".."
+per_agent_timeout: 900
+
+agents:
+  planner:
+    role: planner
+    runtime: hermes
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/planner-base.md"
+    pipeline_role: planner
+    task_instruction: "Write PRD for conditional model tiering in Unison: BudgetConfig.tier_upgrade YAML field, multi-hop downgrade chains in _select_runner(), snapshot/restore on tier switch. Reference prd/architecture-audit.md and existing budget/downgrade code."
+
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer-base.md"
+    pipeline_role: developer
+
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.6-terra
+    system_prompt_path: "prompts/dev-reviewer.md"
+    pipeline_role: reviewer
+
+project:
+  test_command: "pytest tests/ -q --ignore=tests/test_llm_integration.py --ignore=tests/test_observer.py --deselect tests/test_lock.py::TestFileLockManager::test_concurrent_acquire --deselect tests/test_reviewer_pool.py::TestExecuteParallel::test_parallel_execution_is_concurrent -x --timeout=15"
+  max_planning_iterations: 2
+  max_discuss_iterations: 2
+  max_dev_iterations: 3
+  name: "p12b-tiering"
