@@ -718,7 +718,11 @@ class Orchestrator:
             # downgraded in _select_runner if applicable).
 
         world = self.spec.world
-        reviews_dir = world.reviews_dir
+        ctx = getattr(self, "_run_ctx", None)
+        reviews_dir = (
+            world.reviews_dir_for(ctx) if ctx is not None
+            else world.reviews_dir
+        )
         reviews_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate dynamic agent specs
@@ -1172,7 +1176,11 @@ class Orchestrator:
             return
 
         world = self.spec.world
-        reviews_dir = world.reviews_dir
+        ctx = getattr(self, "_run_ctx", None)
+        reviews_dir = (
+            world.reviews_dir_for(ctx) if ctx is not None
+            else world.reviews_dir
+        )
 
         # Discover analysis files for this round
         analysis_files = sorted(reviews_dir.glob(f"moa-*-round{round_n}.md"))
