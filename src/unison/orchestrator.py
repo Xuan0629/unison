@@ -154,6 +154,10 @@ class Orchestrator:
         # -- budget tracking (V2, lazy-init) -----------------------------------
         self._budget_tracker: BudgetTracker | None = None
 
+        # -- tier tracking (P12b) -------------------------------------------------
+        self._tier_level: dict[str, int] = {}
+        self._tier_snapshot_ids: dict[str, list[str]] = {}
+
         # -- signal handlers (§11 graceful shutdown) ---------------------------
         # Registered as nested functions so they close over *self* and
         # can call self.halt().  After setting halt state, each handler
@@ -3694,6 +3698,11 @@ class Orchestrator:
         to swap both runtime and model simultaneously. Legacy entries
         with only ``"to"`` (runtime) continue to work.
 
+        P12b: downgrade_map entries can be a **list** of dicts for
+        multi-hop cascading.  When the first downgrade is exhausted
+        (budget still tight on subsequent calls), the next entry in the
+        list is applied.  Tier progress is tracked in ``self._tier_level``.
+
         Returns:
             ``(runner, effective_agent_spec)`` — or calls ``self.halt()``
             and returns ``(None, None)`` when no runner is found.
@@ -3711,12 +3720,31 @@ class Orchestrator:
             and role in self.spec.budget.downgrade_map
         ):
             entry = self.spec.budget.downgrade_map[role]
-            target_runtime = entry["to"]
-            target_model = entry.get("model")
-            if target_model:
-                effective_spec = replace(agent_spec, runtime=target_runtime, model=target_model)
+
+            if isinstance(entry, list):
+                # P12b: Multi-hop chain — cascade through tiers when budget
+                # remains tight across multiple invocations.
+                tier = self._tier_level.get(role, 0)
+                if tier < len(entry):
+                    hop = entry[tier]
+                    target_runtime = hop["to"]
+                    target_model = hop.get("model")
+                    if target_model:
+                        effective_spec = replace(agent_spec, runtime=target_runtime, model=target_model)
+                    else:
+                        effective_spec = replace(agent_spec, runtime=target_runtime)
+                    self._tier_level[role] = tier + 1
+                else:
+                    # All tiers exhausted — stay on original spec
+                    effective_spec = agent_spec
             else:
-                effective_spec = replace(agent_spec, runtime=target_runtime)
+                # Single dict (backward compatible, F11)
+                target_runtime = entry["to"]
+                target_model = entry.get("model")
+                if target_model:
+                    effective_spec = replace(agent_spec, runtime=target_runtime, model=target_model)
+                else:
+                    effective_spec = replace(agent_spec, runtime=target_runtime)
         else:
             effective_spec = agent_spec
 
