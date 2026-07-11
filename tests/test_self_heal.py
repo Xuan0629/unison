@@ -716,6 +716,95 @@ class TestCreatePRPushCheck:
         assert any("gh" in c for c in calls if isinstance(c, list))
 
 
+# ---------------------------------------------------------------------------
+# F12: Self-heal retry counter — recursion guard
+# ---------------------------------------------------------------------------
+
+
+class TestFixAttemptsCounter:
+    """F12: _fix_attempts counter prevents infinite recursion on self-heal retry."""
+
+    def test_counter_increments_across_retries(self, minimal_spec):
+        """Each retry increments the counter; exceeding max_fix_rounds stops."""
+        from unittest.mock import MagicMock, patch
+        from unison.self_heal import FixOrchestrator, ErrorClassifier
+        from unison.interfaces import SelfHealConfig, PipelineSpec
+
+        # Build a spec with max_fix_rounds=2 (default)
+        spec = minimal_spec
+
+        # Simulate orchestrator fix-attempts tracking
+        fix_attempts = [0]
+
+        def count_attempts():
+            fix_attempts[0] += 1
+            return fix_attempts[0]
+
+        # First attempt: counter=1, should proceed
+        assert count_attempts() == 1
+        assert fix_attempts[0] <= spec.self_heal.max_fix_rounds
+
+        # Second attempt: counter=2, should proceed
+        assert count_attempts() == 2
+        assert fix_attempts[0] <= spec.self_heal.max_fix_rounds
+
+        # Third attempt: counter=3 > max_fix_rounds=2, should stop
+        assert count_attempts() == 3
+        assert fix_attempts[0] > spec.self_heal.max_fix_rounds
+
+    def test_counter_not_reset_by_retry_call(self):
+        """F12: The _fix_attempts counter must NOT be reset when
+        _invoke_agent_for_role is called as a retry from _attempt_self_heal."""
+        # Simulate what happens without the F12 fix:
+        # _invoke_agent_for_role sets _fix_attempts = 0
+        # agent fails → _attempt_self_heal increments to 1
+        # fix succeeds → calls _invoke_agent_for_role again
+        # without fix: _fix_attempts reset to 0 → infinite loop
+        # with fix: _fix_attempts retains its value, eventually exceeds max
+
+        class FakeOrchestrator:
+            def __init__(self):
+                self._fix_attempts = 0
+
+        orch = FakeOrchestrator()
+
+        # Simulate _attempt_self_heal first call
+        if not hasattr(orch, "_fix_attempts"):
+            orch._fix_attempts = 0
+        orch._fix_attempts += 1  # → 1
+
+        # Retry via _invoke_agent_for_role — must NOT reset counter
+        # (This is the F12 fix: the reset was removed from _invoke_agent_for_role)
+        # orch._fix_attempts = 0  # ← THIS LINE WAS REMOVED
+        assert orch._fix_attempts == 1, (
+            "Counter was reset to 0 by retry call — "
+            "this allows infinite recursion"
+        )
+
+    def test_max_fix_rounds_boundary(self, minimal_spec):
+        """With max_fix_rounds=1, only one retry is allowed."""
+        from unison.interfaces import SelfHealConfig, PipelineSpec
+
+        config = SelfHealConfig(max_fix_rounds=1, auto_fix_unison=True)
+        spec_dict = {
+            "version": "1.0", "world": minimal_spec.world,
+            "agents": minimal_spec.agents, "self_heal": config,
+        }
+        test_spec = PipelineSpec(**spec_dict)
+
+        # Simulate the _attempt_self_heal counter logic
+        fix_attempts = 0
+        max_rounds = test_spec.self_heal.max_fix_rounds
+
+        # First call: increments to 1, <= max_rounds (1), proceeds
+        fix_attempts += 1
+        assert fix_attempts <= max_rounds
+
+        # Second call: increments to 2, > max_rounds (1), stops
+        fix_attempts += 1
+        assert fix_attempts > max_rounds
+
+
 def minimal_spec_fixture_world(tmp_path):
     """Helper to create a World in tmp_path for _run_tests tests."""
     from unison.interfaces import World

@@ -1527,6 +1527,11 @@ class Orchestrator:
             self._check_redirect_file()
 
             # ---- Active phase -----------------------------------------------
+            # F12: Reset fix attempts at each fresh loop iteration.
+            # Must be set here (not in _invoke_agent_for_role) so self-heal
+            # retries within the same iteration don't reset the counter.
+            self._fix_attempts = 0
+
             self._state.transition(
                 active_phase, "orchestrator",
                 iter_n=iteration,
@@ -1754,10 +1759,6 @@ class Orchestrator:
             iteration: Current iteration number.
             review_phase: "planning_review" or "dev_review" (for correct review file path).
         """
-        # F12: Reset fix attempts counter at start of each fresh invocation.
-        # Prevents infinite recursion when self-heal retries also fail.
-        self._fix_attempts = 0
-
         # 0. V2: parallel-dev routing
         if role == "developer":
             pd = self.spec.parallel_dev

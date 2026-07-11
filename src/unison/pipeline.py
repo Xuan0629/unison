@@ -97,6 +97,15 @@ class PipelineLoader:
     # Valid agent roles (matches interfaces.AgentRole — now str, no longer restricted)
     VALID_ROLES: frozenset[str] = frozenset()
 
+    # F14: Known pipeline modes.  Any mode not in this set is rejected at
+    # load time so a typo in pipeline.yaml is caught before runtime.
+    # PhaseRouter.PHASES_BY_MODE keys plus moa/chain (handled outside PhaseRouter).
+    VALID_MODES: frozenset[str] = frozenset({
+        "code-dev", "full-dev", "design-debate", "inspect-only",
+        "agent-fix", "migrate", "greenfield", "spec-driven",
+        "moa", "chain",
+    })
+
     # Required pipeline roles（planner 是可选角色，无 planner 时退化为 2-agent 模式）
     REQUIRED_PIPELINE_ROLES: frozenset[str] = frozenset({"developer", "reviewer"})
 
@@ -188,6 +197,12 @@ class PipelineLoader:
         mode: PipelineMode | None = raw.get("mode")  # type: ignore[assignment]
         if mode is None:
             mode = self._detect_mode(agents)
+
+        # F14: Validate mode against known modes.  Unknown mode strings
+        # pass through YAML without error but fail at runtime inside
+        # _run_state_machine() — catch them at load time instead.
+        if mode is not None:
+            self._validate_mode(mode)
 
         # P8 P1.2: Build moa_config before PipelineSpec so it can also be
         # passed to _build_chain for validation (moa mode without moa config).
@@ -282,6 +297,19 @@ class PipelineLoader:
             return "inspect-only"
         # Fallback (shouldn't reach here with valid pipelines)
         return "code-dev"
+
+    @classmethod
+    def _validate_mode(cls, mode: str) -> None:
+        """F14: Reject unknown pipeline modes at load time.
+
+        Raises:
+            PipelineValidationError: If *mode* is not in :attr:`VALID_MODES`.
+        """
+        if mode not in cls.VALID_MODES:
+            raise PipelineValidationError(
+                f"Unknown pipeline mode: {mode!r}. "
+                f"Valid modes: {', '.join(sorted(cls.VALID_MODES))}"
+            )
 
     def dry_run(self, spec: PipelineSpec) -> bool:
         """Check that every agent's prompt file exists on disk.

@@ -1744,3 +1744,152 @@ class TestPipelineObserverConfig:
         loader = PipelineLoader()
         spec = loader.load(pipeline_file)
         assert spec.pipeline_name == "p10-test"
+
+
+# ============================================================================
+# F14: Mode validation at load time
+# ============================================================================
+
+
+class TestModeValidation:
+    """F14: Unknown mode strings are rejected at load time."""
+
+    def test_valid_modes_load_without_error(self, tmp_path):
+        """All VALID_MODES should load without PipelineValidationError."""
+        valid_modes = [
+            "code-dev", "full-dev", "design-debate", "inspect-only",
+            "agent-fix", "migrate", "greenfield", "spec-driven",
+            "moa", "chain",
+        ]
+        for mode in valid_modes:
+            pipeline_file = tmp_path / f"test_{mode}.yaml"
+            agents_block = {}
+            if mode == "moa":
+                # MoA mode doesn't require developer/reviewer agents
+                agents_block = {}
+            elif mode == "inspect-only":
+                agents_block = {
+                    "rev": {
+                        "role": "reviewer", "runtime": "codex",
+                        "system_prompt_path": "prompts/reviewer.md",
+                        "pipeline_role": "reviewer",
+                    },
+                }
+            else:
+                agents_block = {
+                    "dev": {
+                        "role": "developer", "runtime": "claude",
+                        "system_prompt_path": "prompts/developer.md",
+                        "pipeline_role": "developer",
+                    },
+                    "rev": {
+                        "role": "reviewer", "runtime": "codex",
+                        "system_prompt_path": "prompts/reviewer.md",
+                        "pipeline_role": "reviewer",
+                    },
+                }
+            pipeline_file.write_text(yaml.dump({
+                "version": "1.0",
+                "mode": mode,
+                "agents": agents_block,
+            }))
+            loader = PipelineLoader()
+            try:
+                spec = loader.load(pipeline_file)
+                assert spec.mode == mode
+            except PipelineValidationError as e:
+                if "mode" in str(e).lower():
+                    pytest.fail(f"Valid mode {mode!r} was rejected: {e}")
+
+    def test_unknown_mode_rejected_at_load(self, tmp_path):
+        """A typo in mode string is caught at load time, not runtime."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(yaml.dump({
+            "version": "1.0",
+            "mode": "code_dev",  # underscore instead of hyphen — typo
+            "agents": {
+                "dev": {
+                    "role": "developer", "runtime": "claude",
+                    "system_prompt_path": "prompts/developer.md",
+                    "pipeline_role": "developer",
+                },
+                "rev": {
+                    "role": "reviewer", "runtime": "codex",
+                    "system_prompt_path": "prompts/reviewer.md",
+                    "pipeline_role": "reviewer",
+                },
+            },
+        }))
+        loader = PipelineLoader()
+        with pytest.raises(PipelineValidationError, match="Unknown pipeline mode"):
+            loader.load(pipeline_file)
+
+    def test_nonexistent_mode_rejected(self, tmp_path):
+        """A completely made-up mode name is rejected."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(yaml.dump({
+            "version": "1.0",
+            "mode": "super-ultra-mode",
+            "agents": {
+                "dev": {
+                    "role": "developer", "runtime": "claude",
+                    "system_prompt_path": "prompts/developer.md",
+                    "pipeline_role": "developer",
+                },
+                "rev": {
+                    "role": "reviewer", "runtime": "codex",
+                    "system_prompt_path": "prompts/reviewer.md",
+                    "pipeline_role": "reviewer",
+                },
+            },
+        }))
+        loader = PipelineLoader()
+        with pytest.raises(PipelineValidationError, match="Unknown pipeline mode"):
+            loader.load(pipeline_file)
+
+    def test_empty_mode_is_valid(self, tmp_path):
+        """None/absent mode falls through to auto-detection, which is fine."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(yaml.dump({
+            "version": "1.0",
+            # mode not set — auto-detected from agents
+            "agents": {
+                "dev": {
+                    "role": "developer", "runtime": "claude",
+                    "system_prompt_path": "prompts/developer.md",
+                    "pipeline_role": "developer",
+                },
+                "rev": {
+                    "role": "reviewer", "runtime": "codex",
+                    "system_prompt_path": "prompts/reviewer.md",
+                    "pipeline_role": "reviewer",
+                },
+            },
+        }))
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        # Auto-detected: developer present, no planner → code-dev
+        assert spec.mode == "code-dev"
+
+    def test_case_sensitive_mode(self, tmp_path):
+        """Mode strings are case-sensitive. 'CODE-DEV' is rejected."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(yaml.dump({
+            "version": "1.0",
+            "mode": "CODE-DEV",
+            "agents": {
+                "dev": {
+                    "role": "developer", "runtime": "claude",
+                    "system_prompt_path": "prompts/developer.md",
+                    "pipeline_role": "developer",
+                },
+                "rev": {
+                    "role": "reviewer", "runtime": "codex",
+                    "system_prompt_path": "prompts/reviewer.md",
+                    "pipeline_role": "reviewer",
+                },
+            },
+        }))
+        loader = PipelineLoader()
+        with pytest.raises(PipelineValidationError, match="Unknown pipeline mode"):
+            loader.load(pipeline_file)
