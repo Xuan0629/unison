@@ -65,6 +65,7 @@ class FileSnapshotManager:
     base_dir: Path
     retention_hours: int = 168
     max_slots: int = 100
+    max_pre_snapshot_size_mb: int = 50
     exclude_patterns: list[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------
@@ -160,6 +161,17 @@ class FileSnapshotManager:
             raise ValueError(
                 f"Path {path} matches an exclude pattern, snapshot skipped"
             )
+
+        # Enforce max_pre_snapshot_size_mb — refuse huge directories
+        if path.is_dir():
+            total_size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+            size_mb = total_size / (1024 * 1024)
+            if size_mb > self.max_pre_snapshot_size_mb:
+                raise ValueError(
+                    f"Path {path} is {size_mb:.0f}MB, exceeds "
+                    f"max_pre_snapshot_size_mb={self.max_pre_snapshot_size_mb}MB — "
+                    "snapshot skipped"
+                )
 
         audit_id = uuid.uuid4().hex
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

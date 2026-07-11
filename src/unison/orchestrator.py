@@ -117,6 +117,7 @@ class Orchestrator:
                 retention_hours=snap_config.retention_hours,
                 max_slots=snap_config.max_slots,
                 exclude_patterns=list(snap_config.exclude_patterns),
+                max_pre_snapshot_size_mb=snap_config.max_pre_snapshot_size_mb,
             )
             self._risk_evaluator = RuleEngineRiskEvaluator(
                 matrix=self.spec.risk_matrix,

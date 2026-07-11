@@ -238,7 +238,6 @@ class SnapshotConfig:
     max_pre_snapshot_size_mb: int = 50
     external_paths: list[str] = field(default_factory=lambda: [
         "~/.hermes/skills/",
-        "~/.openclaw/agents/",
     ])
     exclude_patterns: list[str] = field(default_factory=lambda: [
         "~/.hermes/.env",
