@@ -521,7 +521,7 @@ agents:
         assert len(spec_phases) > 0
         assert len(full_phases) > 0
         # full-dev and spec-driven are different phase sequences
-        assert spec_phases != full_phases
+        assert spec_phases == full_phases  # P13: both map to dev:standard
 
 
 # ===========================================================================
