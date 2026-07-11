@@ -226,7 +226,7 @@ class BudgetConfig:
     overflow_action: Literal["downgrade", "halt"] = "downgrade"
     halt_action: Literal["discord_notify", "halt_only"] = "discord_notify"
     downgrade_map: dict[str, dict[str, str]] = field(default_factory=lambda: {
-        "reviewer": {"from": "codex", "to": "claude"}
+        "reviewer": {"from": "codex", "to": "claude", "model": "claude-sonnet-5"}
     })
 
 @dataclass(frozen=True)

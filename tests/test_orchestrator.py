@@ -2398,3 +2398,109 @@ agents:
         effective = orch._effective_timeout()
         # Remaining ~900s > 300s, so returns 300
         assert effective == 300
+
+
+# ============================================================================
+# F11: Budget downgrade model — _select_runner replaces both runtime and model
+# ============================================================================
+
+
+class TestBudgetDowngradeModel:
+    """F11: _select_runner downgrades both runtime and model when configured."""
+
+    def _make_orchestrator(self, tmp_path, downgrade_map=None, overflow_action="downgrade"):
+        """Helper to create an orchestrator with specific budget settings."""
+        from unittest.mock import patch
+        world = World(root=tmp_path)
+        pipeline_file = tmp_path / "pipeline.yaml"
+        dm = downgrade_map or {"reviewer": {"from": "codex", "to": "claude"}}
+        pipeline_file.write_text(f"""
+version: "1.0"
+project_root: "."
+per_agent_timeout: 600
+budget:
+  overflow_action: {overflow_action}
+  downgrade_map:
+    reviewer:
+      from: "{dm['reviewer']['from']}"
+      to: "{dm['reviewer']['to']}"
+      {f'model: "{dm["reviewer"]["model"]}"' if "model" in dm["reviewer"] else ""}
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "developer.md").write_text("# Developer")
+        (prompts_dir / "reviewer.md").write_text("# Reviewer")
+
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        orch = Orchestrator(spec=spec)
+        return orch
+
+    def test_downgrade_replaces_runtime_only_when_no_model_key(self, tmp_path):
+        """Legacy downgrade_map without 'model' key only replaces runtime."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={"reviewer": {"from": "codex", "to": "claude"}},
+        )
+        # Force downgrade by setting budget to 80%+
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+        orch._budget_tracker.add_usage(int(0.9 * orch._budget_tracker.daily_limit))
+
+        runner, spec = orch._select_runner("reviewer")
+        assert spec.runtime == "claude"
+        # Model should remain unchanged when no model key in downgrade_map
+        assert spec.model == "gpt-5.5"
+
+    def test_downgrade_replaces_both_runtime_and_model(self, tmp_path):
+        """F11: downgrade_map with 'model' key replaces both runtime and model."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={"reviewer": {"from": "codex", "to": "claude", "model": "claude-sonnet-5"}},
+        )
+        # Force downgrade by setting budget to 80%+
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+        orch._budget_tracker.add_usage(int(0.9 * orch._budget_tracker.daily_limit))
+
+        runner, spec = orch._select_runner("reviewer")
+        assert spec.runtime == "claude"
+        assert spec.model == "claude-sonnet-5"
+
+    def test_no_downgrade_when_budget_ok(self, tmp_path):
+        """When budget is below 80%, no downgrade occurs."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={"reviewer": {"from": "codex", "to": "claude", "model": "haiku"}},
+        )
+        # Budget is well below 80% (fresh tracker)
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+
+        runner, spec = orch._select_runner("reviewer")
+        # No downgrade — keeps original
+        assert spec.runtime == "codex"
+        assert spec.model == "gpt-5.5"
+
+    def test_no_downgrade_when_overflow_action_is_halt(self, tmp_path):
+        """When overflow_action='halt', no downgrade occurs regardless of budget."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={"reviewer": {"from": "codex", "to": "claude", "model": "haiku"}},
+            overflow_action="halt",
+        )
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+        orch._budget_tracker.add_usage(int(0.9 * orch._budget_tracker.daily_limit))
+
+        runner, spec = orch._select_runner("reviewer")
+        # No downgrade — overflow_action=halt means don't swap
+        assert spec.runtime == "codex"
+        assert spec.model == "gpt-5.5"

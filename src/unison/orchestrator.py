@@ -3646,8 +3646,12 @@ class Orchestrator:
 
         When the budget tracker reports ``should_downgrade()`` and
         ``overflow_action`` is ``"downgrade"``, the agent spec's runtime
-        is swapped via :func:`dataclasses.replace` (never mutating the
-        frozen original).
+        and optionally model are swapped via :func:`dataclasses.replace`
+        (never mutating the frozen original).
+
+        F11: The downgrade_map entry can optionally include ``"model"``
+        to swap both runtime and model simultaneously. Legacy entries
+        with only ``"to"`` (runtime) continue to work.
 
         Returns:
             ``(runner, effective_agent_spec)`` — or calls ``self.halt()``
@@ -3665,8 +3669,13 @@ class Orchestrator:
             and self.spec.budget.overflow_action == "downgrade"
             and role in self.spec.budget.downgrade_map
         ):
-            target = self.spec.budget.downgrade_map[role]["to"]
-            effective_spec = replace(agent_spec, runtime=target)
+            entry = self.spec.budget.downgrade_map[role]
+            target_runtime = entry["to"]
+            target_model = entry.get("model")
+            if target_model:
+                effective_spec = replace(agent_spec, runtime=target_runtime, model=target_model)
+            else:
+                effective_spec = replace(agent_spec, runtime=target_runtime)
         else:
             effective_spec = agent_spec
 
