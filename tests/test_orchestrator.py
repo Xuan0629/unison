@@ -2323,3 +2323,78 @@ agents:
         assert result.halted is False
         # L2 = workspace modify (observer_evaluate)
         assert result.level.value == "observer_evaluate"
+
+
+# ============================================================================
+# F9: Pipeline timeout granularity — _effective_timeout()
+# ============================================================================
+
+
+class TestEffectiveTimeout:
+    """F9: _effective_timeout returns min(per_agent_timeout, remaining pipeline deadline)."""
+
+    def _make_orchestrator(self, tmp_path, pipeline_timeout=0, per_agent_timeout=600):
+        """Helper to create an orchestrator with specific timeout settings."""
+        world = World(root=tmp_path)
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f"""
+version: "1.0"
+project_root: "."
+per_agent_timeout: {per_agent_timeout}
+pipeline_timeout: {pipeline_timeout}
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "developer.md").write_text("# Developer")
+        (prompts_dir / "reviewer.md").write_text("# Reviewer")
+
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        return Orchestrator(spec=spec)
+
+    def test_returns_per_agent_timeout_when_pipeline_timeout_disabled(self, tmp_path):
+        """When pipeline_timeout=0, returns per_agent_timeout unchanged."""
+        orch = self._make_orchestrator(tmp_path, pipeline_timeout=0, per_agent_timeout=600)
+        assert orch._effective_timeout() == 600
+
+    def test_returns_min_when_deadline_sooner_than_per_agent(self, tmp_path):
+        """When pipeline deadline is 10s away but per_agent_timeout is 600s, returns ~10."""
+        orch = self._make_orchestrator(tmp_path, pipeline_timeout=30, per_agent_timeout=600)
+        # Artificially move pipeline_start_time 25s into the past
+        orch._pipeline_start_time = orch._pipeline_start_time - 25
+        effective = orch._effective_timeout()
+        # Remaining = 30 - 25 = 5s, which is < 600, so returns ~5
+        assert 1 <= effective <= 10
+
+    def test_returns_per_agent_when_deadline_far(self, tmp_path):
+        """When pipeline deadline is far away, returns per_agent_timeout."""
+        orch = self._make_orchestrator(tmp_path, pipeline_timeout=3600, per_agent_timeout=600)
+        effective = orch._effective_timeout()
+        # Remaining ~3600s > 600s, so returns 600
+        assert effective == 600
+
+    def test_returns_at_least_one_when_deadline_passed(self, tmp_path):
+        """When pipeline deadline has already passed, returns at least 1 (not 0 or negative)."""
+        orch = self._make_orchestrator(tmp_path, pipeline_timeout=10, per_agent_timeout=600)
+        # Artificially move pipeline_start_time far into the past
+        orch._pipeline_start_time = orch._pipeline_start_time - 100
+        effective = orch._effective_timeout()
+        assert effective >= 1
+
+    def test_returns_per_agent_when_pipeline_timeout_larger(self, tmp_path):
+        """When pipeline_timeout > per_agent_timeout, returns per_agent_timeout."""
+        orch = self._make_orchestrator(tmp_path, pipeline_timeout=900, per_agent_timeout=300)
+        effective = orch._effective_timeout()
+        # Remaining ~900s > 300s, so returns 300
+        assert effective == 300

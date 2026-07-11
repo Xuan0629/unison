@@ -792,7 +792,7 @@ class Orchestrator:
                 spec=spec,
                 prompt=full_prompt,
                 workdir=world.root,
-                timeout=self.spec.per_agent_timeout,
+                timeout=self._effective_timeout(),
                 log_path=log_path,
             )
 
@@ -1244,7 +1244,7 @@ class Orchestrator:
             spec=synth_spec,
             prompt=full_prompt,
             workdir=world.root,
-            timeout=self.spec.per_agent_timeout,
+            timeout=self._effective_timeout(),
             log_path=log_path,
         )
 
@@ -1823,7 +1823,7 @@ class Orchestrator:
             spec=effective_spec,
             prompt=prompt,
             workdir=world.root,
-            timeout=self.spec.per_agent_timeout,
+            timeout=self._effective_timeout(),
             log_path=log_path,
         )
 
@@ -2121,7 +2121,7 @@ class Orchestrator:
                 spec=spec,
                 prompt=prompt,
                 workdir=world.root,
-                timeout=self.spec.per_agent_timeout,
+                timeout=self._effective_timeout(),
                 log_path=log_path,
             )
             if not result.success:
@@ -2248,7 +2248,7 @@ class Orchestrator:
                 spec=spec,
                 prompt=full_prompt,
                 workdir=world.root,
-                timeout=self.spec.per_agent_timeout,
+                timeout=self._effective_timeout(),
                 log_path=log_path,
             )
 
@@ -2389,7 +2389,7 @@ class Orchestrator:
                 spec=spec,
                 prompt=full_prompt,
                 workdir=info.path,
-                timeout=self.spec.per_agent_timeout,
+                timeout=self._effective_timeout(),
                 log_path=log_path,
             )
 
@@ -2527,7 +2527,7 @@ class Orchestrator:
                 spec=effective_spec,
                 prompt=full_prompt,
                 workdir=info.path,
-                timeout=self.spec.per_agent_timeout,
+                timeout=self._effective_timeout(),
                 log_path=log_path,
             )
 
@@ -2703,7 +2703,7 @@ class Orchestrator:
                 spec=spec,
                 prompt=full_prompt,
                 workdir=world.root,
-                timeout=self.spec.per_agent_timeout,
+                timeout=self._effective_timeout(),
                 log_path=log_path,
             )
 
@@ -3058,6 +3058,24 @@ class Orchestrator:
                 f"(limit={self.spec.pipeline_timeout}s)",
                 category="external",
             )
+
+    def _effective_timeout(self) -> int:
+        """F9: Return min(per_agent_timeout, remaining pipeline deadline).
+
+        When ``pipeline_timeout > 0``, this ensures subprocess calls don't
+        run past the global deadline.  When ``pipeline_timeout == 0``
+        (disabled), returns ``per_agent_timeout`` unchanged.
+
+        Always returns at least 1 second to avoid zero/negative timeout
+        on already-expired deadlines (the call will fail fast with a
+        TimeoutExpired and the next iteration-boundary check will halt).
+        """
+        base = self.spec.per_agent_timeout
+        if self.spec.pipeline_timeout <= 0:
+            return base
+        deadline = self._pipeline_start_time + self.spec.pipeline_timeout
+        remaining = deadline - time.monotonic()
+        return max(1, int(min(base, remaining)))
 
     def _check_control_files(self) -> list[str]:
         """Check for dashboard control files in ``.unison/control/``.
