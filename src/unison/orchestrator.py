@@ -25,8 +25,9 @@ from pathlib import Path
 from unison.interfaces import AgentResult, MoaConfig, Notification, Operation, PipelineSpec, RedirectControl, ReviewVerdict, VerdictParseError
 from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
 # P13: Include deprecated mode names for backward compatibility.
+# NOTE: 'chain' is intentionally excluded — chain-in-chain is forbidden.
 _KNOWN_MODES = (
-    set(PhaseRouter.PHASES_BY_MODE.keys())
+    (set(PhaseRouter.PHASES_BY_MODE.keys()) - {"chain"})
     | set(_DEPRECATED_MODE_ALIASES.keys())
     | {"moa", "dag"}
 )
