@@ -163,6 +163,7 @@ class Orchestrator:
 
         # -- budget tracking (V2, lazy-init) -----------------------------------
         self._budget_tracker: BudgetTracker | None = None
+        self._budget_task_reset_done: bool = False  # P12c: reset task on first use
 
         # -- tier tracking (P12b) -------------------------------------------------
         self._tier_level: dict[str, int] = {}
@@ -3196,6 +3197,9 @@ class Orchestrator:
     def _check_control_files(self) -> list[str]:
         """Check for dashboard control files in ``.unison/control/``.
 
+        P12c: Checks run-scoped directory first, then legacy path for
+        backward compatibility.
+
         Called at phase boundaries.  Reads and consumes ALL control
         files (P8 S18: previously only consumed the first match,
         silently dropping simultaneous pause+report requests).
@@ -3204,7 +3208,14 @@ class Orchestrator:
             List of action strings (``"pause"``, ``"skip"``, ``"report"``)
             for all control files consumed, or empty list.
         """
-        control_dir = self.spec.world.root / ".unison" / "control"
+        ctx = getattr(self, "_run_ctx", None)
+        if ctx is not None:
+            control_dir = self.spec.world.run_control_dir(ctx)
+            # Fallback to legacy if run-scoped dir has no control files
+            if not any(control_dir.glob("*.json")):
+                control_dir = self.spec.world.root / ".unison" / "control"
+        else:
+            control_dir = self.spec.world.root / ".unison" / "control"
         if not control_dir.exists():
             return []
 
@@ -3222,12 +3233,7 @@ class Orchestrator:
     def _check_redirect_file(self) -> RedirectControl | None:
         """P10: Read and consume ``.unison/control/redirect.json``.
 
-        Symmetric to :meth:`_check_control_files`.  Reads, validates,
-        and consumes the redirect control file written by the Observer.
-        P10 scope: reads, validates schema, logs contents, stores on
-        ``self._pending_redirect``.  Does NOT inject redirect prompt
-        into agent context (deferred to P11).
-
+        P12c: Uses run-scoped control directory.
         Returns:
             RedirectControl if a valid redirect file was consumed,
             None otherwise.
@@ -3235,7 +3241,15 @@ class Orchestrator:
         import logging
         _log = logging.getLogger(__name__)
 
-        control_dir = self.spec.world.root / ".unison" / "control"
+        ctx = getattr(self, "_run_ctx", None)
+        control_dir = (
+            self.spec.world.run_control_dir(ctx)
+            if ctx is not None
+            else self.spec.world.root / ".unison" / "control"
+        )
+        # Fallback to legacy if run-scoped dir has no json files
+        if ctx is not None and not any(control_dir.glob("*.json")):
+            control_dir = self.spec.world.root / ".unison" / "control"
         redirect_path = control_dir / "redirect.json"
         if not redirect_path.exists():
             return None
@@ -3604,11 +3618,24 @@ class Orchestrator:
         if self._budget_tracker is not None:
             return self._budget_tracker
 
+        # P12c: Use run-scoped budget file for per-task tracking;
+        # daily usage is intentionally project-scoped.
+        ctx = getattr(self, "_run_ctx", None)
+        persist_path = (
+            self.spec.world.run_budget_file(ctx)
+            if ctx is not None
+            else self.spec.world.unison_dir / "budget.json"
+        )
         self._budget_tracker = BudgetTracker(
             daily_limit=self.spec.budget.daily_token_limit,
             per_task_limit=per_task_limit,
-            persist_path=self.spec.world.unison_dir / "budget.json",
+            persist_path=persist_path,
         )
+        # P12c: Reset per-task counters so new pipeline starts fresh.
+        # Daily usage is preserved across pipelines by design.
+        if not self._budget_task_reset_done:
+            self._budget_tracker.reset_task()
+            self._budget_task_reset_done = True
         return self._budget_tracker
 
     def _get_head_commit(self) -> str:
