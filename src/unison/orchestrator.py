@@ -1850,6 +1850,10 @@ class Orchestrator:
             if halted:
                 return
 
+        # P12b: Restore workspace from tier snapshot if downgraded agent failed
+        if not result.success and role in self._tier_snapshot_ids:
+            self._restore_tier_snapshots(role)
+
         # 7. Timeout-recovery: Claude Code often times out at 600s with
         # valid work already on disk (tested in 4 of 5 Claude invocations
         # during V2 fix Iter 1-3). Check for partial-but-valid output
@@ -1980,6 +1984,40 @@ class Orchestrator:
                 # Path excluded or unreadable — skip
                 continue
         return audit_ids
+
+    def _snapshot_for_tier_switch(self, role: str) -> None:
+        """Snapshot workspace before tier switch so it can be restored on failure.
+
+        Best-effort: large workspaces that exceed ``max_pre_snapshot_size_mb``
+        are silently skipped.  Only one snapshot is taken per role (subsequent
+        calls are no-ops).
+        """
+        if self._snapshot_mgr is None:
+            return
+        if role in self._tier_snapshot_ids:
+            return  # Already snapshotted for this role
+        try:
+            record = self._snapshot_mgr.snapshot(
+                path=self.spec.world.root,
+                operation=Operation.MODIFY,
+                agent=role,  # type: ignore[arg-type]
+                iteration=self._state.iteration,
+            )
+            self._tier_snapshot_ids.setdefault(role, []).append(record.audit_id)
+        except (ValueError, OSError):
+            pass  # Best-effort: large workspace may exceed size limit
+
+    def _restore_tier_snapshots(self, role: str) -> None:
+        """Restore workspace from tier snapshots after a downgraded agent fails."""
+        mgr = self._snapshot_mgr
+        if mgr is None:
+            return
+        for audit_id in self._tier_snapshot_ids.get(role, []):
+            try:
+                mgr.restore(audit_id)
+            except (KeyError, FileNotFoundError):
+                pass
+        self._tier_snapshot_ids.pop(role, None)
 
     def _evaluate_post_invoke_risk(
         self, workspace: Path, snapshot_ids: list[str]
@@ -3702,6 +3740,8 @@ class Orchestrator:
         multi-hop cascading.  When the first downgrade is exhausted
         (budget still tight on subsequent calls), the next entry in the
         list is applied.  Tier progress is tracked in ``self._tier_level``.
+        Workspace is snapshotted before the first tier switch so it can
+        be restored if the downgraded agent fails.
 
         Returns:
             ``(runner, effective_agent_spec)`` — or calls ``self.halt()``
@@ -3726,6 +3766,9 @@ class Orchestrator:
                 # remains tight across multiple invocations.
                 tier = self._tier_level.get(role, 0)
                 if tier < len(entry):
+                    # Snapshot workspace before first tier switch
+                    if tier == 0:
+                        self._snapshot_for_tier_switch(role)
                     hop = entry[tier]
                     target_runtime = hop["to"]
                     target_model = hop.get("model")
@@ -3739,6 +3782,8 @@ class Orchestrator:
                     effective_spec = agent_spec
             else:
                 # Single dict (backward compatible, F11)
+                # Snapshot workspace before downgrade
+                self._snapshot_for_tier_switch(role)
                 target_runtime = entry["to"]
                 target_model = entry.get("model")
                 if target_model:
