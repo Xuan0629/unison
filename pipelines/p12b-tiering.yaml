@@ -12,7 +12,7 @@ agents:
     role: planner
     runtime: hermes
     model: deepseek-v4-pro
-    system_prompt_path: "prompts/planner-base.md"
+    system_prompt_path: "prompts/planner.md"
     pipeline_role: planner
     task_instruction: "Write PRD for conditional model tiering in Unison: BudgetConfig.tier_upgrade YAML field, multi-hop downgrade chains in _select_runner(), snapshot/restore on tier switch. Reference prd/architecture-audit.md and existing budget/downgrade code."
 
