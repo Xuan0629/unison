@@ -161,6 +161,17 @@ class Orchestrator:
         )
         self.spec.world.ensure_run_directories(self._run_ctx)
 
+        # P12c: Seed scoped PRD from legacy if scoped doesn't exist yet.
+        # This ensures the review-package checklist generator finds content
+        # and the reviewer doesn't fall back to wrong checklist items.
+        import shutil
+        scoped_prd = self.spec.world.prd_for(self._run_ctx.pipeline_key)
+        scoped_design = self.spec.world.tech_design_for(self._run_ctx.pipeline_key)
+        if not scoped_prd.exists() and self.spec.world.prd.exists():
+            shutil.copy2(self.spec.world.prd, scoped_prd)
+        if not scoped_design.exists() and self.spec.world.tech_design.exists():
+            shutil.copy2(self.spec.world.tech_design, scoped_design)
+
         # -- budget tracking (V2, lazy-init) -----------------------------------
         self._budget_tracker: BudgetTracker | None = None
         self._budget_task_reset_done: bool = False  # P12c: reset task on first use
