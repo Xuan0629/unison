@@ -267,6 +267,7 @@ class AgentSpec:
     task_instruction: str | None = None  # Phase 11: override hardcoded task in _build_prompt
     pipeline_role: AgentRole | None = None  # Phase 11: maps custom role to built-in slot
     context_budget: int | None = None  # V2: per-agent token budget override
+    reasoning_effort: str | None = None  # P12c: reasoning effort level (low/medium/high/xhigh/max)
 
     @property
     def effective_role(self) -> AgentRole:

@@ -1,8 +1,10 @@
-"""ClaudeRunner — wraps `claude -p --dangerously-skip-permissions [--model MODEL] {prompt}`.
+"""ClaudeRunner — wraps `claude -p --dangerously-skip-permissions [--model MODEL] [--effort EFFORT] {prompt}`.
 
 P12c: Supports cc-switch-cli for multi-provider model routing.  When a model maps
 to a non-default provider, the command is wrapped with
 ``cc-switch start claude <provider> -- <native claude args>``.
+
+P12c: Passes ``--effort`` flag when agent spec has ``reasoning_effort`` set.
 """
 
 from __future__ import annotations
@@ -51,6 +53,9 @@ class ClaudeRunner(BaseRunner):
         cmd = [self.binary, *spec.cli_flags]
         if spec.model and spec.model != "default":
             cmd += ["--model", spec.model]
+        # P12c: Pass reasoning effort when specified in agent spec
+        if getattr(spec, "reasoning_effort", None):
+            cmd += ["--effort", spec.reasoning_effort]
 
         # P12c: route through cc-switch if model maps to non-default provider
         provider_map = _load_provider_map()

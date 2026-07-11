@@ -16,6 +16,9 @@ class CodexRunner(BaseRunner):
         cmd = [self.binary, *spec.cli_flags]
         if spec.model and spec.model != "default":
             cmd += ["--model", spec.model]
+        # P12c: Pass reasoning effort when specified in agent spec
+        if getattr(spec, "reasoning_effort", None):
+            cmd += ["--model-reasoning-effort", spec.reasoning_effort]
         if not self.use_stdin:
             cmd.append(prompt)
         return cmd
