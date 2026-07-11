@@ -131,7 +131,7 @@ class TestPhaseRouterBackwardCompat:
         phases = PhaseRouter.get_phases("inspect-only")
         assert len(phases) == 1  # P13: maps to custom
         assert phases[0].name == "dev"  # P13: maps to custom
-        assert phases[0].active_phase == "dev_review"
+        assert phases[0].active_phase == "dev_active"  # P13: maps to custom
         assert phases[0].role == "reviewer"
 
     def test_spec_driven_has_four_phases(self):
