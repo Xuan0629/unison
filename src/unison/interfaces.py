@@ -78,7 +78,10 @@ class Scope(Enum):
 
 @dataclass(frozen=True)
 class World:
-    """项目工作区目录布局（v1 强约束）。"""
+    """项目工作区目录布局（v1 强约束）。
+
+    P12c: Adds scoped path helpers that delegate to ``unison.world.World``.
+    """
     root: Path
 
     @property
@@ -157,6 +160,73 @@ class World:
     def dev_proposal_file(self) -> Path:
         """Developer pre-implementation proposal for discussion phase."""
         return self.reviews_dir / "dev-proposal.md"
+
+    # ---- P12c: scoped path helpers (delegate to world.py) ----
+
+    @property
+    def project_id(self) -> str:
+        from unison.world import World as _W
+        return _W(self.root).project_id
+
+    @staticmethod
+    def pipeline_key(name: str) -> str:
+        from unison.world import World as _W
+        return _W.pipeline_key(name)
+
+    def prd_dir_for(self, pipeline_key: str) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).prd_dir_for(pipeline_key)
+
+    def prd_for(self, pipeline_key: str) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).prd_for(pipeline_key)
+
+    def tech_design_for(self, pipeline_key: str) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).tech_design_for(pipeline_key)
+
+    def reviews_dir_for(self, ctx) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).reviews_dir_for(ctx)
+
+    def review_file_for(self, ctx, iter_n: int) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).review_file_for(ctx, iter_n)
+
+    def plan_review_file(self, iter_n: int) -> Path:
+        return self.reviews_dir / f"plan-iter-{iter_n}.md"
+
+    def plan_review_file_for(self, ctx, iter_n: int) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).plan_review_file_for(ctx, iter_n)
+
+    def unison_run_dir_for(self, ctx) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).unison_run_dir_for(ctx)
+
+    def run_state_file(self, ctx) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).run_state_file(ctx)
+
+    def run_budget_file(self, ctx) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).run_budget_file(ctx)
+
+    def daily_budget_file(self) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).daily_budget_file()
+
+    def run_checklist_file(self, ctx) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).run_checklist_file(ctx)
+
+    def run_review_package_file(self, ctx, iteration: int) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).run_review_package_file(ctx, iteration)
+
+    def run_control_dir(self, ctx) -> Path:
+        from unison.world import World as _W
+        return _W(self.root).run_control_dir(ctx)
 
     @property
     def dev_notes_file(self) -> Path:
