@@ -3219,7 +3219,13 @@ class Orchestrator:
             failures.append("crash/traceback detected in agent logs")
 
         # ---- 4. Checklist resolved (if exists) -----------------------------
+        # P0: Check pipeline-scoped checklist first, fall back to global
         checklist_path = self.spec.world.checklist_file_for(self.spec.pipeline_name)
+        if not checklist_path.exists():
+            # Backward compat: also check legacy global checklist.json
+            legacy_checklist = self.spec.world.checklist_file
+            if legacy_checklist.exists():
+                checklist_path = legacy_checklist
         if checklist_path.exists():
             if not self._check_checklist_resolved(checklist_path):
                 failures.append("checklist has unresolved items")
