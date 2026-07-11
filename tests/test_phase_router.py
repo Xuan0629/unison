@@ -139,9 +139,8 @@ class TestPhaseRouterBackwardCompat:
         phases = PhaseRouter.get_phases("spec-driven")
         assert len(phases) == 3  # P13: maps to dev:standard
         assert phases[0].name == "planning"
-        assert phases[1].name == "spec-check"
-        assert phases[2].name == "discuss"
-        assert phases[3].name == "dev"
+        assert phases[1].name == "discuss"
+        assert phases[2].name == "dev"
 
     def test_spec_check_phase_has_spec_check_active_phase(self):
         """spec-check phase uses 'spec-check' as its active_phase for routing."""
