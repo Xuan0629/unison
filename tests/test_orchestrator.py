@@ -2665,3 +2665,163 @@ agents:
         runner, spec = orch._select_runner("reviewer")
         assert spec.runtime == "claude"
         assert spec.model == "haiku"
+
+
+# ============================================================================
+# P12b: Tier snapshot — workspace snapshotted before downgrade, restored on failure
+# ============================================================================
+
+
+class TestTierSnapshot:
+    """P12b: Workspace snapshot before tier switch, restore on failure."""
+
+    def _make_orchestrator(self, tmp_path, downgrade_map=None, snapshots_enabled=True):
+        """Helper to create orchestrator with tier snapshot support."""
+        world = World(root=tmp_path)
+
+        # Create some workspace content to snapshot
+        (tmp_path / "src").mkdir(exist_ok=True)
+        (tmp_path / "src" / "main.py").write_text("original content")
+        (tmp_path / "prd").mkdir(exist_ok=True)
+        (tmp_path / "reviews").mkdir(exist_ok=True)
+        (tmp_path / ".unison").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "prompts").mkdir()
+
+        dm = downgrade_map or {"reviewer": {"from": "codex", "to": "claude"}}
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        # Build YAML for downgrade_map
+        dm_yaml = "  downgrade_map:\n"
+        for role, entry in dm.items():
+            if isinstance(entry, list):
+                dm_yaml += f"    {role}:\n"
+                for hop in entry:
+                    dm_yaml += f'      - from: "{hop["from"]}"\n'
+                    dm_yaml += f'        to: "{hop["to"]}"\n'
+                    if "model" in hop:
+                        dm_yaml += f'        model: "{hop["model"]}"\n'
+            else:
+                dm_yaml += f'    {role}:\n'
+                dm_yaml += f'      from: "{entry["from"]}"\n'
+                dm_yaml += f'      to: "{entry["to"]}"\n'
+                if "model" in entry:
+                    dm_yaml += f'      model: "{entry["model"]}"\n'
+
+        snaps_yaml = ""
+        if not snapshots_enabled:
+            snaps_yaml = "\n  enabled: false"
+
+        pipeline_file.write_text(f"""
+version: "1.0"
+project_root: "."
+per_agent_timeout: 600
+budget:
+  overflow_action: downgrade
+{dm_yaml}
+snapshots:{snaps_yaml}
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        (tmp_path / "prompts" / "developer.md").write_text("# Developer")
+        (tmp_path / "prompts" / "reviewer.md").write_text("# Reviewer")
+
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        orch = Orchestrator(spec=spec)
+        return orch
+
+    def test_snapshot_taken_on_multi_hop_first_tier(self, tmp_path):
+        """Workspace is snapshotted before first multi-hop tier switch."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={
+                "reviewer": [
+                    {"from": "codex", "to": "claude", "model": "sonnet"},
+                    {"from": "claude", "to": "hermes"},
+                ]
+            },
+        )
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+        orch._budget_tracker.add_usage(int(0.9 * orch._budget_tracker.daily_limit))
+
+        runner, spec = orch._select_runner("reviewer")
+        assert spec.runtime == "claude"
+
+        # Snapshot should have been taken for this role
+        assert "reviewer" in orch._tier_snapshot_ids
+        assert len(orch._tier_snapshot_ids["reviewer"]) == 1
+
+    def test_snapshot_taken_on_single_dict_downgrade(self, tmp_path):
+        """Workspace is snapshotted before single-hop downgrade."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={"reviewer": {"from": "codex", "to": "claude"}},
+        )
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+        orch._budget_tracker.add_usage(int(0.9 * orch._budget_tracker.daily_limit))
+
+        runner, spec = orch._select_runner("reviewer")
+        assert spec.runtime == "claude"
+        assert "reviewer" in orch._tier_snapshot_ids
+
+    def test_snapshot_not_taken_when_snapshots_disabled(self, tmp_path):
+        """No snapshot when SnapshotConfig.enabled is False."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={"reviewer": {"from": "codex", "to": "claude"}},
+            snapshots_enabled=False,
+        )
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+        orch._budget_tracker.add_usage(int(0.9 * orch._budget_tracker.daily_limit))
+
+        runner, spec = orch._select_runner("reviewer")
+        assert spec.runtime == "claude"
+        # No snapshot manager → no snapshot taken
+        assert orch._snapshot_mgr is None
+        assert "reviewer" not in orch._tier_snapshot_ids
+
+    def test_snapshot_not_taken_when_no_downgrade(self, tmp_path):
+        """No snapshot when budget is OK (no downgrade happens)."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={"reviewer": {"from": "codex", "to": "claude"}},
+        )
+        # Budget is below 80% threshold
+        runner, spec = orch._select_runner("reviewer")
+        assert spec.runtime == "codex"  # No downgrade
+        assert "reviewer" not in orch._tier_snapshot_ids
+
+    def test_restore_tier_snapshots_clears_ids(self, tmp_path):
+        """_restore_tier_snapshots clears tracking after restore."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={"reviewer": {"from": "codex", "to": "claude"}},
+        )
+        orch._budget_tracker = orch._get_budget_tracker("reviewer")
+        orch._budget_tracker.add_usage(int(0.9 * orch._budget_tracker.daily_limit))
+
+        orch._select_runner("reviewer")
+        assert "reviewer" in orch._tier_snapshot_ids
+
+        # Simulate restore
+        orch._restore_tier_snapshots("reviewer")
+        assert "reviewer" not in orch._tier_snapshot_ids
+
+    def test_restore_tier_snapshots_noop_when_no_snapshot_mgr(self, tmp_path):
+        """_restore_tier_snapshots is safe when SnapshotManager is None."""
+        orch = self._make_orchestrator(
+            tmp_path,
+            downgrade_map={"reviewer": {"from": "codex", "to": "claude"}},
+            snapshots_enabled=False,
+        )
+        # Should not raise
+        orch._restore_tier_snapshots("reviewer")
