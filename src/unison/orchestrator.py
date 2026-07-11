@@ -1754,6 +1754,10 @@ class Orchestrator:
             iteration: Current iteration number.
             review_phase: "planning_review" or "dev_review" (for correct review file path).
         """
+        # F12: Reset fix attempts counter at start of each fresh invocation.
+        # Prevents infinite recursion when self-heal retries also fail.
+        self._fix_attempts = 0
+
         # 0. V2: parallel-dev routing
         if role == "developer":
             pd = self.spec.parallel_dev
@@ -1880,8 +1884,29 @@ class Orchestrator:
     def _attempt_self_heal(self, role: str, iteration: int,
                            review_phase: str, result: AgentResult,
                            detected_success: bool = False) -> None:
-        """Attempt self-heal: classify error → fix → review → retry if successful."""
+        """Attempt self-heal: classify error → fix → review → retry if successful.
+
+        F12: Tracks ``_fix_attempts`` to prevent infinite recursion. Each
+        retry increments the counter; retries are capped at
+        ``self_heal.max_fix_rounds`` from the pipeline spec.
+        """
         from unison.self_heal import ErrorClassifier, FixOrchestrator
+
+        # F12: Initialize fix attempts counter on first call
+        if not hasattr(self, "_fix_attempts"):
+            self._fix_attempts = 0
+        self._fix_attempts += 1
+
+        max_rounds = self.spec.self_heal.max_fix_rounds
+        if self._fix_attempts > max_rounds:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "Self-heal: max fix rounds (%d) exceeded for %s iteration %d. "
+                "Aborting retry loop.",
+                max_rounds, role, iteration,
+            )
+            return
 
         error_type = ErrorClassifier.classify(result, self.spec)
         if error_type not in ("UNISON_BUG", "CONSUMER_BUG"):

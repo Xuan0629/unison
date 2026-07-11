@@ -162,8 +162,8 @@ class FixOrchestrator:
                                   reviewers_passed=sum(1 for r in reviews if r.get("passed")))
 
         # 3. Commit + PR
-        commit_hash = self._commit_fix(fix_proposal, error_type)
-        pr_url = self._create_pr(commit_hash, fix_proposal, error_type)
+        commit_hash, fix_tag = self._commit_fix(fix_proposal, error_type)
+        pr_url = self._create_pr(commit_hash, fix_proposal, error_type, fix_tag=fix_tag)
 
         # 4. Write fix log
         log_path = self._write_fix_log(fix_proposal, error_type, commit_hash, pr_url, reviews)
@@ -200,7 +200,7 @@ class FixOrchestrator:
                                   diagnosis="tests failed after fix; aborting lightweight path")
 
         # 3. Commit (no PR for lightweight fixes)
-        commit_hash = self._commit_fix(fix_proposal, error_type)
+        commit_hash, _fix_tag = self._commit_fix(fix_proposal, error_type)
 
         # 4. Write fix log (no reviewers entry)
         log_path = self._write_fix_log(fix_proposal, error_type, commit_hash, "", [])
@@ -293,19 +293,27 @@ class FixOrchestrator:
     # Git + PR
     # ------------------------------------------------------------------
 
-    def _commit_fix(self, fix_proposal: dict, error_type: str) -> str:
-        """Commit the fix to an auto-fix branch.
+    def _commit_fix(self, fix_proposal: dict, error_type: str) -> tuple[str, str]:
+        """Commit the fix using detached HEAD, return (commit_hash, fix_tag).
+
+        F12: Uses ``git checkout --detach`` to avoid branch-name collisions
+        (previously ``checkout -b`` could fail if the timestamp-based branch
+        name already existed).
 
         P8 S12: Saves and restores the original branch so subsequent
         pipeline stages don't run on the auto-fix/ branch.
+
+        Returns:
+            Tuple of ``(commit_hash, fix_tag)`` where *fix_tag* is the
+            ``auto-fix/<timestamp>`` branch name for push + PR creation.
         """
         ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        branch = f"auto-fix/{ts}"
+        fix_tag = f"auto-fix/{ts}"
         diagnosis = fix_proposal.get("diagnosis", "auto-fix")[:60]
 
         root = self._world.root
 
-        # P8 S12: Save the current branch name before switching
+        # P8 S12: Save the current branch/commit before switching
         current_branch_result = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True, text=True,
@@ -313,8 +321,11 @@ class FixOrchestrator:
         original_branch = current_branch_result.stdout.strip() or "master"
 
         try:
-            subprocess.run(["git", "-C", str(root), "checkout", "-b", branch],
-                           capture_output=True)
+            # F12: Detach HEAD to avoid branch-name collision on auto-fix/ prefix
+            subprocess.run(
+                ["git", "-C", str(root), "checkout", "--detach"],
+                capture_output=True,
+            )
             subprocess.run(["git", "-C", str(root), "add", "-A"],
                            capture_output=True)
             subprocess.run(["git", "-C", str(root), "commit", "-m",
@@ -323,7 +334,9 @@ class FixOrchestrator:
 
             result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
                                     capture_output=True, text=True)
-            return result.stdout.strip()
+            commit_hash = result.stdout.strip()
+
+            return commit_hash, fix_tag
         finally:
             # P8 S12: Restore the original branch so pipeline continues correctly
             subprocess.run(
@@ -331,9 +344,16 @@ class FixOrchestrator:
                 capture_output=True,
             )
 
-    def _create_pr(self, commit_hash: str, fix_proposal: dict, error_type: str) -> str:
-        """Create a GitHub PR for the fix."""
+    def _create_pr(self, commit_hash: str, fix_proposal: dict, error_type: str,
+                   fix_tag: str = "") -> str:
+        """Create a GitHub PR for the fix.
+
+        F12: Uses *fix_tag* (from _commit_fix) as the remote branch name
+        instead of reconstructing it from the commit hash. The commit is
+        pushed via ``git push origin <hash>:refs/heads/<fix_tag>``.
+        """
         diagnosis = fix_proposal.get("diagnosis", "auto-fix")[:72]
+        branch_name = fix_tag or f"auto-fix/{commit_hash[:8]}"
 
         body = f"""## Auto-Fix PR ({error_type})
 
@@ -348,10 +368,10 @@ class FixOrchestrator:
 """
 
         try:
-            # Push the branch first
+            # F12: Push the specific commit to the auto-fix branch on remote
             push_result = subprocess.run(
                 ["git", "-C", str(self._world.root), "push", "origin",
-                 f"HEAD:auto-fix/{commit_hash[:8]}"],
+                 f"{commit_hash}:refs/heads/{branch_name}"],
                 capture_output=True, timeout=30,
             )
             if push_result.returncode != 0:
@@ -374,7 +394,7 @@ class FixOrchestrator:
                  "--body", body,
                  "--label", "auto-fix",
                  "--repo", "Xuan0629/unison",
-                 "--head", f"auto-fix/{commit_hash[:8]}",
+                 "--head", branch_name,
                  "--base", "master"],
                 capture_output=True, text=True, timeout=30, cwd=str(self._world.root),
             )
