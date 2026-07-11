@@ -41,6 +41,23 @@ from unison.state import State
 from unison.run_history import RunHistoryStore
 
 # ============================================================================
+# F8: Session token — generated on startup, required for control endpoints
+# ============================================================================
+
+_SESSION_TOKEN: str | None = None
+
+
+def _generate_session_token() -> str:
+    """Generate a session token from PID + timestamp (sha256 hex)."""
+    raw = f"{os.getpid()}-{time.time()}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def get_session_token() -> str | None:
+    """Return the current session token, or None if not yet generated."""
+    return _SESSION_TOKEN
+
+# ============================================================================
 # Load HTML template from file (replaces the old embedded string literal)
 # ============================================================================
 
@@ -156,13 +173,19 @@ class ProjectRegistry:
         return len(matches) <= 1
 
 
-def register_project(project_root: Path, port: int = 9099) -> bool:
-    """Register *project_root* with an already-running local WebUI."""
+def register_project(project_root: Path, port: int = 9099, token: str = "") -> bool:
+    """Register *project_root* with an already-running local WebUI.
+
+    F8: Passes X-Unison-Token header for authentication on control endpoints.
+    """
     body = json.dumps({"path": str(Path(project_root).resolve())}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["X-Unison-Token"] = token
     request = Request(
         f"http://127.0.0.1:{port}/api/projects",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -209,6 +232,15 @@ class UnisonHandler(BaseHTTPRequestHandler):
         """Handle project registration and project-scoped controls."""
         parsed = urlsplit(self.path)
         if parsed.path in {"/api/control", "/api/projects"}:
+            # F8: Require X-Unison-Token for control endpoints
+            token = self.headers.get("X-Unison-Token", "")
+            if not token or token != _SESSION_TOKEN:
+                self._json_response(
+                    {"ok": False, "error": "Missing or invalid X-Unison-Token"},
+                    status=401,
+                )
+                return
+
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
             try:
@@ -769,14 +801,18 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 # ============================================================================
 
 
-def serve(project_root: str, port: int = 9099) -> None:
+def serve(project_root: str, port: int = 9099, token: str = "") -> None:
     """Start the Unison dashboard HTTP server.
 
     Args:
         project_root: Path to the Unison project directory (contains .unison/).
         port: TCP port to listen on (default 9099).
+        token: F8: Pre-generated session token. If empty, one is generated.
     """
-    global _sse_stop, _sse_thread
+    global _sse_stop, _sse_thread, _SESSION_TOKEN
+
+    # F8: Generate or reuse session token for control endpoint auth
+    _SESSION_TOKEN = token or _generate_session_token()
 
     UnisonHandler.project_root = Path(project_root).resolve()
     UnisonHandler.registry = ProjectRegistry()
@@ -793,6 +829,8 @@ def serve(project_root: str, port: int = 9099) -> None:
 
     server = ThreadedHTTPServer(("127.0.0.1", port), UnisonHandler)
     print(f"Unison Web UI  →  http://127.0.0.1:{port}")
+    # F8: Print session token so CLI / orchestrator can read it
+    print(f"Session token  →  {_SESSION_TOKEN}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

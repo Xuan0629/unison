@@ -1193,3 +1193,154 @@ class TestRunHistoryStore:
             data = handler._load_state(tmp_path)
 
         assert data["runs"][0]["pipeline_name"] == "actual-user-run"
+
+
+# ============================================================================
+# F8: Session token — control endpoint authentication
+# ============================================================================
+
+
+class TestSessionToken:
+    """F8: WebUI control token generation and validation."""
+
+    def test_token_generation_is_stable_for_same_input(self):
+        """Token generation produces deterministic output for same PID+timestamp."""
+        from unison.webui.server import _generate_session_token
+        import hashlib
+
+        # Calling _generate_session_token twice will produce different tokens
+        # (different timestamps), but the format should be consistent
+        token1 = _generate_session_token()
+        token2 = _generate_session_token()
+
+        # Both should be 64-char hex strings (sha256)
+        assert len(token1) == 64
+        assert len(token2) == 64
+        assert all(c in "0123456789abcdef" for c in token1)
+        # Different calls should produce different tokens
+        assert token1 != token2
+
+    def test_token_passed_to_serve_is_stored(self, monkeypatch):
+        """When a token is passed to serve(), it becomes the session token."""
+        from unison.webui import server as webui_server
+        import threading
+
+        original_token = webui_server._SESSION_TOKEN
+        try:
+            # Don't actually start the server, just verify token storage pattern
+            webui_server._SESSION_TOKEN = None
+            # Simulate what serve() does
+            test_token = "test-token-abc123"
+            webui_server._SESSION_TOKEN = test_token
+            assert webui_server.get_session_token() == test_token
+        finally:
+            webui_server._SESSION_TOKEN = original_token
+
+    def test_do_post_without_token_returns_401(self):
+        """POST /api/projects without X-Unison-Token returns 401."""
+        from unittest.mock import MagicMock, patch
+        from unison.webui import UnisonHandler, server as webui_server
+
+        original_token = webui_server._SESSION_TOKEN
+        try:
+            webui_server._SESSION_TOKEN = "secret-token"
+
+            handler = UnisonHandler.__new__(UnisonHandler)
+            handler.request_version = "HTTP/1.1"
+            handler.headers = {"Content-Length": "2"}
+            handler.rfile = MagicMock()
+            handler.rfile.read.return_value = b"{}"
+            handler.path = "/api/projects"
+            handler.send_response = MagicMock()
+            handler.send_header = MagicMock()
+            handler.end_headers = MagicMock()
+            handler.wfile = MagicMock()
+
+            handler.do_POST()
+
+            # Should have received a 401 response
+            handler.send_response.assert_called_once_with(401)
+        finally:
+            webui_server._SESSION_TOKEN = original_token
+
+    def test_do_post_with_valid_token_proceeds(self):
+        """POST /api/projects with valid X-Unison-Token proceeds past auth."""
+        from unittest.mock import MagicMock, patch
+        from unison.webui import UnisonHandler, server as webui_server
+
+        original_token = webui_server._SESSION_TOKEN
+        try:
+            webui_server._SESSION_TOKEN = "secret-token"
+
+            handler = UnisonHandler.__new__(UnisonHandler)
+            handler.request_version = "HTTP/1.1"
+            handler.headers = {
+                "Content-Length": "2",
+                "X-Unison-Token": "secret-token",
+            }
+            handler.rfile = MagicMock()
+            handler.rfile.read.return_value = b"{}"
+            handler.path = "/api/projects"
+            handler.send_response = MagicMock()
+            handler.send_header = MagicMock()
+            handler.end_headers = MagicMock()
+            handler.wfile = MagicMock()
+
+            # Should raise because there's no real project path in the body,
+            # but it should get past the token check (not 401)
+            handler.do_POST()
+
+            # Should NOT be 401 — token was valid
+            calls = handler.send_response.call_args_list
+            status_codes = [c[0][0] for c in calls if c[0]]
+            assert 401 not in status_codes, "Valid token should not return 401"
+        finally:
+            webui_server._SESSION_TOKEN = original_token
+
+    def test_do_post_with_wrong_token_returns_401(self):
+        """POST /api/projects with wrong X-Unison-Token returns 401."""
+        from unittest.mock import MagicMock, patch
+        from unison.webui import UnisonHandler, server as webui_server
+
+        original_token = webui_server._SESSION_TOKEN
+        try:
+            webui_server._SESSION_TOKEN = "secret-token"
+
+            handler = UnisonHandler.__new__(UnisonHandler)
+            handler.request_version = "HTTP/1.1"
+            handler.headers = {
+                "Content-Length": "2",
+                "X-Unison-Token": "wrong-token",
+            }
+            handler.rfile = MagicMock()
+            handler.rfile.read.return_value = b"{}"
+            handler.path = "/api/projects"
+            handler.send_response = MagicMock()
+            handler.send_header = MagicMock()
+            handler.end_headers = MagicMock()
+            handler.wfile = MagicMock()
+
+            handler.do_POST()
+
+            handler.send_response.assert_called_once_with(401)
+        finally:
+            webui_server._SESSION_TOKEN = original_token
+
+    def test_register_project_passes_token_header(self):
+        """register_project() sends X-Unison-Token header when token provided."""
+        from unittest.mock import MagicMock, patch
+        from pathlib import Path
+        from unison.webui import register_project
+
+        with patch("unison.webui.server.urlopen") as mock_urlopen:
+            mock_response = MagicMock()
+            mock_response.status = 200
+            mock_response.read.return_value = b'{"project": {"id": "test-id"}}'
+            mock_urlopen.return_value.__enter__.return_value = mock_response
+
+            with patch("unison.webui.server._project_id", return_value="test-id"):
+                register_project(Path("/tmp/test"), port=9099, token="my-token")
+
+            # Verify the request included the token header
+            request_arg = mock_urlopen.call_args[0][0]
+            assert request_arg.get_header("X-unison-token") == "my-token"

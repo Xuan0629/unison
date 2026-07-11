@@ -21,6 +21,7 @@ from unison.webui.server import (
     _phase_agent,
     _project_id,
     _task_label,
+    get_session_token,
     register_project,
     serve,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "_phase_agent",
     "_project_id",
     "_task_label",
+    "get_session_token",
     "register_project",
     "serve",
 ]

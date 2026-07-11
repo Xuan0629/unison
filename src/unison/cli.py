@@ -115,6 +115,8 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="Project root (default: current dir)")
     wui.add_argument("--port", type=int, default=9099,
                      help="Listen port (default: 9099)")
+    wui.add_argument("--token", type=str, default="",
+                     help="F8: Session token for control endpoint auth")
 
     # --- observe -----------------------------------------------------
     obs = sub.add_parser("observe", help="Start observer daemon (file watcher + notifications)")
@@ -296,7 +298,7 @@ def _cmd_new(args: argparse.Namespace) -> int:
 def _cmd_webui(args: argparse.Namespace) -> int:
     """Start the web dashboard."""
     from unison.webui import serve
-    serve(str(args.project), port=args.port)
+    serve(str(args.project), port=args.port, token=args.token)
     return 0
 
 

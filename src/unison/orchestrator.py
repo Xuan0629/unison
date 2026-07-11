@@ -3688,11 +3688,19 @@ class Orchestrator:
         background ``unison webui`` process pointing at the current
         project root.
 
+        F8: Generates a session token (sha256 of PID+timestamp) and passes
+        it to both the subprocess (via --token) and register_project().
+
         Does NOT halt on failure — the dashboard is best-effort.
         """
         cfg = self.spec.webui
         if not cfg.auto_start:
             return
+
+        # F8: Generate session token for WebUI control endpoints
+        webui_token = hashlib.sha256(
+            f"{os.getpid()}-{time.time()}".encode()
+        ).hexdigest()
 
         import socket
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -3704,7 +3712,9 @@ class Orchestrator:
             # this project instead of silently binding it to the first one.
             try:
                 from unison.webui import register_project
-                registered = register_project(self.spec.world.root, port=cfg.port)
+                registered = register_project(
+                    self.spec.world.root, port=cfg.port, token=webui_token,
+                )
                 if not registered:
                     import logging
                     logging.getLogger(__name__).warning(
@@ -3724,13 +3734,14 @@ class Orchestrator:
         finally:
             s.close()
 
-        # Not running — spawn background process
+        # Not running — spawn background process with token
         try:
             subprocess.Popen(
                 [
                     sys.executable, "-m", "unison.cli", "webui",
                     "--project", str(self.spec.world.root),
                     "--port", str(cfg.port),
+                    "--token", webui_token,
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
