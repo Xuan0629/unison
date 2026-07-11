@@ -805,6 +805,150 @@ class TestFixAttemptsCounter:
         assert fix_attempts > max_rounds
 
 
+# ---------------------------------------------------------------------------
+# F12: _commit_fix detached HEAD
+# ---------------------------------------------------------------------------
+
+
+class TestCommitFixDetachedHead:
+    """F12: _commit_fix uses detached HEAD to avoid branch-name collisions."""
+
+    def test_commit_fix_uses_detached_head(self, tmp_path, monkeypatch):
+        """_commit_fix runs 'git checkout --detach' before committing."""
+        from unittest.mock import MagicMock, call
+        import subprocess as sp
+
+        from unison.interfaces import (
+            AgentSpec, PipelineSpec, SelfHealConfig, World,
+        )
+        from unison.self_heal import FixOrchestrator
+
+        world = World(root=tmp_path)
+
+        # Initialize a real git repo so rev-parse succeeds
+        sp.run(["git", "init", "-b", "master"], cwd=str(tmp_path),
+               capture_output=True)
+        sp.run(["git", "config", "user.email", "test@test.com"],
+               cwd=str(tmp_path), capture_output=True)
+        sp.run(["git", "config", "user.name", "Test"],
+               cwd=str(tmp_path), capture_output=True)
+        # Create an initial commit so HEAD resolves
+        (tmp_path / "dummy").write_text("hello")
+        sp.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+        sp.run(["git", "commit", "-m", "init"], cwd=str(tmp_path),
+               capture_output=True)
+
+        config = SelfHealConfig(max_fix_rounds=2, auto_fix_unison=True)
+        spec = PipelineSpec(
+            version="1.0", world=world,
+            agents={
+                "dev": AgentSpec(
+                    role="developer", runtime="claude", model="test",
+                    system_prompt_path=Path("."),
+                ),
+            },
+            self_heal=config,
+        )
+        fixer = FixOrchestrator(spec, world)
+
+        fix_proposal = {
+            "diagnosis": "null pointer in pipeline loader",
+            "files_changed": ["pipeline.py"],
+            "test_result": "PASS",
+        }
+
+        original_run = sp.run
+        captured_commands = []
+
+        def track_run(args, **kwargs):
+            captured_commands.append(args)
+            return original_run(args, **kwargs)
+
+        monkeypatch.setattr(sp, "run", track_run)
+
+        commit_hash, fix_tag = fixer._commit_fix(fix_proposal, "UNISON_BUG")
+
+        assert commit_hash, "Should return a commit hash"
+        assert fix_tag.startswith("auto-fix/")
+
+        # Verify 'git checkout --detach' was called
+        checkout_calls = [
+            cmd for cmd in captured_commands
+            if cmd[0] == "git" and "checkout" in cmd
+        ]
+        assert any(
+            "--detach" in cmd for cmd in checkout_calls
+        ), f"Expected 'git checkout --detach' in commands: {checkout_calls}"
+
+        # Verify we end up back on the original branch
+        last_checkout = [
+            cmd for cmd in captured_commands
+            if cmd[0] == "git" and "checkout" in cmd
+        ][-1]
+        assert "--detach" not in last_checkout, (
+            "Final checkout should restore original branch, not stay detached"
+        )
+
+    def test_commit_fix_restores_original_branch(self, tmp_path, monkeypatch):
+        """After _commit_fix, repo is back on the original branch."""
+        import subprocess as sp
+
+        from unison.interfaces import (
+            AgentSpec, PipelineSpec, SelfHealConfig, World,
+        )
+        from unison.self_heal import FixOrchestrator
+
+        world = World(root=tmp_path)
+
+        sp.run(["git", "init", "-b", "master"], cwd=str(tmp_path),
+               capture_output=True)
+        sp.run(["git", "config", "user.email", "test@test.com"],
+               cwd=str(tmp_path), capture_output=True)
+        sp.run(["git", "config", "user.name", "Test"],
+               cwd=str(tmp_path), capture_output=True)
+        (tmp_path / "dummy").write_text("hello")
+        sp.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+        sp.run(["git", "commit", "-m", "init"], cwd=str(tmp_path),
+               capture_output=True)
+
+        original_branch = sp.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(tmp_path), capture_output=True, text=True,
+        ).stdout.strip()
+
+        config = SelfHealConfig(max_fix_rounds=2, auto_fix_unison=True)
+        spec = PipelineSpec(
+            version="1.0", world=world,
+            agents={
+                "dev": AgentSpec(
+                    role="developer", runtime="claude", model="test",
+                    system_prompt_path=Path("."),
+                ),
+            },
+            self_heal=config,
+        )
+        fixer = FixOrchestrator(spec, world)
+
+        fix_proposal = {
+            "diagnosis": "test fix",
+            "files_changed": ["test.py"],
+            "test_result": "PASS",
+        }
+
+        fixer._commit_fix(fix_proposal, "CONSUMER_BUG")
+
+        # After _commit_fix, we should be back on the original branch
+        current_branch = sp.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(tmp_path), capture_output=True, text=True,
+        ).stdout.strip()
+
+        assert current_branch == original_branch, (
+            f"Expected to be on '{original_branch}' after _commit_fix, "
+            f"but got '{current_branch}'"
+        )
+
+
 def minimal_spec_fixture_world(tmp_path):
     """Helper to create a World in tmp_path for _run_tests tests."""
     from unison.interfaces import World
