@@ -23,8 +23,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from unison.interfaces import AgentResult, MoaConfig, Notification, Operation, PipelineSpec, RedirectControl, ReviewVerdict, VerdictParseError
-from unison.phase_router import PhaseRouter
-from unison.pipeline import PipelineValidationError
+from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
+# P13: Include deprecated mode names for backward compatibility.
+_KNOWN_MODES = (
+    set(PhaseRouter.PHASES_BY_MODE.keys())
+    | set(_DEPRECATED_MODE_ALIASES.keys())
+    | {"moa", "dag"}
+)
 from unison.prompt_registry import PromptRegistry
 from unison.state import State
 from unison.lock import FileLockManager
@@ -933,11 +938,21 @@ class Orchestrator:
             # P8 S11: Validate all stage modes at load time before any
             # stage runs.  A typo in stage 5's mode would otherwise waste
             # the wall-clock time of stages 1-4 before halting.
-            from unison.phase_router import PhaseRouter
-            # P8 P1.2: Match load-time validation in _build_chain().
+            from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
+            # P13: Include deprecated mode names for backward compatibility.
+            _KNOWN_MODES = (
+                set(PhaseRouter.PHASES_BY_MODE.keys())
+                | set(_DEPRECATED_MODE_ALIASES.keys())
+                | {"moa", "dag"}
+            )
             # "dag" is handled by the DAG scheduler; "chain" is already
-            # rejected at load time (recursive chain-in-chain is forbidden).
-            _KNOWN_MODES = set(PhaseRouter.PHASES_BY_MODE.keys()) | {"moa", "dag"}
+            from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
+            # P13: Include deprecated mode names for backward compatibility.
+            _KNOWN_MODES = (
+                set(PhaseRouter.PHASES_BY_MODE.keys())
+                | set(_DEPRECATED_MODE_ALIASES.keys())
+                | {"moa", "dag"}
+            )
             for i, stage in enumerate(self.spec.chain.stages):
                 if stage.mode not in _KNOWN_MODES:
                     self.halt(
