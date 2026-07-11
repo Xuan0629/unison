@@ -3103,7 +3103,12 @@ class Orchestrator:
                 prd_text = prd_path.read_text(encoding="utf-8")[:4096]
                 # Extract ## sections as checklist items
                 import re
-                items_found = re.findall(r'^##\s+(F\d+:.*)$', prd_text, re.MULTILINE)
+                items_found = re.findall(r'^##\s+(.+)$', prd_text, re.MULTILINE)
+                # Filter out non-task headers (e.g. "Acceptance Criteria", "Overview")
+                items_found = [
+                    i for i in items_found
+                    if not i.lower().startswith(("acceptance", "overview", "scope", "deliverable"))
+                ]
                 if items_found:
                     for item in items_found:
                         lines.append(f"- ⬜ [pending] {item}")
