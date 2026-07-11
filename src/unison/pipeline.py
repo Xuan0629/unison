@@ -99,11 +99,16 @@ class PipelineLoader:
 
     # F14: Known pipeline modes.  Any mode not in this set is rejected at
     # load time so a typo in pipeline.yaml is caught before runtime.
-    # PhaseRouter.PHASES_BY_MODE keys plus moa/chain (handled outside PhaseRouter).
+    # P13: Uses canonical mode names from PhaseRouter.  Old names (code-dev,
+    # full-dev, etc.) are also accepted via deprecation aliases.
     VALID_MODES: frozenset[str] = frozenset({
-        "code-dev", "full-dev", "design-debate", "inspect-only",
-        "agent-fix", "migrate", "greenfield", "spec-driven",
-        "moa", "chain",
+        "dev:quick", "dev:standard", "dev:deep",
+        "moa:analyze", "moa:plan", "moa:review",
+        "moa", "chain", "custom",
+        # Legacy accepted via alias (F14 deprecation phase)
+        "code-dev", "full-dev", "design-debate",
+        "inspect-only", "agent-fix", "migrate",
+        "greenfield", "spec-driven",
     })
 
     # Required pipeline roles（planner 是可选角色，无 planner 时退化为 2-agent 模式）

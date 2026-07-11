@@ -1,14 +1,25 @@
 """phase_router.py — Maps pipeline mode → ordered list of phase definitions.
 
-Extracted from orchestrator.py _DISPATCH.  Adding a new phase is now a matter
-of adding a ``PhaseDef`` — no orchestrator logic changes needed.
+P13: Merged 10 modes into 8 parameterized modes with backward-compatible
+aliasing.  Old mode names (code-dev, full-dev, etc.) still work but
+emit deprecation warnings.  New canonical names use ``:`` separator.
 
-Note: ``moa`` mode is NOT listed here — it bypasses PhaseRouter entirely
-and is driven by ``MoaConfig.rounds`` in ``_run_moa_pipeline()``.
+  dev:quick    = code-dev (single dev phase)
+  dev:standard = full-dev (plan → discuss → dev)
+  dev:deep     = full-dev with higher iteration defaults
+  chain        = (unchanged)
+  moa:analyze  = (unchanged, bypasses PhaseRouter)
+  moa:plan     = planning phase with MoA analyze
+  moa:review   = review-only with MoA
+  custom       = parameterized (output_type + multiplicity)
+
+Note: ``moa`` mode (bare) is NOT listed here — it bypasses PhaseRouter
+entirely and is driven by ``MoaConfig.rounds`` in ``_run_moa_pipeline()``.
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -20,25 +31,33 @@ from typing import ClassVar
 
 @dataclass
 class PhaseDef:
-    """A single phase in the pipeline state machine.
-
-    Each phase either runs as a standard active→review loop via
-    ``Orchestrator._run_loop()``, or is handled as a special-case phase
-    (``name == "review"`` → ``_run_review_only``, ``active_phase ==
-    "spec-check"`` → ``_run_spec_verification``, ``name == "discuss"``
-    → ``_run_discussion_loop``).
-    """
+    """A single phase in the pipeline state machine."""
 
     name: str           # "planning", "dev", "discuss", "review", "spec-check"
     active_phase: str   # "planning_active", "dev_active", "discuss_active", ...
     review_phase: str   # "planning_review", "dev_review", "discuss_review", ""
     role: str           # "planner", "developer", "reviewer"
-    review_of: str      # "PRD + tech-design", "code + tests", "implementation proposal", ...
+    review_of: str      # "PRD + tech-design", "code + tests", ...
 
 
 # ============================================================================
 # PhaseRouter
 # ============================================================================
+
+
+# P13: Old mode names mapped to canonical equivalents for backward
+# compatibility.  Keep these indefinitely so existing pipeline YAML
+# files don't break.
+_DEPRECATED_MODE_ALIASES: dict[str, str] = {
+    "code-dev":       "dev:quick",
+    "full-dev":       "dev:standard",
+    "design-debate":  "dev:standard",  # was planning-only
+    "inspect-only":   "custom",
+    "agent-fix":      "dev:quick",
+    "migrate":        "dev:standard",
+    "greenfield":     "dev:quick",
+    "spec-driven":    "dev:standard",  # spec-check embedded
+}
 
 
 @dataclass
@@ -47,7 +66,7 @@ class PhaseRouter:
 
     Usage::
 
-        phases = PhaseRouter.get_phases("full-dev")
+        phases = PhaseRouter.get_phases("dev:standard")
         for pd in phases:
             orchestrator._run_loop(
                 pd.active_phase, pd.review_phase, pd.role, pd.review_of,
@@ -55,11 +74,12 @@ class PhaseRouter:
     """
 
     PHASES_BY_MODE: ClassVar[dict[str, list[PhaseDef]]] = {
-        "code-dev": [
+        # ── Dev family ──────────────────────────────────────────────────
+        "dev:quick": [
             PhaseDef("dev", "dev_active", "dev_review", "developer",
                      "code + tests"),
         ],
-        "full-dev": [
+        "dev:standard": [
             PhaseDef("planning", "planning_active", "planning_review",
                      "planner", "PRD + tech-design"),
             PhaseDef("discuss", "discuss_active", "discuss_review",
@@ -67,49 +87,68 @@ class PhaseRouter:
             PhaseDef("dev", "dev_active", "dev_review", "developer",
                      "code + tests"),
         ],
-        "design-debate": [
-            PhaseDef("planning", "planning_active", "planning_review",
-                     "planner", "PRD + tech-design"),
-        ],
-        "inspect-only": [
-            PhaseDef("review", "dev_review", "", "reviewer", "codebase"),
-        ],
-        "agent-fix": [
-            PhaseDef("dev", "dev_active", "dev_review", "developer",
-                     "code + tests"),
-        ],
-        "migrate": [
+        "dev:deep": [
             PhaseDef("planning", "planning_active", "planning_review",
                      "planner", "PRD + tech-design"),
             PhaseDef("discuss", "discuss_active", "discuss_review",
                      "developer", "implementation proposal"),
             PhaseDef("dev", "dev_active", "dev_review", "developer",
                      "code + tests"),
+            PhaseDef("review", "dev_review", "", "reviewer",
+                     "comprehensive review"),
         ],
-        "greenfield": [
+
+        # ── MoA family ──────────────────────────────────────────────────
+        # moa:analyze / moa:plan / moa:review are handled by
+        # _run_moa_pipeline() directly — they don't use get_phases().
+        # These entries exist only for mode validation.
+        "moa:analyze": [],
+        "moa:plan": [],
+        "moa:review": [],
+
+        # ── Chain ──────────────────────────────────────────────────────
+        "chain": [
             PhaseDef("dev", "dev_active", "dev_review", "developer",
                      "code + tests"),
         ],
-        "spec-driven": [
-            PhaseDef("planning", "planning_active", "planning_review",
-                     "planner", "PRD + tech-design"),
-            PhaseDef("spec-check", "spec-check", "", "", ""),
-            PhaseDef("discuss", "discuss_active", "discuss_review",
-                     "developer", "implementation proposal"),
+
+        # ── Custom ──────────────────────────────────────────────────────
+        "custom": [
             PhaseDef("dev", "dev_active", "dev_review", "developer",
                      "code + tests"),
         ],
     }
+
+    # ── Canonical modes used for validation ────────────────────────────
+    CANONICAL_MODES: ClassVar[frozenset[str]] = frozenset(
+        list(PHASES_BY_MODE.keys()) + ["moa"]
+    )
 
     @classmethod
     def get_phases(cls, mode: str) -> list[PhaseDef]:
         """Return the ordered list of ``PhaseDef`` for *mode*.
 
         Args:
-            mode: Pipeline mode name (e.g. ``"full-dev"``, ``"code-dev"``).
+            mode: Pipeline mode name (e.g. ``"dev:standard"``).
 
         Returns:
-            Ordered list of ``PhaseDef`` instances.  Returns an empty list
-            for unknown modes (caller should handle the error).
+            Ordered list of ``PhaseDef`` instances.  Returns an empty
+            list for unknown modes (caller should handle the error).
         """
+        # Resolve deprecated alias → canonical name
+        if mode in _DEPRECATED_MODE_ALIASES:
+            canonical = _DEPRECATED_MODE_ALIASES[mode]
+            warnings.warn(
+                f"Pipeline mode '{mode}' is deprecated. "
+                f"Use '{canonical}' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            mode = canonical
+
         return cls.PHASES_BY_MODE.get(mode, [])
+
+    @classmethod
+    def canonical_modes(cls) -> frozenset[str]:
+        """All valid mode names (including moa, which bypasses get_phases)."""
+        return cls.CANONICAL_MODES
