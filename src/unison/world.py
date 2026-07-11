@@ -93,8 +93,20 @@ class World:
 
     @property
     def checklist_file(self) -> Path:
-        """P9: Structured checklist for shared progress tracking."""
+        """P9: Structured checklist for shared progress tracking.
+
+        Returns ``.unison/checklist.json`` by default.  When the orchestrator
+        provides a pipeline name, returns the pipeline-scoped variant
+        ``.unison/checklist-{name}.json`` to prevent cross-pipeline pollution.
+        """
         return self.unison_dir / "checklist.json"
+
+    def checklist_file_for(self, pipeline_name: str) -> Path:
+        """Pipeline-scoped checklist file path."""
+        if not pipeline_name:
+            return self.unison_dir / "checklist.json"
+        safe = pipeline_name.replace("/", "-").replace(" ", "_")
+        return self.unison_dir / f"checklist-{safe}.json"
 
     @property
     def policy_file(self) -> Path:

@@ -145,6 +145,12 @@ class Orchestrator:
         self._detector = GitCompletionDetector()
         self._verdict_parser = YamlFrontmatterParser()
 
+        # P0: Pipeline start baseline — ensures CompletionDetector measures
+        # progress from pipeline-init HEAD, not from a stale previous run.
+        self._pipeline_start_commit: str | None = self._detector._get_commit(
+            self.spec.world.root
+        ) if self.spec.world.root.exists() else None
+
         # -- budget tracking (V2, lazy-init) -----------------------------------
         self._budget_tracker: BudgetTracker | None = None
 
@@ -3213,7 +3219,7 @@ class Orchestrator:
             failures.append("crash/traceback detected in agent logs")
 
         # ---- 4. Checklist resolved (if exists) -----------------------------
-        checklist_path = root / ".unison" / "checklist.json"
+        checklist_path = self.spec.world.checklist_file_for(self.spec.pipeline_name)
         if checklist_path.exists():
             if not self._check_checklist_resolved(checklist_path):
                 failures.append("checklist has unresolved items")
@@ -4154,12 +4160,14 @@ class Orchestrator:
     # ==================================================================
 
     def _load_checklist(self) -> ChecklistStatus:
-        """Load the checklist from ``.unison/checklist.json``.
+        """Load the pipeline-scoped checklist (``.unison/checklist-{name}.json``).
 
         Returns an empty ``ChecklistStatus`` when the file does not exist
         or is unreadable.
         """
-        raw = atomic_read_json(self.spec.world.checklist_file)
+        raw = atomic_read_json(
+            self.spec.world.checklist_file_for(self.spec.pipeline_name)
+        )
         if raw is None:
             return ChecklistStatus()
         try:
@@ -4168,8 +4176,11 @@ class Orchestrator:
             return ChecklistStatus()
 
     def _save_checklist(self, status: ChecklistStatus) -> None:
-        """Persist *status* to ``.unison/checklist.json`` atomically."""
-        atomic_write_json(self.spec.world.checklist_file, status.to_dict())
+        """Persist *status* to the pipeline-scoped checklist file atomically."""
+        atomic_write_json(
+            self.spec.world.checklist_file_for(self.spec.pipeline_name),
+            status.to_dict(),
+        )
 
     def _parse_checklist(
         self, iteration: int, review_phase: str = "dev_review"
