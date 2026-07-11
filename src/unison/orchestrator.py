@@ -1339,21 +1339,34 @@ class Orchestrator:
     def _run_spec_verification(self) -> None:
         """Validate all 4 SDD artifacts exist and have substance.
 
+        P12c: Checks run-scoped PRD directory first, falls back to legacy paths.
+        This prevents stale spec from previous pipeline from incorrectly
+        passing the gate.
+
         Pure Python — no LLM call. Checks:
-        1. prd/proposal.md exists and > 500 bytes
-        2. prd/design.md exists and > 500 bytes
-        3. prd/specs/ has ≥1 .md file with GIVEN + WHEN + THEN keywords
-        4. prd/tasks.md exists
+        1. prd/runs/<key>/proposal.md exists and > 500 bytes
+        2. prd/runs/<key>/design.md exists and > 500 bytes
+        3. prd/runs/<key>/specs/ has >=1 .md file with GIVEN + WHEN + THEN
+        4. prd/runs/<key>/tasks.md exists
 
         Fails fast: the first missing or inadequate artifact halts the
         pipeline with a diagnostic message listing what's wrong.
         """
         world = self.spec.world
-        root = world.root
+        ctx = getattr(self, "_run_ctx", None)
+        # P12c: use run-scoped PRD directory when available
+        if ctx is not None:
+            prd_dir = world.prd_dir_for(ctx.pipeline_key)
+            legacy_dir = world.root / "prd"
+            # Only use scoped if it has files; fall back to legacy for existing tests
+            if not any(prd_dir.glob("*")):
+                prd_dir = legacy_dir
+        else:
+            prd_dir = world.root / "prd"
         missing: list[str] = []
 
         # 1. proposal.md
-        proposal = root / "prd" / "proposal.md"
+        proposal = prd_dir / "proposal.md"
         if not proposal.exists():
             missing.append("prd/proposal.md (missing)")
         elif proposal.stat().st_size <= 500:
@@ -1363,7 +1376,7 @@ class Orchestrator:
             )
 
         # 2. design.md
-        design = root / "prd" / "design.md"
+        design = prd_dir / "design.md"
         if not design.exists():
             missing.append("prd/design.md (missing)")
         elif design.stat().st_size <= 500:
@@ -1373,7 +1386,7 @@ class Orchestrator:
             )
 
         # 3. spec files with GIVEN/WHEN/THEN scenarios
-        specs_dir = root / "prd" / "specs"
+        specs_dir = prd_dir / "specs"
         spec_files = sorted(specs_dir.glob("*.md")) if specs_dir.exists() else []
         if not spec_files:
             missing.append("prd/specs/*.md (no .md files found)")
@@ -1384,7 +1397,6 @@ class Orchestrator:
                     content = sf.read_text(encoding="utf-8")
                 except Exception:
                     continue
-                # Check for GIVEN, WHEN, THEN (case-insensitive)
                 has_given = "given" in content.lower()
                 has_when = "when" in content.lower()
                 has_then = "then" in content.lower()
@@ -1398,7 +1410,7 @@ class Orchestrator:
                 )
 
         # 4. tasks.md
-        tasks = root / "prd" / "tasks.md"
+        tasks = prd_dir / "tasks.md"
         if not tasks.exists():
             missing.append("prd/tasks.md (missing)")
 
@@ -1407,7 +1419,7 @@ class Orchestrator:
             lines = "\n  - ".join(missing)
             self.halt(
                 f"SDD spec verification FAILED:\n"
-                f"  - {lines}\n\n"
+                f"  - {lines}\n"
                 f"The planner must produce all 4 SDD artifacts:\n"
                 f"  1. prd/proposal.md (>500 bytes)\n"
                 f"  2. prd/design.md (>500 bytes)\n"
@@ -3115,7 +3127,11 @@ class Orchestrator:
 
         # Checklist — derive from PRD, NOT from stale pipeline-specific JSON
         lines.extend(["", "## Checklist"])
-        prd_path = root / "prd" / "PRD.md"
+        ctx = getattr(self, "_run_ctx", None)
+        if ctx is not None:
+            prd_path = self.spec.world.prd_for(ctx.pipeline_key)
+        else:
+            prd_path = root / "prd" / "PRD.md"
         if prd_path.exists():
             try:
                 prd_text = prd_path.read_text(encoding="utf-8")[:4096]
