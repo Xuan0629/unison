@@ -245,6 +245,14 @@ class World:
     def agent_log(self, role: AgentRole, iter_n: int, timestamp: str) -> Path:
         return self.logs_dir / f"{role}_iter-{iter_n}_{timestamp}.log"
 
+    def ensure_run_directories(self, ctx) -> None:
+        from unison.world import World as _W
+        _W(self.root).ensure_run_directories(ctx)
+
+    def ensure_directories(self) -> None:
+        from unison.world import World as _W
+        _W(self.root).ensure_directories()
+
 # ============================================================================
 # AgentSpec — 单个 agent 的不变量
 # ============================================================================

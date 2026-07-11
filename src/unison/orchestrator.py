@@ -151,6 +151,16 @@ class Orchestrator:
             self.spec.world.root
         ) if self.spec.world.root.exists() else None
 
+        # P12c: Run-scoped artifact isolation — review files, packages, PRD
+        # all live under project_id/pipeline_key/run_id to prevent cross-
+        # pipeline and cross-rerun pollution.
+        from unison.world import RunContext
+        self._run_ctx: RunContext = RunContext.create(
+            self.spec.world.root,
+            self.spec.pipeline_name,
+        )
+        self.spec.world.ensure_run_directories(self._run_ctx)
+
         # -- budget tracking (V2, lazy-init) -----------------------------------
         self._budget_tracker: BudgetTracker | None = None
 
@@ -2986,16 +2996,21 @@ class Orchestrator:
         full_system = f"{task}\n\n{system_prompt}"
 
         # P10: Pre-generated review package (Superpowers-style, -10% reviewer work)
-        # Reviewers get a pre-built bundle instead of running git/log commands.
+        # P12c: Uses run-scoped path to prevent cross-pipeline collision.
         if role == "reviewer":
             self._generate_review_package(iteration, review_phase)
+            ctx = getattr(self, "_run_ctx", None)
+            if ctx is not None:
+                pkg_path = str(self.spec.world.run_review_package_file(ctx, iteration))
+            else:
+                pkg_path = f".unison/review-package-{iteration}.md"
             full_system += (
                 "\n\n## Review Package\n"
                 "A pre-generated review bundle is at:\n"
-                f"  .unison/review-package-{iteration}.md\n"
+                f"  {pkg_path}\n"
                 "It contains: git diff (staged), git log (this iteration), "
                 "checklist status, and test results.\n"
-                "Do NOT run git commands. Read the bundle instead."
+                "Do NOT run git commands. Read the bundle instead.\n"
             )
 
         # DEV-3: Inject dev-notes.md for cross-iteration context
@@ -3048,14 +3063,17 @@ class Orchestrator:
     def _generate_review_package(self, iteration: int, review_phase: str) -> None:
         """P10: Pre-build review context bundle (Superpowers-style).
 
-        Writes ``.unison/review-package-{iteration}.md`` containing git diff,
-        git log, checklist status, and test results so the reviewer doesn't
-        waste tokens running git/log commands.
+        P12c: Writes to run-scoped path ``.unison/runs/<key>/<run_id>/review-package-{N}.md``
+        to prevent cross-pipeline and cross-rerun collision.
         """
         root = self.spec.world.root
-        unison_dir = root / ".unison"
-        unison_dir.mkdir(parents=True, exist_ok=True)
-        bundle_path = unison_dir / f"review-package-{iteration}.md"
+        ctx = getattr(self, "_run_ctx", None)
+        if ctx is not None:
+            bundle_path = self.spec.world.run_review_package_file(ctx, iteration)
+        else:
+            unison_dir = root / ".unison"
+            unison_dir.mkdir(parents=True, exist_ok=True)
+            bundle_path = unison_dir / f"review-package-{iteration}.md"
 
         lines: list[str] = [
             f"# Review Package — Iteration {iteration}",
@@ -3991,13 +4009,33 @@ class Orchestrator:
     ) -> Path:
         """Return the canonical review-file path for a given review phase.
 
-        Planning review → ``reviews/plan-iter-{N}.md``.
-        Development (or other) review → ``reviews/iter-{N}.md``.
+        P12c: Uses run-scoped path when ``_run_ctx`` is available to prevent
+        cross-pipeline verdict file collisions. Falls back to legacy paths
+        for backward compatibility with existing tests and pipelines.
 
-        Phase 4 fix: planning and development reviews used to share
-        ``reviews/iter-{N}.md``, which let a stale planning PASS be
-        parsed as the dev verdict.
+        Planning review → ``reviews/runs/<key>/<run_id>/plan-iter-{N}.md``.
+        Development (or other) review → ``reviews/runs/<key>/<run_id>/iter-{N}.md``.
         """
+        ctx = getattr(self, "_run_ctx", None)
+        if ctx is not None and hasattr(self.spec.world, "review_file_for"):
+            scoped = (
+                self.spec.world.plan_review_file_for(ctx, iteration)
+                if review_phase == "planning_review"
+                else self.spec.world.review_file_for(ctx, iteration)
+            )
+            if scoped.exists():
+                return scoped
+            # Fallback: check legacy path (existing tests/pipelines)
+            legacy = (
+                self.spec.world.reviews_dir / f"plan-iter-{iteration}.md"
+                if review_phase == "planning_review"
+                else self.spec.world.reviews_dir / f"iter-{iteration}.md"
+            )
+            if legacy.exists():
+                return legacy
+            # New pipeline: return scoped (will be written there)
+            return scoped
+        # Legacy fallback (no _run_ctx)
         if review_phase == "planning_review":
             return self.spec.world.reviews_dir / f"plan-iter-{iteration}.md"
         return self.spec.world.reviews_dir / f"iter-{iteration}.md"
