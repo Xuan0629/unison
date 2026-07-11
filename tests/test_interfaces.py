@@ -5,6 +5,7 @@ from pathlib import Path
 
 from unison.interfaces import (
     AgentSpec,
+    BudgetConfig,
     ChainConfig,
     ChainStage,
     MoaConfig,
@@ -124,6 +125,70 @@ class TestMoaConfig:
         assert cfg.rounds == 3
         assert cfg.runtime == "hermes"
         assert cfg.model == "gpt-4"
+
+
+# ============================================================================
+# BudgetConfig
+# ============================================================================
+
+
+class TestBudgetConfig:
+    def test_tier_upgrade_defaults_to_empty_dict(self):
+        """tier_upgrade defaults to empty dict."""
+        cfg = BudgetConfig()
+        assert cfg.tier_upgrade == {}
+
+    def test_tier_upgrade_accepts_mapping(self):
+        """tier_upgrade can be set with from/to/reasoning_effort keys."""
+        cfg = BudgetConfig(
+            tier_upgrade={
+                "developer": {
+                    "from": "claude",
+                    "to": "codex",
+                    "reasoning_effort": "xhigh",
+                }
+            }
+        )
+        assert cfg.tier_upgrade["developer"]["from"] == "claude"
+        assert cfg.tier_upgrade["developer"]["to"] == "codex"
+        assert cfg.tier_upgrade["developer"]["reasoning_effort"] == "xhigh"
+
+    def test_tier_upgrade_survives_yaml_roundtrip(self, tmp_path):
+        """tier_upgrade is loaded from pipeline YAML."""
+        from unison.pipeline import PipelineLoader
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f"""
+version: "1.0"
+project_root: "{tmp_path}"
+per_agent_timeout: 600
+budget:
+  tier_upgrade:
+    planner:
+      from: "hermes"
+      to: "codex"
+      reasoning_effort: "high"
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/dev.md"
+  reviewer:
+    role: reviewer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/rev.md"
+""")
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "prompts" / "dev.md").write_text("dev")
+        (tmp_path / "prompts" / "rev.md").write_text("rev")
+
+        loader = PipelineLoader()
+        spec = loader.load(pipeline_file)
+        assert spec.budget.tier_upgrade == {
+            "planner": {"from": "hermes", "to": "codex", "reasoning_effort": "high"},
+        }
 
 
 # ============================================================================
