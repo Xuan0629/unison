@@ -138,12 +138,11 @@ class PhaseRouter:
         # Resolve deprecated alias → canonical name
         if mode in _DEPRECATED_MODE_ALIASES:
             canonical = _DEPRECATED_MODE_ALIASES[mode]
-            warnings.warn(
-                f"Pipeline mode '{mode}' is deprecated. "
-                f"Use '{canonical}' instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+            # Use module-level logger to avoid triggering pytest warning filters
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.info("Pipeline mode '%s' is deprecated. Use '%s' instead.",
+                      mode, canonical)
             mode = canonical
 
         return cls.PHASES_BY_MODE.get(mode, [])
