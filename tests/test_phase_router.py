@@ -123,7 +123,7 @@ class TestPhaseRouterBackwardCompat:
     def test_design_debate_has_only_planning(self):
         """design-debate: only planning (old: _run_planning_loop)."""
         phases = PhaseRouter.get_phases("design-debate")
-        assert len(phases) == 1
+        assert len(phases) == 3  # P13: maps to dev:standard
         assert phases[0].name == "planning"
 
     def test_inspect_only_has_review_phase(self):
@@ -146,8 +146,8 @@ class TestPhaseRouterBackwardCompat:
     def test_spec_check_phase_has_spec_check_active_phase(self):
         """spec-check phase uses 'spec-check' as its active_phase for routing."""
         phases = PhaseRouter.get_phases("spec-driven")
-        spec_check = phases[1]
-        assert spec_check.active_phase == "spec-check"
+        # P13: spec-driven maps to dev:standard (no spec-check)
+        assert phases[1].name == "discuss"
 
     def test_agent_fix_and_code_dev_have_same_phases(self):
         """agent-fix and code-dev use the same phase sequence."""

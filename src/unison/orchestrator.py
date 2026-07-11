@@ -940,6 +940,20 @@ class Orchestrator:
             # stage runs.  A typo in stage 5's mode would otherwise waste
             # the wall-clock time of stages 1-4 before halting.
             from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
+            # P13: Include deprecated mode names. chain intentionally excluded.
+            _KNOWN_MODES = (
+                (set(PhaseRouter.PHASES_BY_MODE.keys()) - {"chain"})
+                | set(_DEPRECATED_MODE_ALIASES.keys())
+                | {"moa", "dag"}
+            )
+            for i, stage in enumerate(self.spec.chain.stages):
+                if stage.mode not in _KNOWN_MODES:
+                    self.halt(
+                        f"chain stage {i}: unknown mode {stage.mode!r}. "
+                        f"Known modes: {chr(44).join(sorted(_KNOWN_MODES))}",
+                        category="external",
+                    )
+                    return
             # P13: Include deprecated mode names for backward compatibility.
             _KNOWN_MODES = (
                 set(PhaseRouter.PHASES_BY_MODE.keys())
