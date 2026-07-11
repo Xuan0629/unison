@@ -3047,22 +3047,24 @@ class Orchestrator:
         except Exception:
             lines.append("(git diff unavailable)")
 
-        # Checklist status
+        # Checklist — derive from PRD, NOT from stale pipeline-specific JSON
         lines.extend(["", "## Checklist"])
-        checklist_path = root / ".unison" / "checklist.json"
-        if checklist_path.exists():
+        prd_path = root / "prd" / "PRD.md"
+        if prd_path.exists():
             try:
-                import json as _json
-                cl = _json.loads(checklist_path.read_text())
-                items = cl.get("items", [])
-                for item in items:
-                    status = item.get("status", "?")
-                    icon = {"done": "✅", "deferred": "⏸️", "pending": "⬜", "in_progress": "🔄"}.get(status, "❓")
-                    lines.append(f"- {icon} [{status}] {item.get('id', '?')}: {item.get('title', '?')}")
+                prd_text = prd_path.read_text(encoding="utf-8")[:4096]
+                # Extract ## sections as checklist items
+                import re
+                items_found = re.findall(r'^##\s+(F\d+:.*)$', prd_text, re.MULTILINE)
+                if items_found:
+                    for item in items_found:
+                        lines.append(f"- ⬜ [pending] {item}")
+                else:
+                    lines.append("(no checklist items in PRD)")
             except Exception:
-                lines.append("(checklist read error)")
+                lines.append("(PRD read error)")
         else:
-            lines.append("(no checklist)")
+            lines.append("(no PRD found)")
 
         bundle_path.write_text("\n".join(lines), encoding="utf-8")
 
