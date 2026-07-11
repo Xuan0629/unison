@@ -898,6 +898,7 @@ class Notification:
     # P10: Structured event fields (all have defaults for backward compatibility)
     event_type: str = ""        # pipeline_start, phase_done, pipeline_done, stalled, intervention, halted
     pipeline: str = ""          # Human-readable pipeline name
+    run_id: str = ""            # P12c: Unique run identifier
     iteration: int = 0          # Current iteration when event fired
     verdict: str = ""           # PASS or REQUEST_CHANGES
     summary: str = ""           # One-line summary for Feishu

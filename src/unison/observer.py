@@ -1079,6 +1079,7 @@ class Observer:
         iteration: int = 0,
         verdict: str = "",
         summary: str = "",
+        run_id: str = "",  # P12c
     ) -> None:
         """P10: Emit a structured pipeline event to notifications.jsonl.
 
@@ -1093,6 +1094,7 @@ class Observer:
             body=body,
             event_type=event_type,
             pipeline=self.pipeline_name,
+            run_id=run_id,  # P12c
             iteration=iteration,
             verdict=verdict,
             summary=summary,
@@ -1126,6 +1128,7 @@ class Observer:
         note = event_data.get("note", "")
         halt_signal = event_data.get("halt_signal", False)
         halt_reason = event_data.get("halt_reason", "")
+        run_id = event_data.get("run_id", "")  # P12c
         lang = self.observer_language
 
         if event_kind == "pipeline_start":
@@ -1359,6 +1362,7 @@ class Observer:
             "body": notif.body,
             "event_type": notif.event_type,
             "pipeline": notif.pipeline,
+            "run_id": notif.run_id,           # P12c
             "iteration": notif.iteration,
             "verdict": notif.verdict,
             "summary": notif.summary,

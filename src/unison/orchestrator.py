@@ -257,6 +257,7 @@ class Orchestrator:
                 "mode": self.spec.mode or "code-dev",
                 "agent_count": len(self.spec.agents),
                 "commits": self._count_commits(),
+                "run_id": getattr(self, "_run_ctx", None) and self._run_ctx.run_id or "",  # P12c
             })
         except Exception:
             logger.warning("event bus publish failed", exc_info=True)
@@ -4325,18 +4326,21 @@ class Orchestrator:
                 When ``None``, falls back to ``self._state.iteration``.
         """
         iter_n = iteration if iteration is not None else self._state.iteration
+        # P12c: Use project_id hash instead of basename to prevent same-name
+        # project collision.  Preserves pipeline/run context in the checkpoint.
         self._checkpoint_mgr.save(
-            project=self.spec.world.root.name,
+            project=self.spec.world.project_id,
             state=self._state,
             iter_n=iter_n,
             commit=self._state.last_dev_commit,
         )
-        # P0.4: Also write state to project .unison/state.json for Web UI.
-        # The checkpoint files live under ~/.unison/checkpoints/ but the
-        # Web UI reads .unison/state.json from the project root.  Writing
-        # here ensures runtime_agents (and all other live state) is
-        # immediately visible to the dashboard.
-        state_file = self.spec.world.unison_dir / "state.json"
+        # P12c: Write state to run-scoped path when available (P1-1).
+        # Fall back to legacy .unison/state.json for Web UI compatibility.
+        ctx = getattr(self, "_run_ctx", None)
+        if ctx is not None:
+            state_file = self.spec.world.run_state_file(ctx)
+        else:
+            state_file = self.spec.world.unison_dir / "state.json"
         try:
             self._state.atomic_write(state_file)
         except Exception:
