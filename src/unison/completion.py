@@ -28,6 +28,8 @@ class GitCompletionDetector:
         role: AgentRole,
         log_path: Path,
         pre_commit: str | None = None,
+        review_dir: Path | None = None,   # P12c: run-scoped review dir
+        prd_dir: Path | None = None,       # P12c: run-scoped PRD dir
     ) -> AgentResult:
         """Run completion detection and return an AgentResult.
 
@@ -68,7 +70,10 @@ class GitCompletionDetector:
 
         if not success:
             # Check role-specific artifact as fallback evidence of work.
-            success = self._check_artifact(workspace, expected_iter, role)
+            success = self._check_artifact(
+                workspace, expected_iter, role,
+                review_dir=review_dir, prd_dir=prd_dir,
+            )
 
         if role == "planner":
             # Phase 4 fix: planner must produce prd/PRD.md AND
@@ -118,25 +123,39 @@ class GitCompletionDetector:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _check_artifact(workspace: Path, iteration: int, role: AgentRole) -> bool:
+    def _check_artifact(
+        workspace: Path,
+        iteration: int,
+        role: AgentRole,
+        review_dir: Path | None = None,      # P12c: run-scoped review dir
+        prd_dir: Path | None = None,          # P12c: run-scoped PRD dir
+    ) -> bool:
         """Return True if a role-specific artifact exists on disk.
 
         This is the fallback success check when git HEAD has not advanced
         (no new commit) — the agent may have produced file output without
         committing (e.g. reviewer writing a verdict file).
+
+        P12c: Accepts optional run-scoped directories to prevent false
+        positives from legacy artifacts of previous pipeline runs.
         """
         if role == "developer":
-            # Developer must produce either test output or source changes.
-            return (workspace / "tests").is_dir()
+            # P12c: Developer must produce NEW test files or source changes
+            # in the current invocation.  Do NOT treat pre-existing tests/
+            # directory as success — that was a false-positive source.
+            # The orchestrator's _pipeline_start_commit baseline already
+            # handles git-level change detection for HEAD advancement.
+            return False  # No artifact-only fallback for developer
         elif role == "reviewer":
-            # Reviewer must produce a verdict/review file.
+            # P12c: Check run-scoped path first, then legacy
+            if review_dir is not None:
+                return (review_dir / f"iter-{iteration}.md").exists()
             return (workspace / "reviews" / f"iter-{iteration}.md").exists()
         elif role == "planner":
-            # Planner must produce both PRD and tech-design.
-            return (
-                (workspace / "prd" / "PRD.md").is_file()
-                and (workspace / "prd" / "tech-design.md").is_file()
-            )
+            # P12c: Check scoped PRD paths first, then legacy
+            prd = (prd_dir / "PRD.md") if prd_dir is not None else (workspace / "prd" / "PRD.md")
+            tech = (prd_dir / "tech-design.md") if prd_dir is not None else (workspace / "prd" / "tech-design.md")
+            return prd.is_file() and tech.is_file()
         return False
 
     @staticmethod

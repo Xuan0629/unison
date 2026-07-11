@@ -1898,12 +1898,15 @@ class Orchestrator:
         tracker.add_usage(estimated_tokens, phase=role, iter_n=iteration)
 
         # 8. Post-invoke completion detection (§5)
+        ctx = getattr(self, "_run_ctx", None)
         detected = self._detector.detect(
             workspace=world.root,
             expected_iter=iteration,
             role=role,
             log_path=log_path,
             pre_commit=pre_commit,
+            review_dir=world.reviews_dir_for(ctx) if ctx else None,
+            prd_dir=world.prd_dir_for(ctx.pipeline_key) if ctx else None,
         )
 
         if detected.commit:
