@@ -2093,6 +2093,23 @@ class Orchestrator:
                 pass
         self._tier_snapshot_ids.pop(role, None)
 
+    def _check_external_paths_modified(self, snapshot_ids: list[str]) -> bool:
+        """P0-5: Check if any external snapshot shows content modification.
+
+        Uses the SnapshotManager's is_modified() to compare current content
+        against the snapshot taken before agent invocation.
+        """
+        mgr = self._snapshot_mgr
+        if mgr is None:
+            return False
+        for audit_id in snapshot_ids:
+            try:
+                if mgr.is_modified(audit_id):
+                    return True
+            except (KeyError, OSError):
+                continue
+        return False
+
     def _evaluate_post_invoke_risk(
         self, workspace: Path, snapshot_ids: list[str]
     ) -> bool:
@@ -2101,6 +2118,9 @@ class Orchestrator:
         P0-8: Also checks external_paths (e.g. ~/.hermes/skills/) which are
         outside the git repo and invisible to git diff.  If any snapshot shows
         modification, treat it as L3 and restore.
+
+        P0-6: External path modifications are fail-closed L3 — they bypass
+        the risk matrix which would only rate them L2.
 
         Returns True if execution was halted (L3 violation → restore).
         """
@@ -2112,10 +2132,26 @@ class Orchestrator:
         # Get list of files changed by the agent (git repo)
         changed_files = self._get_git_diff_files(workspace)
 
-        # P0-8: Also check external paths for modifications
-        if not changed_files and snapshot_ids:
-            if self._check_external_paths_modified(snapshot_ids):
-                changed_files = [("external_paths", Operation.MODIFY)]
+        # P0-5/P0-6: Also check external paths for modifications.
+        # External path modifications are directly L3 (fail-closed) —
+        # the risk matrix only rates them L2 which won't trigger restore.
+        if snapshot_ids and self._check_external_paths_modified(snapshot_ids):
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.error(
+                "L3 risk violation: external path modified outside git repo "
+                "— restoring snapshots and halting",
+            )
+            for audit_id in snapshot_ids:
+                try:
+                    mgr.restore(audit_id)
+                except (KeyError, FileNotFoundError):
+                    continue
+            self.halt(
+                "L3 risk violation: external path modified outside git repo",
+                category="stage",
+            )
+            return True
 
         if not changed_files:
             return False

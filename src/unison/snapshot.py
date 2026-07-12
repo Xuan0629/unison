@@ -18,6 +18,18 @@ from typing import Any
 from unison.interfaces import AgentRole, Operation
 
 
+def _dirs_equal(dir_a: Path, dir_b: Path) -> bool:
+    """Compare two directories recursively by file content."""
+    import filecmp
+    cmp = filecmp.dircmp(str(dir_a), str(dir_b))
+    if cmp.left_only or cmp.right_only or cmp.diff_files or cmp.funny_files:
+        return False
+    for subdir in cmp.common_dirs:
+        if not _dirs_equal(dir_a / subdir, dir_b / subdir):
+            return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # SnapshotRecord
 # ---------------------------------------------------------------------------
@@ -258,6 +270,38 @@ class FileSnapshotManager:
         """
         manifest = self._read_manifest()
         return [self._dict_to_record(d) for d in manifest.values()]
+
+    def is_modified(self, audit_id: str) -> bool:
+        """P0-5: Check if the original path content differs from the snapshot.
+
+        Compares the current state of the original path against the snapshot
+        taken at invocation time. Returns True if the content has changed.
+        """
+        manifest = self._read_manifest()
+        if audit_id not in manifest:
+            return False
+        record = self._dict_to_record(manifest[audit_id])
+        original = record.original_path
+        snapshot = record.snapshot_path
+
+        if not snapshot.exists():
+            return False
+        if not original.exists():
+            # Original was deleted — that's a modification
+            return True
+
+        # Compare based on type
+        if snapshot.is_dir() and original.is_dir():
+            import filecmp
+            return not filecmp.cmp(
+                str(snapshot), str(original), shallow=False
+            ) and not _dirs_equal(snapshot, original)
+        elif not snapshot.is_dir() and not original.is_dir():
+            import filecmp
+            return not filecmp.cmp(str(snapshot), str(original), shallow=False)
+        else:
+            # Type changed (file↔dir) — modification
+            return True
 
     def cleanup_expired(self) -> int:
         """Remove snapshots whose age exceeds ``retention_hours``.
