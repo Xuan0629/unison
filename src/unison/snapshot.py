@@ -173,6 +173,9 @@ class FileSnapshotManager:
         operation: Operation,
         agent: AgentRole,
         iteration: int,
+        project_id: str = "",
+        pipeline_name: str = "",
+        run_id: str = "",
     ) -> SnapshotRecord:
         """Take a snapshot of *path* (file or directory).
 
@@ -219,6 +222,9 @@ class FileSnapshotManager:
             operation=operation,
             agent=agent,
             iteration=iteration,
+            project_id=project_id,
+            pipeline_name=pipeline_name,
+            run_id=run_id,
         )
 
         # Persist to manifest

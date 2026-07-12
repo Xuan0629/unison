@@ -2093,6 +2093,9 @@ class Orchestrator:
                 operation=Operation.MODIFY,
                 agent=role,  # type: ignore[arg-type]
                 iteration=self._state.iteration,
+                project_id=getattr(self._run_ctx, "pipeline_key", ""),
+                pipeline_name=self.spec.pipeline_name,
+                run_id=getattr(self._run_ctx, "run_id", ""),
             )
             self._tier_snapshot_ids.setdefault(role, []).append(record.audit_id)
         except (ValueError, OSError):
