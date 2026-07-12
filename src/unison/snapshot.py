@@ -18,6 +18,10 @@ from typing import Any
 from unison.interfaces import AgentRole, Operation
 
 
+class SnapshotBoundaryError(Exception):
+    """Raised when a manifest record violates restore authorization bounds."""
+
+
 def _dirs_equal(dir_a: Path, dir_b: Path) -> bool:
     """Compare two directory trees by names, types, links, and file content."""
     import filecmp
@@ -259,7 +263,12 @@ class FileSnapshotManager:
 
         return record
 
-    def restore(self, audit_id: str) -> Path:
+    def restore(
+        self,
+        audit_id: str,
+        project_id: str | None = None,
+        allowed_paths: list[Path] | None = None,
+    ) -> Path:
         """Restore a file or directory from its snapshot.
 
         Returns the path that was restored.
@@ -272,13 +281,30 @@ class FileSnapshotManager:
             raise KeyError(audit_id)
 
         record = self._dict_to_record(manifest[audit_id])
-        original = record.original_path
-        snapshot = record.snapshot_path
+        original = record.original_path.resolve()
+        snapshot = record.snapshot_path.resolve()
+        expected_snapshot_dir = (self.base_dir / audit_id).resolve()
+
+        if project_id is not None and record.project_id != project_id:
+            raise SnapshotBoundaryError(
+                f"Snapshot {audit_id} belongs to project {record.project_id!r}, "
+                f"not {project_id!r}"
+            )
+        if snapshot.parent != expected_snapshot_dir:
+            raise SnapshotBoundaryError(
+                f"Snapshot path escapes audit directory: {snapshot}"
+            )
+        if allowed_paths is not None:
+            allowed = [path.expanduser().resolve() for path in allowed_paths]
+            if not any(original.is_relative_to(root) for root in allowed):
+                raise SnapshotBoundaryError(
+                    f"Original path is outside allowed restore roots: {original}"
+                )
 
         if not snapshot.exists():
             raise FileNotFoundError(f"Snapshot data missing: {snapshot}")
 
-        # Remove current original (if it still exists)
+        # Remove current original only after all authorization checks pass.
         if original.exists():
             if original.is_dir():
                 shutil.rmtree(original)
@@ -306,13 +332,13 @@ class FileSnapshotManager:
         return True
 
     def list_snapshots(self, project: str) -> list[SnapshotRecord]:
-        """List all snapshot records.
-
-        The *project* parameter is accepted for interface compatibility.
-        Currently returns all known snapshots regardless of project.
-        """
+        """List snapshots attributed to *project*."""
         manifest = self._read_manifest()
-        return [self._dict_to_record(d) for d in manifest.values()]
+        return [
+            record
+            for record in (self._dict_to_record(d) for d in manifest.values())
+            if record.project_id == project
+        ]
 
     def is_modified(self, audit_id: str) -> bool:
         """P0-5: Check if the original path content differs from the snapshot.

@@ -52,7 +52,7 @@ from unison.runners.hermes import HermesRunner
 from unison.runners.openclaw import OpenClawRunner
 from unison.run_history import RunHistoryStore
 from unison.risk_engine import RuleEngineRiskEvaluator
-from unison.snapshot import FileSnapshotManager
+from unison.snapshot import FileSnapshotManager, SnapshotBoundaryError
 
 
 # ============================================================================
@@ -2102,6 +2102,9 @@ class Orchestrator:
                     operation=Operation.MODIFY,
                     agent=role,  # type: ignore[arg-type]
                     iteration=iteration,
+                    project_id=self.spec.world.project_id,
+                    pipeline_name=self.spec.pipeline_name,
+                    run_id=getattr(self._run_ctx, "run_id", ""),
                 )
                 audit_ids.append(record.audit_id)
             except (ValueError, OSError, shutil.Error) as exc:
@@ -2116,6 +2119,23 @@ class Orchestrator:
                 )
                 return audit_ids
         return audit_ids
+
+    def _external_snapshot_roots(self) -> list[Path]:
+        """Return configured external roots allowed for snapshot restore."""
+        return [
+            Path(path).expanduser().resolve()
+            for path in self.spec.snapshots.external_paths
+        ]
+
+    def _restore_snapshot(self, audit_id: str, allowed_paths: list[Path]) -> Path:
+        """Restore one snapshot within the current project/path boundary."""
+        if self._snapshot_mgr is None:
+            raise RuntimeError("Snapshot manager is disabled")
+        return self._snapshot_mgr.restore(
+            audit_id,
+            project_id=self.spec.world.project_id,
+            allowed_paths=allowed_paths,
+        )
 
     def _snapshot_for_tier_switch(self, role: str) -> None:
         """Snapshot workspace before tier switch so it can be restored on failure.
@@ -2134,7 +2154,7 @@ class Orchestrator:
                 operation=Operation.MODIFY,
                 agent=role,  # type: ignore[arg-type]
                 iteration=self._state.iteration,
-                project_id=getattr(self._run_ctx, "pipeline_key", ""),
+                project_id=self.spec.world.project_id,
                 pipeline_name=self.spec.pipeline_name,
                 run_id=getattr(self._run_ctx, "run_id", ""),
             )
@@ -2149,8 +2169,8 @@ class Orchestrator:
             return
         for audit_id in self._tier_snapshot_ids.get(role, []):
             try:
-                mgr.restore(audit_id)
-            except (KeyError, FileNotFoundError):
+                self._restore_snapshot(audit_id, [self.spec.world.root])
+            except (KeyError, FileNotFoundError, SnapshotBoundaryError):
                 pass
         self._tier_snapshot_ids.pop(role, None)
 
@@ -2205,8 +2225,10 @@ class Orchestrator:
             )
             for audit_id in snapshot_ids:
                 try:
-                    mgr.restore(audit_id)
-                except (KeyError, FileNotFoundError):
+                    self._restore_snapshot(
+                        audit_id, self._external_snapshot_roots()
+                    )
+                except (KeyError, FileNotFoundError, SnapshotBoundaryError):
                     continue
             self.halt(
                 "L3 risk violation: external path modified outside git repo",
@@ -2230,8 +2252,10 @@ class Orchestrator:
                 )
                 for audit_id in snapshot_ids:
                     try:
-                        mgr.restore(audit_id)
-                    except (KeyError, FileNotFoundError):
+                        self._restore_snapshot(
+                            audit_id, self._external_snapshot_roots()
+                        )
+                    except (KeyError, FileNotFoundError, SnapshotBoundaryError):
                         continue
                 self.halt(
                     f"L3 risk violation: {evaluation.reason}",

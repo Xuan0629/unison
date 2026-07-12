@@ -3,7 +3,11 @@ import tempfile
 from pathlib import Path
 import pytest
 
-from unison.snapshot import FileSnapshotManager, SnapshotRecord
+from unison.snapshot import (
+    FileSnapshotManager,
+    SnapshotBoundaryError,
+    SnapshotRecord,
+)
 from unison.interfaces import Operation
 
 
@@ -186,17 +190,17 @@ class TestFileSnapshotManager:
         original.write_text("content")
         
         sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
-        sm.snapshot(
+        record = sm.snapshot(
             path=original,
             operation=Operation.MODIFY,
             agent="developer",
-            iteration=1
+            iteration=1,
+            project_id="test-project",
         )
-        
+
         result = sm.list_snapshots("test-project")
-        # Note: list_snapshots filters by project, but snapshot() doesn't take project param
-        # So this test may need adjustment based on implementation
-        assert len(result) >= 0  # At least doesn't crash
+        assert [item.audit_id for item in result] == [record.audit_id]
+        assert result[0].project_id == "test-project"
 
     def test_list_snapshots_multiple(self, tmp_path):
         """list_snapshots returns multiple snapshots."""
@@ -204,12 +208,106 @@ class TestFileSnapshotManager:
         original.write_text("content")
         
         sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
-        sm.snapshot(path=original, operation=Operation.MODIFY, agent="developer", iteration=1)
-        sm.snapshot(path=original, operation=Operation.MODIFY, agent="developer", iteration=2)
-        sm.snapshot(path=original, operation=Operation.MODIFY, agent="reviewer", iteration=3)
-        
+        sm.snapshot(
+            path=original, operation=Operation.MODIFY,
+            agent="developer", iteration=1, project_id="test-project",
+        )
+        sm.snapshot(
+            path=original, operation=Operation.MODIFY,
+            agent="developer", iteration=2, project_id="test-project",
+        )
+        sm.snapshot(
+            path=original, operation=Operation.MODIFY,
+            agent="reviewer", iteration=3, project_id="test-project",
+        )
+
         result = sm.list_snapshots("test-project")
-        assert len(result) >= 0  # At least doesn't crash
+        assert len(result) == 3
+        assert {record.iteration for record in result} == {1, 2, 3}
+        assert {record.agent for record in result} == {"developer", "reviewer"}
+
+    def test_list_snapshots_filters_by_project(self, tmp_path):
+        first = tmp_path / "first.txt"
+        second = tmp_path / "second.txt"
+        first.write_text("a")
+        second.write_text("b")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        one = sm.snapshot(
+            first, Operation.MODIFY, "developer", 1,
+            project_id="project-a",
+        )
+        sm.snapshot(
+            second, Operation.MODIFY, "developer", 1,
+            project_id="project-b",
+        )
+
+        assert [r.audit_id for r in sm.list_snapshots("project-a")] == [one.audit_id]
+        assert sm.list_snapshots("missing") == []
+
+    def test_restore_rejects_wrong_project_and_path_boundary(self, tmp_path):
+        original = tmp_path / "project-a" / "data.txt"
+        original.parent.mkdir()
+        original.write_text("before")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            original, Operation.MODIFY, "developer", 1,
+            project_id="project-a",
+        )
+        original.write_text("after")
+
+        with pytest.raises(SnapshotBoundaryError):
+            sm.restore(record.audit_id, project_id="project-b")
+        with pytest.raises(SnapshotBoundaryError):
+            sm.restore(
+                record.audit_id, project_id="project-a",
+                allowed_paths=[tmp_path / "other"],
+            )
+        assert original.read_text() == "after"
+
+    def test_restore_rejects_manifest_snapshot_path_escape(self, tmp_path):
+        original = tmp_path / "project" / "data.txt"
+        original.parent.mkdir()
+        original.write_text("before")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            original, Operation.MODIFY, "developer", 1,
+            project_id="project-a",
+        )
+        manifest = sm._read_manifest()
+        manifest[record.audit_id]["snapshot_path"] = str(tmp_path / "attacker.txt")
+        sm._write_manifest(manifest)
+        original.write_text("after")
+
+        with pytest.raises(SnapshotBoundaryError):
+            sm.restore(
+                record.audit_id, project_id="project-a",
+                allowed_paths=[original],
+            )
+        assert original.read_text() == "after"
+
+    def test_restore_propagates_os_permission_error(self, tmp_path, monkeypatch):
+        original = tmp_path / "project" / "data.txt"
+        original.parent.mkdir()
+        original.write_text("before")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            original, Operation.MODIFY, "developer", 1,
+            project_id="project-a",
+        )
+        original.unlink()
+        monkeypatch.setattr(
+            "unison.snapshot.shutil.copy2",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                PermissionError("read-only filesystem")
+            ),
+        )
+
+        with pytest.raises(PermissionError, match="read-only filesystem"):
+            sm.restore(
+                record.audit_id,
+                project_id="project-a",
+                allowed_paths=[original],
+            )
 
     def test_cleanup_expired(self, tmp_path):
         """cleanup_expired removes old snapshots."""
@@ -221,7 +319,8 @@ class TestFileSnapshotManager:
         
         # With 0 retention, all snapshots should be expired
         cleaned = sm.cleanup_expired()
-        assert cleaned >= 0  # At least doesn't crash
+        assert cleaned == 1
+        assert sm.list_snapshots("") == []
 
     def test_snapshot_preserves_permissions(self, tmp_path):
         """Snapshot preserves file permissions."""

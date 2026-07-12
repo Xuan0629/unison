@@ -392,6 +392,38 @@ agents:
 """)
         return Orchestrator(PipelineLoader().load(pipeline_file)), protected
 
+    def test_external_snapshot_records_current_run_attribution(self, tmp_path):
+        orch, protected = self._make_external_orchestrator(tmp_path)
+        snapshot_ids = orch._snapshot_external_paths("developer", 1)
+        assert len(snapshot_ids) == 1
+        assert orch._snapshot_mgr is not None
+        records = {
+            record.audit_id: record
+            for record in orch._snapshot_mgr.list_snapshots(
+                orch.spec.world.project_id
+            )
+        }
+        record = records[snapshot_ids[0]]
+        assert record.project_id == orch.spec.world.project_id
+        assert record.pipeline_name == orch.spec.pipeline_name
+        assert record.run_id == orch._run_ctx.run_id
+
+    def test_tier_snapshot_uses_project_id_not_pipeline_key(self, tmp_path):
+        orch, protected = self._make_external_orchestrator(tmp_path)
+        orch._snapshot_for_tier_switch("developer")
+        snapshot_ids = orch._tier_snapshot_ids["developer"]
+        assert orch._snapshot_mgr is not None
+        records = {
+            record.audit_id: record
+            for record in orch._snapshot_mgr.list_snapshots(
+                orch.spec.world.project_id
+            )
+        }
+        record = records[snapshot_ids[0]]
+        assert record.project_id == orch.spec.world.project_id
+        assert record.project_id != orch._run_ctx.pipeline_key
+        assert record.run_id == orch._run_ctx.run_id
+
     def test_single_runner_exception_still_restores_external(self, tmp_path):
         orch, protected = self._make_external_orchestrator(tmp_path)
         runner = MagicMock()
@@ -591,15 +623,21 @@ agents:
         assert orch._snapshot_mgr is not None
         before_ids = {
             record.audit_id
-            for record in orch._snapshot_mgr.list_snapshots("project")
+            for record in orch._snapshot_mgr.list_snapshots(orch.spec.world.project_id)
         }
 
-        orch._invoke_agent_for_role("developer", 1)
+        with patch.object(
+            orch._snapshot_mgr,
+            "discard",
+            wraps=orch._snapshot_mgr.discard,
+        ) as discard:
+            orch._invoke_agent_for_role("developer", 1)
 
         assert orch.state().halt_signal is True
+        discard.assert_called_once()
         after_ids = {
             record.audit_id
-            for record in orch._snapshot_mgr.list_snapshots("project")
+            for record in orch._snapshot_mgr.list_snapshots(orch.spec.world.project_id)
         }
         assert after_ids == before_ids
         runner.run.assert_not_called()
