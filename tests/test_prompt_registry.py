@@ -174,6 +174,7 @@ class TestPromptRegistry:
         "iteration": 42,
         "test_command": "pytest tests/ -v",
         "review_file": "reviews/iter-42.md",
+        "prd_dir": "prd/",
     }
 
     @pytest.mark.parametrize("role", ["planner", "developer", "reviewer"])

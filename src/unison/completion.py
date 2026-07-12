@@ -79,8 +79,13 @@ class GitCompletionDetector:
             # Phase 4 fix: planner must produce prd/PRD.md AND
             # prd/tech-design.md. A successful git commit alone is
             # not sufficient — the user-stated artifacts must exist.
-            prd = workspace / "prd" / "PRD.md"
-            tech = workspace / "prd" / "tech-design.md"
+            # P0-4: Use scoped PRD dir when provided.
+            if prd_dir is not None:
+                prd = prd_dir / "PRD.md"
+                tech = prd_dir / "tech-design.md"
+            else:
+                prd = workspace / "prd" / "PRD.md"
+                tech = workspace / "prd" / "tech-design.md"
             if not prd.is_file():
                 return AgentResult(
                     success=False,

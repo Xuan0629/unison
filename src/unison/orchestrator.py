@@ -3069,6 +3069,7 @@ class Orchestrator:
                 anti_sycophancy_note=syco_note,
                 carry_forward=carry_forward,
                 mode=self.spec.mode,
+                prd_dir=self._scoped_prd_dir(),
             )
             # carry_forward already embedded in task via registry — clear
             # so it isn't appended again after assemble_context
@@ -4232,6 +4233,24 @@ class Orchestrator:
         curr_findings = parse_findings_from_yaml(curr_text) if curr_text else []
 
         return carry_forward_block(prev_findings, curr_findings)
+
+    def _scoped_prd_dir(self) -> str:
+        """P0-4: Return the scoped PRD directory path string for task instructions.
+
+        When a RunContext is active, returns the scoped path so planner writes
+        and completion checks use the same location. Falls back to 'prd/'
+        (legacy) when no context is available.
+        """
+        ctx = getattr(self, "_run_ctx", None)
+        if ctx is not None:
+            scoped = self.spec.world.prd_for(ctx.pipeline_key).parent
+            # Return relative path from workspace root
+            try:
+                rel = scoped.relative_to(self.spec.world.root)
+                return str(rel).rstrip("/") + "/"
+            except ValueError:
+                return str(scoped).rstrip("/") + "/"
+        return "prd/"
 
     def _dedup_context_content(
         self, prd: str, design: str, iteration: int

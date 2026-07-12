@@ -206,8 +206,8 @@ class PromptRegistry:
     DEFAULT_TASKS: dict[str, str] = {
         "planner": (
             "Iteration {iteration} — Planner Operational Constraints:\n"
-            "Write the Product Requirements Document to prd/PRD.md "
-            "and the technical design to prd/tech-design.md."
+            "Write the Product Requirements Document to {prd_dir}PRD.md "
+            "and the technical design to {prd_dir}tech-design.md."
         ),
         "planner::spec-driven": (
             "Iteration {iteration} — SDD Planner Operational Constraints:\n"
@@ -332,6 +332,7 @@ class PromptRegistry:
         anti_sycophancy_note: str = "",
         carry_forward: str = "",
         mode: str | None = None,
+        prd_dir: str = "",
     ) -> str:
         """Return a role-specific task instruction with variables substituted.
 
@@ -385,6 +386,7 @@ class PromptRegistry:
             iteration=iteration,
             test_command=test_command,
             review_file=review_file,
+            prd_dir=prd_dir,
         )
 
         if anti_sycophancy_note:
