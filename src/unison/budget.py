@@ -66,6 +66,7 @@ class BudgetTracker:
         daily_limit: int,
         per_task_limit: int,
         persist_path: Path | None = None,
+        daily_persist_path: Path | None = None,  # P1-2: separate daily from task
     ) -> None:
         """Create a BudgetTracker.
 
@@ -78,6 +79,7 @@ class BudgetTracker:
         self.daily_limit = daily_limit
         self.per_task_limit = per_task_limit
         self._persist_path = persist_path
+        self._daily_persist_path = daily_persist_path
 
         self._daily_used: int = 0
         self._per_task_used: int = 0
@@ -86,7 +88,9 @@ class BudgetTracker:
         # P8 S13: Lock for thread-safe budget mutations in MoA context
         self._lock = threading.Lock()
 
-        # Attempt to load persisted state
+        # P1-2: Load daily usage from project-scoped file, task from run-scoped
+        if daily_persist_path is not None and daily_persist_path.exists():
+            self._load_daily(daily_persist_path)
         if persist_path is not None and persist_path.exists():
             self._load()
 
@@ -289,28 +293,44 @@ class BudgetTracker:
         """Persist current state to the JSON file.
 
         No-op when *persist_path* is ``None``.
+        P1-2: Also persists daily usage to *daily_persist_path* for
+        cross-run durability.
         """
-        if self._persist_path is None:
-            return
-
         today = date.today().isoformat()
 
-        data = {
-            "date": today,
-            "daily_used": self._daily_used,
-            "task_used": self._per_task_used,
-            "phases": [
-                {
-                    "phase": p.phase,
-                    "iter_n": p.iter_n,
-                    "tokens_used": p.tokens_used,
-                    "timestamp": p.timestamp,
-                }
-                for p in self._phases
-            ],
-        }
+        # Save per-task state to run-scoped file
+        if self._persist_path is not None:
+            data = {
+                "date": today,
+                "daily_used": self._daily_used,
+                "task_used": self._per_task_used,
+                "phases": [
+                    {
+                        "phase": p.phase,
+                        "iter_n": p.iter_n,
+                        "tokens_used": p.tokens_used,
+                        "timestamp": p.timestamp,
+                    }
+                    for p in self._phases
+                ],
+            }
+            self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+            self._persist_path.write_text(json.dumps(data, indent=2))
 
-        # Atomic write: write to .tmp then rename
+        # P1-2: Persist daily usage to project-scoped file
+        if self._daily_persist_path is not None:
+            daily_data = {"date": today, "daily_used": self._daily_used}
+            self._daily_persist_path.parent.mkdir(parents=True, exist_ok=True)
+            self._daily_persist_path.write_text(json.dumps(daily_data))
+
+    def _load_daily(self, path: Path) -> None:
+        """Load daily usage from a project-scoped file."""
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if data.get("date") == date.today().isoformat():
+                self._daily_used = int(data.get("daily_used", 0))
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass  # Start fresh on corrupt file
         tmp_path = self._persist_path.with_suffix(self._persist_path.suffix + ".tmp")
         try:
             tmp_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")

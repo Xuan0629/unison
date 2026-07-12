@@ -1876,7 +1876,7 @@ class Orchestrator:
 
         # 5. Build log path
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        log_path = world.agent_log(role, iteration, timestamp)  # type: ignore[arg-type]
+        log_path = world.agent_log(role, iteration, timestamp, ctx=getattr(self, "_run_ctx", None))  # type: ignore[arg-type]
 
         # F7: Record baseline HEAD before agent invocation so
         # CompletionDetector can distinguish "agent produced new work"
@@ -3677,6 +3677,7 @@ class Orchestrator:
             daily_limit=self.spec.budget.daily_token_limit,
             per_task_limit=per_task_limit,
             persist_path=persist_path,
+            daily_persist_path=self.spec.world.daily_budget_file() if ctx else None,
         )
         # P12c: Reset per-task counters so new pipeline starts fresh.
         # Daily usage is preserved across pipelines by design.
