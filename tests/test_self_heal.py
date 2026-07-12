@@ -101,7 +101,7 @@ class TestSelfHealConfig:
 
     def test_defaults(self):
         config = SelfHealConfig()
-        assert config.auto_fix_unison is True
+        assert config.auto_fix_unison is False  # P0-7
         assert config.auto_fix_consumer is False
         assert config.max_fix_rounds == 2
         assert config.fix_timeout == 300
