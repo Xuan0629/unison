@@ -303,6 +303,9 @@ class FixOrchestrator:
         P8 S12: Saves and restores the original branch so subsequent
         pipeline stages don't run on the auto-fix/ branch.
 
+        P1-11: Only stages files listed in fix_proposal['files_changed'],
+        not the entire dirty tree.
+
         Returns:
             Tuple of ``(commit_hash, fix_tag)`` where *fix_tag* is the
             ``auto-fix/<timestamp>`` branch name for push + PR creation.
@@ -320,14 +323,28 @@ class FixOrchestrator:
         )
         original_branch = current_branch_result.stdout.strip() or "master"
 
+        # P1-11: Only stage files that the fixer actually changed
+        files_changed = fix_proposal.get("files_changed", [])
+
         try:
             # F12: Detach HEAD to avoid branch-name collision on auto-fix/ prefix
             subprocess.run(
                 ["git", "-C", str(root), "checkout", "--detach"],
                 capture_output=True,
             )
-            subprocess.run(["git", "-C", str(root), "add", "-A"],
-                           capture_output=True)
+            # P1-11: Stage only allowlisted files, not git add -A
+            if files_changed:
+                for f in files_changed:
+                    subprocess.run(
+                        ["git", "-C", str(root), "add", "--", str(f)],
+                        capture_output=True,
+                    )
+            else:
+                # Fallback: no file list — stage src/ only, not entire tree
+                subprocess.run(
+                    ["git", "-C", str(root), "add", "src/"],
+                    capture_output=True,
+                )
             subprocess.run(["git", "-C", str(root), "commit", "-m",
                             f"auto-fix({error_type}): {diagnosis}"],
                            capture_output=True)
@@ -388,14 +405,21 @@ class FixOrchestrator:
                 )
                 return ""
 
+            # P1-11: Get base branch from git config, don't hardcode "master"
+            base_result = subprocess.run(
+                ["git", "-C", str(self._world.root), "rev-parse",
+                 "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True,
+            )
+            base_branch = base_result.stdout.strip() or "master"
+
             result = subprocess.run(
                 ["gh", "pr", "create",
                  "--title", f"auto-fix: {diagnosis}",
                  "--body", body,
                  "--label", "auto-fix",
-                 "--repo", "Xuan0629/unison",
                  "--head", branch_name,
-                 "--base", "master"],
+                 "--base", base_branch],
                 capture_output=True, text=True, timeout=30, cwd=str(self._world.root),
             )
             if result.returncode == 0:
