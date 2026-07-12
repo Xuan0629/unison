@@ -4047,9 +4047,12 @@ class Orchestrator:
         if not cfg.auto_start:
             return
 
-        # P1-3: Read token from WebUI's file if it already exists
+        # P1-3: Read token from shared WebUI file, falling back to project-local
+        shared_token_file = Path.home() / ".unison" / "webui-token"
         token_file = self.spec.world.root / ".unison" / "webui-token"
-        if token_file.exists():
+        if shared_token_file.exists():
+            webui_token = shared_token_file.read_text().strip()
+        elif token_file.exists():
             webui_token = token_file.read_text().strip()
         else:
             webui_token = hashlib.sha256(

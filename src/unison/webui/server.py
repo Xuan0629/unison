@@ -53,6 +53,14 @@ def _generate_session_token() -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _set_owner_only(path: Path) -> None:
+    """P1-4: Set file permissions to 0600 (owner read/write only)."""
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
 def get_session_token() -> str | None:
     """Return the current session token, or None if not yet generated."""
     return _SESSION_TOKEN
@@ -814,10 +822,18 @@ def serve(project_root: str, port: int = 9099, token: str = "") -> None:
     # F8: Generate or reuse session token for control endpoint auth
     _SESSION_TOKEN = token or _generate_session_token()
 
-    # P1-3: Write token to file so other orchestrators can read it
+    # P1-3/P1-4: Write token to a shared, user-level location so other
+    # orchestrators (different projects) can read it. Use 0600 permissions.
+    shared_token_file = Path.home() / ".unison" / "webui-token"
+    shared_token_file.parent.mkdir(parents=True, exist_ok=True)
+    shared_token_file.write_text(_SESSION_TOKEN)
+    _set_owner_only(shared_token_file)
+
+    # Also write to the project-local path for backward compatibility
     token_file = Path(project_root).resolve() / ".unison" / "webui-token"
     token_file.parent.mkdir(parents=True, exist_ok=True)
     token_file.write_text(_SESSION_TOKEN)
+    _set_owner_only(token_file)
 
     UnisonHandler.project_root = Path(project_root).resolve()
     UnisonHandler.registry = ProjectRegistry()
