@@ -5,7 +5,9 @@ Architecture reference: prd/SELF_HEAL_PRD.md, prd/tech-design-self-heal.md
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -101,6 +103,10 @@ class SelfHealResult:
 # ============================================================================
 
 
+class SelfHealScopeError(ValueError):
+    """Raised when a fixer proposes an empty or unsafe commit allowlist."""
+
+
 class FixOrchestrator:
     """Orchestrate fixer (Hermes) + reviewers (Codex + Claude) for bug fixes."""
 
@@ -108,6 +114,7 @@ class FixOrchestrator:
         self._spec = spec
         self._world = world
         self._config: SelfHealConfig = spec.self_heal
+        self._fix_baseline: dict[str, str | None] | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -139,7 +146,14 @@ class FixOrchestrator:
                                   diagnosis="max_fix_rounds must be >= 1")
 
         # 1. Fixer diagnoses and produces a patch
-        fix_proposal = self._run_fixer(result)
+        try:
+            fix_proposal = self._run_fixer(result)
+        except RuntimeError as exc:
+            return SelfHealResult(
+                success=False,
+                error_type=error_type,
+                diagnosis=f"fixer setup failed: {exc}",
+            )
         if not fix_proposal:
             return SelfHealResult(success=False, error_type=error_type,
                                   diagnosis="fixer failed to produce a diagnosis")
@@ -153,7 +167,15 @@ class FixOrchestrator:
             if len(passed) == len(reviews):
                 break  # all passed
             if round_n < self._config.max_fix_rounds:
-                fix_proposal = self._run_fixer_revise(result, reviews)
+                revised = self._run_fixer_revise(result, reviews)
+                if not revised:
+                    return SelfHealResult(
+                        success=False,
+                        error_type=error_type,
+                        diagnosis="fixer failed to revise the rejected proposal",
+                        reviewers_passed=len(passed),
+                    )
+                fix_proposal = revised
 
         all_passed = all(r.get("passed") for r in reviews)
         if not all_passed:
@@ -162,7 +184,15 @@ class FixOrchestrator:
                                   reviewers_passed=sum(1 for r in reviews if r.get("passed")))
 
         # 3. Commit + PR
-        commit_hash, fix_tag = self._commit_fix(fix_proposal, error_type)
+        try:
+            commit_hash, fix_tag = self._commit_fix(fix_proposal, error_type)
+        except (SelfHealScopeError, RuntimeError) as exc:
+            return SelfHealResult(
+                success=False,
+                error_type=error_type,
+                diagnosis=f"self-heal commit rejected: {exc}",
+                reviewers_passed=len(passed),
+            )
         pr_url = self._create_pr(commit_hash, fix_proposal, error_type, fix_tag=fix_tag)
 
         # 4. Write fix log
@@ -188,7 +218,14 @@ class FixOrchestrator:
         error_type = "CONSUMER_BUG"
 
         # 1. Fixer diagnoses and produces a patch
-        fix_proposal = self._run_fixer(result)
+        try:
+            fix_proposal = self._run_fixer(result)
+        except RuntimeError as exc:
+            return SelfHealResult(
+                success=False,
+                error_type=error_type,
+                diagnosis=f"fixer setup failed: {exc}",
+            )
         if not fix_proposal:
             return SelfHealResult(success=False, error_type=error_type,
                                   diagnosis="fixer failed to produce a diagnosis")
@@ -200,7 +237,14 @@ class FixOrchestrator:
                                   diagnosis="tests failed after fix; aborting lightweight path")
 
         # 3. Commit (no PR for lightweight fixes)
-        commit_hash, _fix_tag = self._commit_fix(fix_proposal, error_type)
+        try:
+            commit_hash, _fix_tag = self._commit_fix(fix_proposal, error_type)
+        except (SelfHealScopeError, RuntimeError) as exc:
+            return SelfHealResult(
+                success=False,
+                error_type=error_type,
+                diagnosis=f"self-heal commit rejected: {exc}",
+            )
 
         # 4. Write fix log (no reviewers entry)
         log_path = self._write_fix_log(fix_proposal, error_type, commit_hash, "", [])
@@ -241,8 +285,35 @@ class FixOrchestrator:
     # Fixer (Hermes)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _path_signature(path: Path) -> str | None:
+        if not path.exists() or not path.is_file():
+            return None
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _capture_fix_baseline(self) -> None:
+        """Capture repo file signatures before the fixer is allowed to edit."""
+        root = self._world.root.resolve()
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--cached", "--others",
+             "--exclude-standard"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("could not capture self-heal file baseline")
+        self._fix_baseline = {
+            rel: self._path_signature(root / rel)
+            for rel in result.stdout.splitlines()
+            if rel
+        }
+
     def _run_fixer(self, result: AgentResult) -> dict | None:
         """Run Hermes as fixer to diagnose and produce a patch."""
+        self._capture_fix_baseline()
         prompt = self._build_fixer_prompt(result)
         output = self._run_hermes(prompt, "fixer")
         return self._parse_fixer_output(output)
@@ -293,6 +364,66 @@ class FixOrchestrator:
     # Git + PR
     # ------------------------------------------------------------------
 
+    def _validate_files_changed(self, files_changed) -> list[str]:
+        """Return a normalized repo-local commit allowlist or fail closed."""
+        if not isinstance(files_changed, (list, tuple)) or not files_changed:
+            raise SelfHealScopeError("files_changed must be a non-empty list")
+
+        root = self._world.root.resolve()
+        if self._fix_baseline is None:
+            raise SelfHealScopeError("self-heal file baseline is unavailable")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in files_changed:
+            if not isinstance(raw, (str, Path)) or not str(raw).strip():
+                raise SelfHealScopeError("files_changed contains an invalid path")
+            rel = Path(str(raw))
+            if (
+                not rel.parts
+                or rel == Path(".")
+                or rel.is_absolute()
+                or ".." in rel.parts
+                or any(part.casefold() == ".git" for part in rel.parts)
+            ):
+                raise SelfHealScopeError(f"unsafe self-heal path: {raw}")
+            lexical_target = root / rel
+            current = root
+            for part in rel.parts:
+                current /= part
+                if current.is_symlink():
+                    raise SelfHealScopeError(
+                        f"self-heal symlinks are not allowed: {raw}"
+                    )
+            target = lexical_target.resolve(strict=False)
+            if not target.is_relative_to(root):
+                raise SelfHealScopeError(f"self-heal path escapes repository: {raw}")
+            if target.is_dir():
+                raise SelfHealScopeError(f"self-heal directories are not allowed: {raw}")
+            normalized_path = target.relative_to(root).as_posix()
+            if not target.exists():
+                tracked = subprocess.run(
+                    ["git", "-C", str(root), "ls-files", "--", normalized_path],
+                    capture_output=True, text=True,
+                )
+                matches = [line for line in tracked.stdout.splitlines() if line]
+                if tracked.returncode != 0 or matches != [normalized_path]:
+                    raise SelfHealScopeError(
+                        f"missing self-heal path is not one tracked file: {raw}"
+                    )
+            baseline_signature = self._fix_baseline.get(normalized_path)
+            current_signature = self._path_signature(target)
+            if (
+                normalized_path in self._fix_baseline
+                and current_signature == baseline_signature
+            ):
+                raise SelfHealScopeError(
+                    f"allowlisted file was not changed by the fixer: {raw}"
+                )
+            if normalized_path not in seen:
+                seen.add(normalized_path)
+                normalized.append(normalized_path)
+        return normalized
+
     def _commit_fix(self, fix_proposal: dict, error_type: str) -> tuple[str, str]:
         """Commit the fix using detached HEAD, return (commit_hash, fix_tag).
 
@@ -321,45 +452,116 @@ class FixOrchestrator:
             ["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True, text=True,
         )
-        original_branch = current_branch_result.stdout.strip() or "master"
+        if current_branch_result.returncode != 0:
+            raise RuntimeError("could not resolve current git branch")
+        original_branch = current_branch_result.stdout.strip()
+        if original_branch == "HEAD":
+            head_result = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                capture_output=True, text=True,
+            )
+            if head_result.returncode != 0 or not head_result.stdout.strip():
+                raise RuntimeError("could not resolve detached HEAD commit")
+            original_branch = head_result.stdout.strip()
 
-        # P1-11: Only stage files that the fixer actually changed
-        files_changed = fix_proposal.get("files_changed", [])
+        # Refuse to mix a self-heal commit with the user's existing index.
+        index_result = subprocess.run(
+            ["git", "-C", str(root), "diff", "--cached", "--quiet"],
+            capture_output=True, text=True,
+        )
+        if index_result.returncode == 1:
+            raise SelfHealScopeError(
+                "git index contains pre-existing staged changes"
+            )
+        if index_result.returncode != 0:
+            raise RuntimeError("could not inspect the git index")
+
+        # P1-11: Validate a non-empty repo-local allowlist before git changes.
+        files_changed = self._validate_files_changed(
+            fix_proposal.get("files_changed", [])
+        )
 
         try:
             # F12: Detach HEAD to avoid branch-name collision on auto-fix/ prefix
-            subprocess.run(
+            detach_result = subprocess.run(
                 ["git", "-C", str(root), "checkout", "--detach"],
-                capture_output=True,
+                capture_output=True, text=True,
             )
-            # P1-11: Stage only allowlisted files, not git add -A
-            if files_changed:
-                for f in files_changed:
-                    subprocess.run(
-                        ["git", "-C", str(root), "add", "--", str(f)],
-                        capture_output=True,
-                    )
-            else:
-                # Fallback: no file list — stage src/ only, not entire tree
-                subprocess.run(
-                    ["git", "-C", str(root), "add", "src/"],
-                    capture_output=True,
+            if detach_result.returncode != 0:
+                raise RuntimeError(
+                    f"git checkout --detach failed: {detach_result.stderr.strip()}"
                 )
-            subprocess.run(["git", "-C", str(root), "commit", "-m",
-                            f"auto-fix({error_type}): {diagnosis}"],
-                           capture_output=True)
+            # P1-11: Stage only validated allowlisted files.
+            for f in files_changed:
+                add_result = subprocess.run(
+                    ["git", "-C", str(root), "add", "--", f],
+                    capture_output=True, text=True,
+                )
+                if add_result.returncode != 0:
+                    raise RuntimeError(
+                        f"git add failed for {f}: {add_result.stderr.strip()}"
+                    )
+            cached_result = subprocess.run(
+                ["git", "-C", str(root), "diff", "--cached", "--name-only"],
+                capture_output=True, text=True,
+            )
+            cached_files = {
+                line for line in cached_result.stdout.splitlines() if line
+            }
+            if cached_result.returncode != 0:
+                raise RuntimeError("could not inspect staged self-heal files")
+            if cached_files != set(files_changed):
+                raise RuntimeError(
+                    "staged files do not exactly match self-heal allowlist"
+                )
+            commit_result = subprocess.run(
+                ["git", "-C", str(root), "commit", "-m",
+                 f"auto-fix({error_type}): {diagnosis}"],
+                capture_output=True, text=True,
+            )
+            if commit_result.returncode != 0:
+                raise RuntimeError(
+                    f"git commit failed: {commit_result.stderr.strip()}"
+                )
 
-            result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
-                                    capture_output=True, text=True)
+            result = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                capture_output=True, text=True,
+            )
             commit_hash = result.stdout.strip()
+            if result.returncode != 0 or not commit_hash:
+                raise RuntimeError("could not resolve self-heal commit hash")
 
             return commit_hash, fix_tag
         finally:
-            # P8 S12: Restore the original branch so pipeline continues correctly
-            subprocess.run(
-                ["git", "-C", str(root), "checkout", original_branch],
-                capture_output=True,
+            # Clear staging from partial/failed self-heal operations while
+            # preserving working-tree files, then restore the original state.
+            active_error = sys.exception()
+            cleanup_errors: list[str] = []
+            reset_result = subprocess.run(
+                ["git", "-C", str(root), "reset", "--mixed", "HEAD"],
+                capture_output=True, text=True,
             )
+            if reset_result.returncode != 0:
+                cleanup_errors.append(
+                    f"failed to clear self-heal staging: "
+                    f"{reset_result.stderr.strip()}"
+                )
+            restore_result = subprocess.run(
+                ["git", "-C", str(root), "checkout", original_branch],
+                capture_output=True, text=True,
+            )
+            if restore_result.returncode != 0:
+                cleanup_errors.append(
+                    f"failed to restore original git state: "
+                    f"{restore_result.stderr.strip()}"
+                )
+            if cleanup_errors:
+                cleanup_message = "; ".join(cleanup_errors)
+                if active_error is not None:
+                    active_error.add_note(cleanup_message)
+                else:
+                    raise RuntimeError(cleanup_message)
 
     def _create_pr(self, commit_hash: str, fix_proposal: dict, error_type: str,
                    fix_tag: str = "") -> str:

@@ -850,7 +850,9 @@ class TestCommitFixDetachedHead:
             self_heal=config,
         )
         fixer = FixOrchestrator(spec, world)
+        fixer._capture_fix_baseline()
 
+        (tmp_path / "pipeline.py").write_text("fixed = True\n")
         fix_proposal = {
             "diagnosis": "null pointer in pipeline loader",
             "files_changed": ["pipeline.py"],
@@ -928,7 +930,9 @@ class TestCommitFixDetachedHead:
             self_heal=config,
         )
         fixer = FixOrchestrator(spec, world)
+        fixer._capture_fix_baseline()
 
+        (tmp_path / "test.py").write_text("fixed = True\n")
         fix_proposal = {
             "diagnosis": "test fix",
             "files_changed": ["test.py"],
@@ -947,6 +951,400 @@ class TestCommitFixDetachedHead:
             f"Expected to be on '{original_branch}' after _commit_fix, "
             f"but got '{current_branch}'"
         )
+
+
+class TestCommitFixScopeIsolation:
+    @staticmethod
+    def _make_fixer(tmp_path):
+        import subprocess as sp
+        from unison.interfaces import (
+            AgentSpec, PipelineSpec, SelfHealConfig, World,
+        )
+        from unison.self_heal import FixOrchestrator
+
+        sp.run(["git", "init", "-b", "master"], cwd=tmp_path, capture_output=True)
+        sp.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=tmp_path, capture_output=True,
+        )
+        sp.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path, capture_output=True,
+        )
+        (tmp_path / "tracked.py").write_text("before\n")
+        sp.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        sp.run(
+            ["git", "commit", "-m", "init"],
+            cwd=tmp_path, capture_output=True,
+        )
+        world = World(root=tmp_path)
+        spec = PipelineSpec(
+            version="1.0", world=world,
+            agents={
+                "dev": AgentSpec(
+                    role="developer", runtime="claude", model="test",
+                    system_prompt_path=Path("."),
+                ),
+            },
+            self_heal=SelfHealConfig(auto_fix_unison=True),
+        )
+        fixer = FixOrchestrator(spec, world)
+        fixer._capture_fix_baseline()
+        return fixer
+
+    def test_empty_allowlist_rejected_before_git_changes(self, tmp_path):
+        import subprocess as sp
+        from unison.self_heal import SelfHealScopeError
+
+        fixer = self._make_fixer(tmp_path)
+        before = sp.run(
+            ["git", "rev-parse", "HEAD"], cwd=tmp_path,
+            capture_output=True, text=True,
+        ).stdout.strip()
+        with pytest.raises(SelfHealScopeError, match="non-empty"):
+            fixer._commit_fix(
+                {"diagnosis": "fix", "files_changed": []}, "UNISON_BUG"
+            )
+        after = sp.run(
+            ["git", "rev-parse", "HEAD"], cwd=tmp_path,
+            capture_output=True, text=True,
+        ).stdout.strip()
+        assert after == before
+
+    @pytest.mark.parametrize("unsafe", [
+        "",
+        "   ",
+        "/tmp/outside.py",
+        "../outside.py",
+        ".",
+        ".git/config",
+        ".GiT/config",
+        "subdir/.git/config",
+    ])
+    def test_unsafe_allowlist_path_rejected(self, tmp_path, unsafe):
+        from unison.self_heal import SelfHealScopeError
+
+        fixer = self._make_fixer(tmp_path)
+        with pytest.raises(SelfHealScopeError):
+            fixer._commit_fix(
+                {"diagnosis": "fix", "files_changed": [unsafe]},
+                "UNISON_BUG",
+            )
+
+    def test_directory_allowlist_rejected(self, tmp_path):
+        from unison.self_heal import SelfHealScopeError
+
+        fixer = self._make_fixer(tmp_path)
+        directory = tmp_path / "src"
+        directory.mkdir()
+        (directory / "a.py").write_text("a\n")
+        with pytest.raises(SelfHealScopeError, match="directories"):
+            fixer._commit_fix(
+                {"diagnosis": "fix", "files_changed": ["src"]},
+                "UNISON_BUG",
+            )
+
+    def test_single_deleted_tracked_file_is_committed(self, tmp_path):
+        import subprocess as sp
+
+        fixer = self._make_fixer(tmp_path)
+        deleted = tmp_path / "deleted.py"
+        deleted.write_text("before\n")
+        sp.run(["git", "add", "deleted.py"], cwd=tmp_path, capture_output=True)
+        sp.run(
+            ["git", "commit", "-m", "add deleted"],
+            cwd=tmp_path, capture_output=True,
+        )
+        deleted.unlink()
+
+        commit_hash, _ = fixer._commit_fix(
+            {"diagnosis": "delete", "files_changed": ["deleted.py"]},
+            "UNISON_BUG",
+        )
+        status = sp.run(
+            ["git", "show", "--pretty=", "--name-status", commit_hash],
+            cwd=tmp_path, capture_output=True, text=True,
+        ).stdout.strip()
+        assert status == "D\tdeleted.py"
+
+    def test_deleted_directory_pathspec_rejected(self, tmp_path):
+        import subprocess as sp
+        from unison.self_heal import SelfHealScopeError
+
+        fixer = self._make_fixer(tmp_path)
+        directory = tmp_path / "src"
+        directory.mkdir()
+        (directory / "a.py").write_text("a\n")
+        (directory / "b.py").write_text("b\n")
+        sp.run(["git", "add", "src"], cwd=tmp_path, capture_output=True)
+        sp.run(
+            ["git", "commit", "-m", "add src"],
+            cwd=tmp_path, capture_output=True,
+        )
+        (directory / "a.py").unlink()
+        (directory / "b.py").unlink()
+        directory.rmdir()
+
+        with pytest.raises(SelfHealScopeError, match="one tracked file"):
+            fixer._commit_fix(
+                {"diagnosis": "fix", "files_changed": ["src"]},
+                "UNISON_BUG",
+            )
+
+    def test_repo_external_symlink_rejected(self, tmp_path):
+        from unison.self_heal import SelfHealScopeError
+
+        fixer = self._make_fixer(tmp_path)
+        outside = tmp_path.parent / f"{tmp_path.name}-outside.py"
+        outside.write_text("outside\n")
+        (tmp_path / "link.py").symlink_to(outside)
+        with pytest.raises(SelfHealScopeError):
+            fixer._commit_fix(
+                {"diagnosis": "fix", "files_changed": ["link.py"]},
+                "UNISON_BUG",
+            )
+
+    def test_detached_head_is_restored_to_original_commit(self, tmp_path):
+        import subprocess as sp
+
+        fixer = self._make_fixer(tmp_path)
+        original = sp.run(
+            ["git", "rev-parse", "HEAD"], cwd=tmp_path,
+            capture_output=True, text=True,
+        ).stdout.strip()
+        sp.run(["git", "checkout", "--detach"], cwd=tmp_path, capture_output=True)
+        (tmp_path / "tracked.py").write_text("fixed\n")
+
+        commit_hash, _ = fixer._commit_fix(
+            {"diagnosis": "fix", "files_changed": ["tracked.py"]},
+            "UNISON_BUG",
+        )
+
+        current = sp.run(
+            ["git", "rev-parse", "HEAD"], cwd=tmp_path,
+            capture_output=True, text=True,
+        ).stdout.strip()
+        branch = sp.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path,
+            capture_output=True, text=True,
+        ).stdout.strip()
+        assert current == original
+        assert branch == "HEAD"
+        assert commit_hash != original
+
+    def test_preexisting_staged_change_is_rejected(self, tmp_path):
+        import subprocess as sp
+        from unison.self_heal import SelfHealScopeError
+
+        fixer = self._make_fixer(tmp_path)
+        (tmp_path / "user.py").write_text("staged user work\n")
+        sp.run(["git", "add", "user.py"], cwd=tmp_path, capture_output=True)
+        (tmp_path / "tracked.py").write_text("fixed\n")
+
+        with pytest.raises(SelfHealScopeError, match="pre-existing staged"):
+            fixer._commit_fix(
+                {"diagnosis": "fix", "files_changed": ["tracked.py"]},
+                "UNISON_BUG",
+            )
+        cached = sp.run(
+            ["git", "diff", "--cached", "--name-only"],
+            cwd=tmp_path, capture_output=True, text=True,
+        ).stdout.splitlines()
+        assert cached == ["user.py"]
+
+    def test_index_inspection_failure_is_reported(self, tmp_path, monkeypatch):
+        import subprocess as sp
+
+        fixer = self._make_fixer(tmp_path)
+        (tmp_path / "tracked.py").write_text("fixed\n")
+        original_run = sp.run
+
+        def fail_index_inspection(args, **kwargs):
+            if "diff" in args and "--cached" in args and "--quiet" in args:
+                return sp.CompletedProcess(args, 128, "", "corrupt index")
+            return original_run(args, **kwargs)
+
+        monkeypatch.setattr(sp, "run", fail_index_inspection)
+        with pytest.raises(RuntimeError, match="inspect the git index"):
+            fixer._commit_fix(
+                {"diagnosis": "fix", "files_changed": ["tracked.py"]},
+                "UNISON_BUG",
+            )
+
+    def test_partial_stage_failure_clears_self_heal_index(
+        self, tmp_path, monkeypatch
+    ):
+        import subprocess as sp
+
+        fixer = self._make_fixer(tmp_path)
+        (tmp_path / "tracked.py").write_text("fixed\n")
+        (tmp_path / "second.py").write_text("second\n")
+        original_run = sp.run
+
+        def fail_second_add(args, **kwargs):
+            if args[-1] == "second.py" and "add" in args:
+                return sp.CompletedProcess(args, 1, "", "add rejected")
+            return original_run(args, **kwargs)
+
+        monkeypatch.setattr(sp, "run", fail_second_add)
+        with pytest.raises(RuntimeError, match="git add failed"):
+            fixer._commit_fix(
+                {
+                    "diagnosis": "fix",
+                    "files_changed": ["tracked.py", "second.py"],
+                },
+                "UNISON_BUG",
+            )
+        cached = original_run(
+            ["git", "diff", "--cached", "--name-only"],
+            cwd=tmp_path, capture_output=True, text=True,
+        ).stdout.strip()
+        assert cached == ""
+
+    def test_repo_internal_parent_symlink_rejected(self, tmp_path):
+        from unison.self_heal import SelfHealScopeError
+
+        fixer = self._make_fixer(tmp_path)
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        (real_dir / "file.py").write_text("fixed\n")
+        (tmp_path / "linked").symlink_to(real_dir, target_is_directory=True)
+        with pytest.raises(SelfHealScopeError, match="symlinks"):
+            fixer._commit_fix(
+                {"diagnosis": "fix", "files_changed": ["linked/file.py"]},
+                "UNISON_BUG",
+            )
+
+    def test_preexisting_untracked_unchanged_file_rejected(self, tmp_path):
+        from unison.self_heal import SelfHealScopeError
+
+        fixer = self._make_fixer(tmp_path)
+        user_file = tmp_path / "user-secret.py"
+        user_file.write_text("user work\n")
+        fixer._capture_fix_baseline()
+        with pytest.raises(SelfHealScopeError, match="not changed by the fixer"):
+            fixer._commit_fix(
+                {"diagnosis": "fix", "files_changed": ["user-secret.py"]},
+                "UNISON_BUG",
+            )
+
+    def test_fixer_created_file_can_be_committed(self, tmp_path):
+        import subprocess as sp
+
+        fixer = self._make_fixer(tmp_path)
+        (tmp_path / "new-fix.py").write_text("new fix\n")
+        commit_hash, _ = fixer._commit_fix(
+            {"diagnosis": "fix", "files_changed": ["new-fix.py"]},
+            "UNISON_BUG",
+        )
+        changed = sp.run(
+            ["git", "show", "--pretty=", "--name-only", commit_hash],
+            cwd=tmp_path, capture_output=True, text=True,
+        ).stdout.splitlines()
+        assert changed == ["new-fix.py"]
+
+    def test_restore_failure_does_not_mask_primary_git_error(
+        self, tmp_path, monkeypatch
+    ):
+        import subprocess as sp
+
+        fixer = self._make_fixer(tmp_path)
+        (tmp_path / "tracked.py").write_text("fixed\n")
+        original_run = sp.run
+
+        def fail_commit_and_restore(args, **kwargs):
+            if args[:4] == ["git", "-C", str(tmp_path), "commit"]:
+                return sp.CompletedProcess(args, 1, "", "commit rejected")
+            if (
+                args[:4] == ["git", "-C", str(tmp_path), "checkout"]
+                and "--detach" not in args
+            ):
+                return sp.CompletedProcess(args, 1, "", "restore rejected")
+            return original_run(args, **kwargs)
+
+        monkeypatch.setattr(sp, "run", fail_commit_and_restore)
+        with pytest.raises(RuntimeError, match="git commit failed") as exc_info:
+            fixer._commit_fix(
+                {"diagnosis": "fix", "files_changed": ["tracked.py"]},
+                "UNISON_BUG",
+            )
+        assert any(
+            "failed to restore original git state" in note
+            for note in getattr(exc_info.value, "__notes__", [])
+        )
+
+    def test_attempt_fix_baseline_failure_returns_failure(self, tmp_path, monkeypatch):
+        from unison.interfaces import AgentResult
+
+        fixer = self._make_fixer(tmp_path)
+        monkeypatch.setattr(
+            fixer, "_capture_fix_baseline",
+            lambda: (_ for _ in ()).throw(RuntimeError("corrupt repo")),
+        )
+        result = fixer.attempt_fix(
+            "UNISON_BUG",
+            AgentResult(
+                success=False, exit_code=1, duration=0,
+                stdout_tail="", stderr_tail="", log_path=tmp_path / "log",
+                error="boom",
+            ),
+        )
+        assert result.success is False
+        assert result.diagnosis == "fixer setup failed: corrupt repo"
+
+    def test_attempt_fix_empty_allowlist_returns_failure(self, tmp_path, monkeypatch):
+        from unittest.mock import MagicMock
+        from unison.interfaces import AgentResult
+
+        fixer = self._make_fixer(tmp_path)
+        monkeypatch.setattr(
+            fixer, "_run_fixer",
+            lambda result: {
+                "diagnosis": "fix", "files_changed": [],
+                "test_result": "PASS",
+            },
+        )
+        monkeypatch.setattr(
+            fixer, "_run_reviewers",
+            lambda proposal, result: [{"passed": True}],
+        )
+        create_pr = MagicMock()
+        monkeypatch.setattr(fixer, "_create_pr", create_pr)
+        result = fixer.attempt_fix(
+            "UNISON_BUG",
+            AgentResult(
+                success=False, exit_code=1, duration=0,
+                stdout_tail="", stderr_tail="", log_path=tmp_path / "log",
+                error="boom",
+            ),
+        )
+
+        assert result.success is False
+        assert "non-empty" in result.diagnosis
+        create_pr.assert_not_called()
+
+    def test_only_allowlisted_file_is_committed(self, tmp_path):
+        import subprocess as sp
+
+        fixer = self._make_fixer(tmp_path)
+        (tmp_path / "tracked.py").write_text("fixed\n")
+        (tmp_path / "user.py").write_text("user dirty\n")
+
+        commit_hash, _ = fixer._commit_fix(
+            {"diagnosis": "fix", "files_changed": ["tracked.py"]},
+            "UNISON_BUG",
+        )
+
+        changed = sp.run(
+            ["git", "show", "--pretty=", "--name-only", commit_hash],
+            cwd=tmp_path, capture_output=True, text=True,
+        ).stdout.splitlines()
+        assert changed == ["tracked.py"]
+        status = sp.run(
+            ["git", "status", "--short"], cwd=tmp_path,
+            capture_output=True, text=True,
+        ).stdout
+        assert "user.py" in status
 
 
 def minimal_spec_fixture_world(tmp_path):
