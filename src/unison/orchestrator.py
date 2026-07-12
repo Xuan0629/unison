@@ -4354,15 +4354,19 @@ class Orchestrator:
             iter_n=iter_n,
             commit=self._state.last_dev_commit,
         )
-        # P12c: Write state to run-scoped path when available (P1-1).
-        # Fall back to legacy .unison/state.json for Web UI compatibility.
+        # P12c: Write state to run-scoped path (canonical) AND global path
+        # (Observer/WebUI compatibility).  The run-scoped copy is the
+        # authoritative record; the global copy is a latest-projection pointer.
         ctx = getattr(self, "_run_ctx", None)
         if ctx is not None:
-            state_file = self.spec.world.run_state_file(ctx)
-        else:
-            state_file = self.spec.world.unison_dir / "state.json"
+            scoped = self.spec.world.run_state_file(ctx)
+            try:
+                self._state.atomic_write(scoped)
+            except Exception:
+                pass
+        global_state = self.spec.world.unison_dir / "state.json"
         try:
-            self._state.atomic_write(state_file)
+            self._state.atomic_write(global_state)
         except Exception:
             pass  # best-effort; checkpoint is the authoritative copy
 
