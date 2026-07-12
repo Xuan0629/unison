@@ -696,6 +696,19 @@ class RetryEngine:
                     )
 
                 # ── execute strategy actions ──────────────────────────
+                # P1-8: Decrement budget for every strategy execution,
+                # not just when "retry" is present. Without this, a chain
+                # of only "backoff" or "failover" loops infinitely.
+                if retries_remaining <= 0:
+                    return RetryOutcome(
+                        success=False,
+                        attempts=attempt,
+                        last_error=last_error,
+                        last_error_type=last_error_type,
+                        endpoint_used=current_endpoint,
+                    )
+                retries_remaining -= 1
+
                 for ra in matched_actions:
                     if ra.action == "halt":
                         return RetryOutcome(
@@ -706,16 +719,7 @@ class RetryEngine:
                             endpoint_used=current_endpoint,
                         )
                     elif ra.action == "retry":
-                        if retries_remaining <= 0:
-                            # Budget exhausted — exit with failure
-                            return RetryOutcome(
-                                success=False,
-                                attempts=attempt,
-                                last_error=last_error,
-                                last_error_type=last_error_type,
-                                endpoint_used=current_endpoint,
-                            )
-                        retries_remaining -= 1
+                        # Budget already decremented above (P1-8)
                         if on_retry is not None:
                             on_retry(attempt, last_error_type, exc)
                         continue
