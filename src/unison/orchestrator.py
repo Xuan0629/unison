@@ -3952,10 +3952,14 @@ class Orchestrator:
         if not cfg.auto_start:
             return
 
-        # F8: Generate session token for WebUI control endpoints
-        webui_token = hashlib.sha256(
-            f"{os.getpid()}-{time.time()}".encode()
-        ).hexdigest()
+        # P1-3: Read token from WebUI's file if it already exists
+        token_file = self.spec.world.root / ".unison" / "webui-token"
+        if token_file.exists():
+            webui_token = token_file.read_text().strip()
+        else:
+            webui_token = hashlib.sha256(
+                f"{os.getpid()}-{time.time()}".encode()
+            ).hexdigest()
 
         import socket
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

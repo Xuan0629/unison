@@ -814,6 +814,11 @@ def serve(project_root: str, port: int = 9099, token: str = "") -> None:
     # F8: Generate or reuse session token for control endpoint auth
     _SESSION_TOKEN = token or _generate_session_token()
 
+    # P1-3: Write token to file so other orchestrators can read it
+    token_file = Path(project_root).resolve() / ".unison" / "webui-token"
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text(_SESSION_TOKEN)
+
     UnisonHandler.project_root = Path(project_root).resolve()
     UnisonHandler.registry = ProjectRegistry()
     UnisonHandler.registry.register(UnisonHandler.project_root)
