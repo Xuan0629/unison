@@ -325,6 +325,20 @@ agents:
         spec = loader.load(pipeline_file)
 
         orch = Orchestrator(spec=spec)
+        # Write the current run's previous review with findings.
+        prev_review = orch._review_file_for_phase("dev_review", 1)
+        prev_review.parent.mkdir(parents=True, exist_ok=True)
+        prev_review.write_text("""---
+verdict: REQUEST_CHANGES
+summary: "needs work"
+findings:
+  - "[CRITICAL] bug A"
+  - "[HIGH] bug B"
+  - "[MEDIUM] bug C"
+---
+
+body
+""")
         # Mock _recent_diff to avoid git dependency
         monkeypatch.setattr(orch, "_recent_diff", lambda: "mock diff")
         prompt = orch._build_prompt("developer", 2)
@@ -446,9 +460,20 @@ agents:
         spec = loader.load(pipeline_file)
 
         orch = Orchestrator(spec=spec)
+        plan_review = orch._review_file_for_phase("planning_review", 1)
+        plan_review.parent.mkdir(parents=True, exist_ok=True)
+        plan_review.write_text("""---
+verdict: REQUEST_CHANGES
+summary: "plan needs work"
+findings:
+  - "[CRITICAL] plan bug"
+---
+
+body
+""")
         monkeypatch.setattr(orch, "_recent_diff", lambda: "")
 
-        # Planning iteration 2 should read from plan-iter-1.md
+        # Planning iteration 2 should read the current run's plan-iter-1.md
         prompt = orch._build_prompt("planner", 2)
         assert "plan bug" in prompt
 

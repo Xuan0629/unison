@@ -62,12 +62,12 @@ agents:
         spec = loader.load(pipeline_file)
         orch = Orchestrator(spec=spec)
 
-        # The scoped path should be returned, NOT the legacy path
+        # New runs must use a scoped path without importing stale content.
         review_path = orch._review_file_for_phase("dev_review", 1)
-        # Must NOT point to the legacy reviews/iter-1.md
-        assert "runs" in str(review_path), (
-            f"Expected scoped path, got legacy: {review_path}"
-        )
+        assert "runs" in str(review_path)
+        assert not review_path.exists()
+        assert orch._parse_verdict(1) is None
+        assert (world_root / "reviews" / "iter-1.md").exists()
 
 
 # ============================================================================
