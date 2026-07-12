@@ -12,6 +12,7 @@ import hashlib
 import itertools
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -22,7 +23,8 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from unison.interfaces import AgentResult, MoaConfig, Notification, Operation, PipelineSpec, RedirectControl, ReviewVerdict, VerdictParseError
+from unison.interfaces import AgentResult, AgentSpec, MoaConfig, Notification, Operation, PipelineSpec, RedirectControl, ReviewVerdict, VerdictParseError
+from unison.pipeline import PipelineValidationError
 from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
 # P13: Include deprecated mode names for backward compatibility.
 # NOTE: 'chain' is intentionally excluded — chain-in-chain is forbidden.
@@ -584,7 +586,9 @@ class Orchestrator:
         # Pipeline B: detect multi-reviewer from agent composition
         reviewer_agents = self._resolve_agents("reviewer")
         if len(reviewer_agents) > 1:
-            self._invoke_multi_reviewer(1, "dev_review", agent_specs=reviewer_agents)
+            self._invoke_agents_parallel(
+                reviewer_agents, "reviewer", 1, review_phase="dev_review"
+            )
         else:
             self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
 
@@ -683,6 +687,21 @@ class Orchestrator:
                 self._save_checkpoint()
 
     def _run_moa_analyze(self, round_n: int, moa_config) -> None:
+        """Run one protected MoA analyzer round."""
+        snapshot_ids: list[str] = []
+        if self._snapshot_mgr is not None:
+            snapshot_ids = self._snapshot_external_paths("analyzer", round_n)
+        if self._state.halt_signal:
+            return
+        try:
+            self._run_moa_analyze_unprotected(round_n, moa_config)
+        finally:
+            if self._risk_evaluator is not None and self._snapshot_mgr is not None:
+                self._evaluate_post_invoke_risk(
+                    self.spec.world.root, snapshot_ids
+                )
+
+    def _run_moa_analyze_unprotected(self, round_n: int, moa_config) -> None:
         """Run N analyzer agents in parallel for MoA round *round_n*.
 
         Each agent writes to ``reviews/moa-{agent_label}-round{N}.md``.
@@ -1184,6 +1203,21 @@ class Orchestrator:
             self._in_chain = prev_in_chain
 
     def _run_moa_synthesis(self, round_n: int, moa_config) -> None:
+        """Run one protected MoA synthesis round."""
+        snapshot_ids: list[str] = []
+        if self._snapshot_mgr is not None:
+            snapshot_ids = self._snapshot_external_paths("synthesizer", round_n)
+        if self._state.halt_signal:
+            return
+        try:
+            self._run_moa_synthesis_unprotected(round_n, moa_config)
+        finally:
+            if self._risk_evaluator is not None and self._snapshot_mgr is not None:
+                self._evaluate_post_invoke_risk(
+                    self.spec.world.root, snapshot_ids
+                )
+
+    def _run_moa_synthesis_unprotected(self, round_n: int, moa_config) -> None:
         """Run a single synthesizer agent to merge MoA analyses.
 
         Reads all ``reviews/moa-*-round{N}.md`` files and writes a
@@ -1626,7 +1660,10 @@ class Orchestrator:
             # Pipeline B: auto-detect multi-reviewer from agent composition
             reviewer_agents = self._resolve_agents("reviewer")
             if len(reviewer_agents) > 1:
-                self._invoke_multi_reviewer(iteration, review_phase, agent_specs=reviewer_agents)
+                self._invoke_agents_parallel(
+                    reviewer_agents, "reviewer", iteration,
+                    review_phase=review_phase,
+                )
             else:
                 self._invoke_agent_for_role("reviewer", iteration, review_phase=review_phase)
 
@@ -1832,7 +1869,18 @@ class Orchestrator:
                             "parallel_dev.enabled=True but features list is empty. "
                             "Either set features=[...] or set enabled=False."
                         )
-                    self._invoke_parallel_developers(iteration, pd, feature_list)
+                    snapshot_ids: list[str] = []
+                    if self._snapshot_mgr is not None:
+                        snapshot_ids = self._snapshot_external_paths(role, iteration)
+                    if self._state.halt_signal:
+                        return
+                    try:
+                        self._invoke_parallel_developers(iteration, pd, feature_list)
+                    finally:
+                        if self._risk_evaluator is not None and self._snapshot_mgr is not None:
+                            self._evaluate_post_invoke_risk(
+                                self.spec.world.root, snapshot_ids
+                            )
                     return
                 # enabled=False → fall through to single-developer path
                 # (documented kill switch, tested as regression guard)
@@ -1872,6 +1920,8 @@ class Orchestrator:
         snapshot_ids: list[str] = []
         if self._snapshot_mgr is not None:
             snapshot_ids = self._snapshot_external_paths(role, iteration)
+        if self._state.halt_signal:
+            return
 
         # 4. Build prompt (uses BudgetTracker for token budget)
         prompt = self._build_prompt(role, iteration, review_phase=review_phase)
@@ -1903,20 +1953,23 @@ class Orchestrator:
             pass
 
         # 6. Run agent subprocess
-        result = runner.run(
-            spec=effective_spec,
-            prompt=prompt,
-            workdir=world.root,
-            timeout=self._effective_timeout(),
-            log_path=log_path,
-        )
-
-        # F1b: Post-invoke risk evaluation — scan git diff for external
-        # changes, evaluate risk, restore + halt on L3.
-        if self._risk_evaluator is not None and self._snapshot_mgr is not None:
-            halted = self._evaluate_post_invoke_risk(world.root, snapshot_ids)
-            if halted:
-                return
+        risk_halted = False
+        try:
+            result = runner.run(
+                spec=effective_spec,
+                prompt=prompt,
+                workdir=world.root,
+                timeout=self._effective_timeout(),
+                log_path=log_path,
+            )
+        finally:
+            # F1b: Always evaluate external paths, even when a runner raises.
+            if self._risk_evaluator is not None and self._snapshot_mgr is not None:
+                risk_halted = self._evaluate_post_invoke_risk(
+                    world.root, snapshot_ids
+                )
+        if risk_halted:
+            return
 
         # P12b: Restore workspace from tier snapshot if downgraded agent failed
         if not result.success and role in self._tier_snapshot_ids:
@@ -2051,9 +2104,17 @@ class Orchestrator:
                     iteration=iteration,
                 )
                 audit_ids.append(record.audit_id)
-            except (ValueError, OSError):
-                # Path excluded or unreadable — skip
-                continue
+            except (ValueError, OSError, shutil.Error) as exc:
+                for audit_id in audit_ids:
+                    try:
+                        mgr.discard(audit_id)
+                    except OSError:
+                        pass
+                self.halt(
+                    f"External path snapshot failed for {expanded}: {exc}",
+                    category="stage",
+                )
+                return audit_ids
         return audit_ids
 
     def _snapshot_for_tier_switch(self, role: str) -> None:
@@ -2107,7 +2168,7 @@ class Orchestrator:
                 if mgr.is_modified(audit_id):
                     return True
             except (KeyError, OSError):
-                continue
+                return True
         return False
 
     def _evaluate_post_invoke_risk(
@@ -2240,6 +2301,29 @@ class Orchestrator:
         return "homogeneous" if len(runtimes) == 1 else "heterogeneous"
 
     def _invoke_agents_parallel(
+        self,
+        agent_specs: list[AgentSpec],
+        pipeline_role: str,
+        iteration: int,
+        review_phase: str = "dev_review",
+    ) -> None:
+        """Invoke a multi-agent group with external-path protection."""
+        snapshot_ids: list[str] = []
+        if self._snapshot_mgr is not None:
+            snapshot_ids = self._snapshot_external_paths(pipeline_role, iteration)
+        if self._state.halt_signal:
+            return
+        try:
+            self._invoke_agents_parallel_unprotected(
+                agent_specs, pipeline_role, iteration, review_phase
+            )
+        finally:
+            if self._risk_evaluator is not None and self._snapshot_mgr is not None:
+                self._evaluate_post_invoke_risk(
+                    self.spec.world.root, snapshot_ids
+                )
+
+    def _invoke_agents_parallel_unprotected(
         self,
         agent_specs: list[AgentSpec],
         pipeline_role: str,

@@ -19,13 +19,38 @@ from unison.interfaces import AgentRole, Operation
 
 
 def _dirs_equal(dir_a: Path, dir_b: Path) -> bool:
-    """Compare two directories recursively by file content."""
+    """Compare two directory trees by names, types, links, and file content."""
     import filecmp
-    cmp = filecmp.dircmp(str(dir_a), str(dir_b))
-    if cmp.left_only or cmp.right_only or cmp.diff_files or cmp.funny_files:
+
+    try:
+        entries_a = {entry.name: entry for entry in dir_a.iterdir()}
+        entries_b = {entry.name: entry for entry in dir_b.iterdir()}
+    except OSError:
         return False
-    for subdir in cmp.common_dirs:
-        if not _dirs_equal(dir_a / subdir, dir_b / subdir):
+    if entries_a.keys() != entries_b.keys():
+        return False
+
+    for name, entry_a in entries_a.items():
+        entry_b = entries_b[name]
+        if entry_a.is_symlink() or entry_b.is_symlink():
+            if not entry_a.is_symlink() or not entry_b.is_symlink():
+                return False
+            if entry_a.readlink() != entry_b.readlink():
+                return False
+        elif entry_a.is_dir() or entry_b.is_dir():
+            if not entry_a.is_dir() or not entry_b.is_dir():
+                return False
+            if not _dirs_equal(entry_a, entry_b):
+                return False
+        elif entry_a.is_file() or entry_b.is_file():
+            if not entry_a.is_file() or not entry_b.is_file():
+                return False
+            try:
+                if not filecmp.cmp(entry_a, entry_b, shallow=False):
+                    return False
+            except OSError:
+                return False
+        else:
             return False
     return True
 
@@ -268,6 +293,18 @@ class FileSnapshotManager:
 
         return original
 
+    def discard(self, audit_id: str) -> bool:
+        """Delete snapshot data and its manifest entry without restoring it."""
+        manifest = self._read_manifest()
+        data = manifest.pop(audit_id, None)
+        if data is None:
+            return False
+        snapshot_dir = self.base_dir / audit_id
+        self._write_manifest(manifest)
+        if snapshot_dir.exists():
+            shutil.rmtree(snapshot_dir)
+        return True
+
     def list_snapshots(self, project: str) -> list[SnapshotRecord]:
         """List all snapshot records.
 
@@ -298,10 +335,7 @@ class FileSnapshotManager:
 
         # Compare based on type
         if snapshot.is_dir() and original.is_dir():
-            import filecmp
-            return not filecmp.cmp(
-                str(snapshot), str(original), shallow=False
-            ) and not _dirs_equal(snapshot, original)
+            return not _dirs_equal(snapshot, original)
         elif not snapshot.is_dir() and not original.is_dir():
             import filecmp
             return not filecmp.cmp(str(snapshot), str(original), shallow=False)

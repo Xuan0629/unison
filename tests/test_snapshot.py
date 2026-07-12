@@ -107,6 +107,66 @@ class TestFileSnapshotManager:
         assert (original_dir / "file1.txt").read_text() == "content1"
         assert not (original_dir / "file2.txt").exists()  # New file removed
 
+    def test_directory_content_change_detected_when_mtime_is_unchanged(self, tmp_path):
+        """Directory comparison must not trust spoofable stat signatures."""
+        import os
+
+        original = tmp_path / "external"
+        original.mkdir()
+        target = original / "file.txt"
+        target.write_text("AAAA")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            path=original, operation=Operation.MODIFY,
+            agent="developer", iteration=1,
+        )
+
+        target.write_text("BBBB")  # same length
+        snap_file = record.snapshot_path / "file.txt"
+        snap_stat = snap_file.stat()
+        os.utime(target, ns=(snap_stat.st_atime_ns, snap_stat.st_mtime_ns))
+        snap_dir_stat = record.snapshot_path.stat()
+        os.utime(
+            original,
+            ns=(snap_dir_stat.st_atime_ns, snap_dir_stat.st_mtime_ns),
+        )
+
+        assert sm.is_modified(record.audit_id) is True
+
+    def test_discard_removes_snapshot_without_restoring_original(self, tmp_path):
+        original = tmp_path / "original.txt"
+        original.write_text("before")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            path=original, operation=Operation.MODIFY,
+            agent="developer", iteration=1,
+        )
+        original.write_text("after")
+
+        assert sm.discard(record.audit_id) is True
+        assert original.read_text() == "after"
+        assert not record.snapshot_path.parent.exists()
+        assert sm.list_snapshots("project") == []
+        assert sm.discard(record.audit_id) is False
+
+    def test_discard_keeps_data_when_manifest_update_fails(self, tmp_path, monkeypatch):
+        original = tmp_path / "original.txt"
+        original.write_text("before")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            path=original, operation=Operation.MODIFY,
+            agent="developer", iteration=1,
+        )
+
+        monkeypatch.setattr(
+            sm, "_write_manifest",
+            lambda manifest: (_ for _ in ()).throw(OSError("disk full")),
+        )
+        with pytest.raises(OSError, match="disk full"):
+            sm.discard(record.audit_id)
+
+        assert record.snapshot_path.exists()
+
     def test_restore_nonexistent_audit_id(self, tmp_path):
         """Restore with non-existent audit_id raises error."""
         sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
