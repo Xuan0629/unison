@@ -940,6 +940,13 @@ agents:
         )
         return Orchestrator(spec=spec)
 
+    def _get_control_dir(self, orch) -> "Path":
+        """P1-5: Return the control directory the orchestrator actually reads."""
+        ctx = getattr(orch, "_run_ctx", None)
+        if ctx is not None:
+            return orch.spec.world.run_control_dir(ctx)
+        return orch.spec.world.root / ".unison" / "control"
+
     def test_returns_empty_list_when_no_control_dir(self, tmp_path):
         orch = self._make_orch(tmp_path)
         result = orch._check_control_files()
@@ -954,7 +961,7 @@ agents:
 
     def test_returns_pause_and_consumes_file(self, tmp_path):
         orch = self._make_orch(tmp_path)
-        control_dir = orch.spec.world.root / ".unison" / "control"
+        control_dir = self._get_control_dir(orch)
         control_dir.mkdir(parents=True, exist_ok=True)
         (control_dir / "pause.json").write_text('{"action":"pause"}')
 
@@ -965,7 +972,7 @@ agents:
 
     def test_returns_skip_and_consumes_file(self, tmp_path):
         orch = self._make_orch(tmp_path)
-        control_dir = orch.spec.world.root / ".unison" / "control"
+        control_dir = self._get_control_dir(orch)
         control_dir.mkdir(parents=True, exist_ok=True)
         (control_dir / "skip.json").write_text('{"action":"skip"}')
 
@@ -975,7 +982,7 @@ agents:
 
     def test_returns_report_and_consumes_file(self, tmp_path):
         orch = self._make_orch(tmp_path)
-        control_dir = orch.spec.world.root / ".unison" / "control"
+        control_dir = self._get_control_dir(orch)
         control_dir.mkdir(parents=True, exist_ok=True)
         (control_dir / "report.json").write_text('{"action":"report"}')
 
@@ -986,7 +993,7 @@ agents:
     def test_consumes_all_control_files(self, tmp_path):
         """P8 S18: ALL control files are consumed, not just the first."""
         orch = self._make_orch(tmp_path)
-        control_dir = orch.spec.world.root / ".unison" / "control"
+        control_dir = self._get_control_dir(orch)
         control_dir.mkdir(parents=True, exist_ok=True)
         (control_dir / "pause.json").write_text('{"action":"pause"}')
         (control_dir / "skip.json").write_text('{"action":"skip"}')
@@ -1685,12 +1692,18 @@ class TestRedirectFile:
         result = orch._check_redirect_file()
         assert result is None
 
+    def _get_scoped_control_dir(self, orch, tmp_path):
+        """P1-5: Get the scoped control dir the orchestrator actually reads."""
+        ctx = getattr(orch, "_run_ctx", None)
+        if ctx is not None:
+            return orch.spec.world.run_control_dir(ctx)
+        return Path(tmp_path) / ".unison" / "control"
+
     def test_consumes_valid_redirect_file(self, tmp_path):
         """_check_redirect_file reads and consumes a valid redirect.json."""
         import json
         orch = self._make_orchestrator(tmp_path)
-        root = tmp_path
-        control_dir = root / ".unison" / "control"
+        control_dir = self._get_scoped_control_dir(orch, tmp_path)
         control_dir.mkdir(parents=True, exist_ok=True)
         redirect_data = {
             "reason": "3 REQUEST_CHANGES + tests failing",
@@ -1713,8 +1726,7 @@ class TestRedirectFile:
         """_check_redirect_file stores result on _pending_redirect."""
         import json
         orch = self._make_orchestrator(tmp_path)
-        root = tmp_path
-        control_dir = root / ".unison" / "control"
+        control_dir = self._get_scoped_control_dir(orch, tmp_path)
         control_dir.mkdir(parents=True, exist_ok=True)
         (control_dir / "redirect.json").write_text(json.dumps({
             "reason": "stuck in loop",
@@ -1729,8 +1741,7 @@ class TestRedirectFile:
     def test_handles_invalid_json(self, tmp_path):
         """_check_redirect_file returns None on invalid JSON."""
         orch = self._make_orchestrator(tmp_path)
-        root = tmp_path
-        control_dir = root / ".unison" / "control"
+        control_dir = self._get_scoped_control_dir(orch, tmp_path)
         control_dir.mkdir(parents=True, exist_ok=True)
         (control_dir / "redirect.json").write_text("not json", encoding="utf-8")
 
@@ -1743,8 +1754,7 @@ class TestRedirectFile:
         """_check_redirect_file fills missing fields with defaults."""
         import json
         orch = self._make_orchestrator(tmp_path)
-        root = tmp_path
-        control_dir = root / ".unison" / "control"
+        control_dir = self._get_scoped_control_dir(orch, tmp_path)
         control_dir.mkdir(parents=True, exist_ok=True)
         (control_dir / "redirect.json").write_text(
             json.dumps({"reason": "test"}), encoding="utf-8")

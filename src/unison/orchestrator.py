@@ -3333,10 +3333,10 @@ class Orchestrator:
         """
         ctx = getattr(self, "_run_ctx", None)
         if ctx is not None:
+            # P1-5: When a RunContext is active, NEVER fall back to legacy
+            # control directory — stale pause/skip/report from other runs
+            # must not affect this pipeline.
             control_dir = self.spec.world.run_control_dir(ctx)
-            # Fallback to legacy if run-scoped dir has no control files
-            if not any(control_dir.glob("*.json")):
-                control_dir = self.spec.world.root / ".unison" / "control"
         else:
             control_dir = self.spec.world.root / ".unison" / "control"
         if not control_dir.exists():
@@ -3370,9 +3370,7 @@ class Orchestrator:
             if ctx is not None
             else self.spec.world.root / ".unison" / "control"
         )
-        # Fallback to legacy if run-scoped dir has no json files
-        if ctx is not None and not any(control_dir.glob("*.json")):
-            control_dir = self.spec.world.root / ".unison" / "control"
+        # P1-5: No legacy fallback — control actions must target this run
         redirect_path = control_dir / "redirect.json"
         if not redirect_path.exists():
             return None
