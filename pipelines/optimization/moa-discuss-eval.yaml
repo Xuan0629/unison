@@ -6,7 +6,7 @@ project:
 
 project_root: "../.."
 
-mode: moa
+mode: moa:analyze
 
 moa:
   agents: 3
