@@ -2963,14 +2963,22 @@ class Orchestrator:
         system_prompt = self._registry.resolve(role, sp_path, mode=self.spec.mode)
 
         # Read PRD + tech-design content for context assembly (max 8KB each)
+        # P12c: Use scoped paths to prevent reading wrong pipeline's PRD.
         prd_content = ""
         design_content = ""
         _MAX_CONTEXT_CHARS = 8192
-        if world.prd.exists():
-            raw = world.prd.read_text(encoding="utf-8")
+        ctx = getattr(self, "_run_ctx", None)
+        if ctx is not None:
+            scoped_prd = self.spec.world.prd_for(ctx.pipeline_key)
+            scoped_design = self.spec.world.tech_design_for(ctx.pipeline_key)
+        else:
+            scoped_prd = world.prd
+            scoped_design = world.tech_design
+        if scoped_prd.exists():
+            raw = scoped_prd.read_text(encoding="utf-8")
             prd_content = raw[:_MAX_CONTEXT_CHARS] + ("\n...[truncated]" if len(raw) > _MAX_CONTEXT_CHARS else "")
-        if world.tech_design.exists():
-            raw = world.tech_design.read_text(encoding="utf-8")
+        if scoped_design.exists():
+            raw = scoped_design.read_text(encoding="utf-8")
             design_content = raw[:_MAX_CONTEXT_CHARS] + ("\n...[truncated]" if len(raw) > _MAX_CONTEXT_CHARS else "")
 
         # Extract top findings from the previous review (context deflation)

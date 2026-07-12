@@ -387,7 +387,7 @@ class SelfHealConfig:
             "full" runs the complete fixer+reviewers+PR pipeline.
             Only applies to CONSUMER_BUG, not UNISON_BUG.
     """
-    auto_fix_unison: bool = True
+    auto_fix_unison: bool = False  # P0-7: was True — dangerous default
     auto_fix_consumer: bool = False
     max_fix_rounds: int = 2
     fix_timeout: int = 300
