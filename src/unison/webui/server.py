@@ -855,5 +855,15 @@ def serve(project_root: str, port: int = 9099, token: str = "") -> None:
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        pass
+    finally:
+        # P2-3: Clean up token files on shutdown so stale tokens
+        # don't linger and cause auth mismatch on restart.
         _sse_stop.set()
         server.shutdown()
+        for tf in (shared_token_file, token_file):
+            try:
+                if tf.exists():
+                    tf.unlink()
+            except OSError:
+                pass
