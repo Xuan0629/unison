@@ -1905,6 +1905,23 @@ class Orchestrator:
         # from "a commit already existed on HEAD".
         pre_commit = self._detector._get_commit(world.root)
 
+        # P0-7: Record pre-invocation dirty file set so timeout recovery
+        # only commits files the agent actually changed, not pre-existing
+        # dirty tree or other agents' parallel modifications.
+        pre_invoke_dirty: set[str] = set()
+        try:
+            _status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(world.root),
+                capture_output=True, text=True, timeout=10,
+            )
+            if _status.returncode == 0:
+                for line in _status.stdout.strip().splitlines():
+                    # porcelain format: "XY filename" — strip 2-char status + space
+                    pre_invoke_dirty.add(line[3:].strip())
+        except (subprocess.SubprocessError, OSError):
+            pass
+
         # 6. Run agent subprocess
         result = runner.run(
             spec=effective_spec,
@@ -1930,7 +1947,7 @@ class Orchestrator:
         # during V2 fix Iter 1-3). Check for partial-but-valid output
         # before declaring failure.
         if not result.success and result.error and "timeout" in result.error.lower():
-            self._recover_timeout_work(role, world, iteration)
+            self._recover_timeout_work(role, world, iteration, pre_invoke_dirty)
 
         # 8. Track token usage (estimate from prompt length)
         estimated_tokens = estimate_tokens(prompt)
@@ -3827,7 +3844,8 @@ class Orchestrator:
         return ""
 
     def _recover_timeout_work(
-        self, role: str, world, iteration: int
+        self, role: str, world, iteration: int,
+        pre_invoke_dirty: set[str] | None = None,
     ) -> None:
         """Check for valid uncommitted work after an agent timeout.
 
@@ -3835,6 +3853,10 @@ class Orchestrator:
         the 600s timeout fires. If there are uncommitted changes AND
         the test suite passes against them, auto-commit the work so
         the pipeline can proceed to review.
+
+        P0-7: Only commit files the agent actually changed (those NOT in
+        *pre_invoke_dirty*). Pre-existing dirty tree and other agents'
+        parallel modifications are excluded from the auto-commit.
 
         This is called from ``_invoke_agent_for_role`` when
         ``runner.run()`` reports a timeout error.
@@ -3856,6 +3878,19 @@ class Orchestrator:
             if status.returncode != 0 or not status.stdout.strip():
                 return  # nothing to recover
 
+            # P0-7: Determine which files the agent actually changed.
+            # If pre_invoke_dirty is provided, only stage files NOT in
+            # that set (i.e. files that became dirty during this invocation).
+            pre_dirty = pre_invoke_dirty or set()
+            agent_changed_files: list[str] = []
+            for line in status.stdout.strip().splitlines():
+                fname = line[3:].strip()
+                if fname not in pre_dirty:
+                    agent_changed_files.append(fname)
+
+            if not agent_changed_files:
+                return  # agent didn't change anything new
+
             # Run the project's test command against the uncommitted state
             if not self.spec.project.test_command:
                 return  # no test command configured
@@ -3874,13 +3909,14 @@ class Orchestrator:
             if test_result.returncode != 0:
                 return  # tests fail — can't auto-commit
 
-            # Tests pass, work is valid — auto-commit
-            subprocess.run(
-                ["git", "add", "-A"],
-                cwd=str(world.root),
-                capture_output=True,
-                timeout=10,
-            )
+            # Tests pass, work is valid — auto-commit ONLY agent-changed files
+            for fname in agent_changed_files:
+                subprocess.run(
+                    ["git", "add", "--", fname],
+                    cwd=str(world.root),
+                    capture_output=True,
+                    timeout=10,
+                )
             subprocess.run(
                 ["git", "commit", "-m",
                  f"{role}: auto-commit after timeout recovery (iter {iteration})"],
