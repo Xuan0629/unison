@@ -374,38 +374,14 @@ class Orchestrator:
             pass
 
     def pre_invoke_cleanup(self) -> None:
-        """Run ``git reset --hard HEAD && git clean -fd``.
+        """P0-1: No-op.  Previously ran ``git reset --hard HEAD && git clean -fd``
+        before every developer invocation, which could delete uncommitted user
+        code.  This is too dangerous for a default behaviour.
 
-        Preserves tracked content in: prd/ reviews/ observer/ .unison/
-
-        Does **not** raise if the workspace is not a git repository or
-        git is unavailable — the cleanup is best-effort.
+        If workspace cleanup is needed, it should be an explicit opt-in via
+        pipeline YAML config.
         """
-        world = self.spec.world
-        try:
-            subprocess.run(
-                ["git", "reset", "--hard", "HEAD"],
-                cwd=str(world.root),
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
-            subprocess.run(
-                [
-                    "git", "clean", "-fd",
-                    "-e", "prd",
-                    "-e", "reviews",
-                    "-e", "observer",
-                    "-e", ".unison",
-                ],
-                cwd=str(world.root),
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
-        except (subprocess.SubprocessError, FileNotFoundError, OSError):
-            # Not a git repository or git is unavailable
-            pass
+        pass
 
     def run(self) -> State:
         """Blocking run until done or halt. Returns the final State.
