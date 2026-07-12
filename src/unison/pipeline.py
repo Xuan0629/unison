@@ -57,6 +57,7 @@ from unison.interfaces import (
     SelfHealConfig,
     SnapshotConfig,
     Stage,
+    TRUSTED_LOCAL_PRINCIPAL,
     WebUiConfig,
     WorktreeConfig,
     World,
@@ -270,6 +271,7 @@ class PipelineLoader:
             context_deflation_limit=raw.get("context_deflation_limit", 5),
             observer_poll_interval=raw.get("observer_poll_interval", 60),
             agent_log_retention_hours=raw.get("agent_log_retention_hours", 168),
+            who_can_run=self._build_who_can_run(raw.get("who_can_run")),
             self_heal=self._build_self_heal(raw.get("self_heal")),
             greenfield=self._build_greenfield(raw.get("greenfield")),
             moa=moa_config,
@@ -634,6 +636,36 @@ class PipelineLoader:
             val = raw["worktree_root"]
             kwargs["worktree_root"] = Path(val) if isinstance(val, str) else val
         return WorktreeConfig(**kwargs)
+
+    @staticmethod
+    def _build_who_can_run(raw: Any) -> list[str]:
+        """Validate run principals; an empty list preserves CLI-only access."""
+        if raw is None or raw == []:
+            return [TRUSTED_LOCAL_PRINCIPAL]
+        if not isinstance(raw, list):
+            raise PipelineValidationError("who_can_run must be a list")
+
+        principals: list[str] = []
+        for value in raw:
+            if not isinstance(value, str):
+                raise PipelineValidationError(
+                    "who_can_run entries must be strings"
+                )
+            valid = value == TRUSTED_LOCAL_PRINCIPAL
+            if not valid:
+                prefix, separator, identifier = value.partition(":")
+                valid = (
+                    separator == ":"
+                    and prefix in {"hermes", "discord"}
+                    and bool(identifier.strip())
+                )
+            if not valid:
+                raise PipelineValidationError(
+                    f"Invalid who_can_run principal: {value!r}"
+                )
+            if value not in principals:
+                principals.append(value)
+        return principals
 
     @staticmethod
     def _build_self_heal(raw: dict[str, Any] | None) -> SelfHealConfig:

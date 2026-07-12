@@ -1751,6 +1751,62 @@ class TestPipelineObserverConfig:
 # ============================================================================
 
 
+
+
+class TestWhoCanRunConfig:
+    @staticmethod
+    def _write_pipeline(tmp_path, who_can_run):
+        import yaml
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir(exist_ok=True)
+        (prompts / "developer.md").write_text("developer")
+        (prompts / "reviewer.md").write_text("reviewer")
+        path = tmp_path / "pipeline.yaml"
+        path.write_text(yaml.safe_dump({
+            "version": "2.0",
+            "mode": "code-dev",
+            "project_root": ".",
+            "who_can_run": who_can_run,
+            "agents": {
+                "developer": {
+                    "role": "developer", "pipeline_role": "developer",
+                    "runtime": "claude", "model": "test",
+                    "system_prompt_path": "prompts/developer.md",
+                },
+                "reviewer": {
+                    "role": "reviewer", "pipeline_role": "reviewer",
+                    "runtime": "claude", "model": "test",
+                    "system_prompt_path": "prompts/reviewer.md",
+                },
+            },
+        }))
+        return path
+
+    def test_yaml_loads_and_deduplicates_principals(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            ["cli", "discord:123", "hermes:session-1", "cli"],
+        )
+        spec = PipelineLoader().load(path)
+        assert spec.who_can_run == [
+            "cli", "discord:123", "hermes:session-1",
+        ]
+
+    def test_empty_list_means_cli_only(self, tmp_path):
+        path = self._write_pipeline(tmp_path, [])
+        assert PipelineLoader().load(path).who_can_run == ["cli"]
+
+    @pytest.mark.parametrize(
+        "value",
+        ["cli", ["discord:"], ["hermes:"], ["unknown:value"], [1]],
+    )
+    def test_invalid_authorization_config_rejected(self, tmp_path, value):
+        path = self._write_pipeline(tmp_path, value)
+        with pytest.raises(PipelineValidationError, match="who_can_run"):
+            PipelineLoader().load(path)
+
+
 class TestModeValidation:
     """F14: Unknown mode strings are rejected at load time."""
 

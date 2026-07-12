@@ -52,6 +52,7 @@ PipelineMode: TypeAlias = Literal[
     "agent-fix", "migrate", "greenfield", "spec-driven", "moa",
 ]
 MOA_MODES = frozenset({"moa", "moa:analyze", "moa:plan", "moa:review"})
+TRUSTED_LOCAL_PRINCIPAL = "cli"
 
 class RiskLevel(Enum):
     L0 = "auto_allow"              # 直接放行
@@ -525,7 +526,7 @@ class PipelineSpec:
     context_deflation_limit: int = 5  # 每次迭代只注入最近 5 条 findings
     observer_poll_interval: int = 60  # 秒
     agent_log_retention_hours: int = 168  # 7d
-    who_can_run: list[str] = field(default_factory=lambda: ["cli"])  # "cli", "discord:channel_id", "hermes:session_id"
+    who_can_run: list[str] = field(default_factory=lambda: [TRUSTED_LOCAL_PRINCIPAL])  # "cli", "discord:channel_id", "hermes:session_id"
     self_heal: SelfHealConfig = field(default_factory=lambda: SelfHealConfig())  # self-heal auto-fix
     greenfield: GreenfieldConfig | None = None  # greenfield mode: isolated new module dev
     moa: MoaConfig | None = None  # moa mode: mixture of agents parallel analysis

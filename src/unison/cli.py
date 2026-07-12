@@ -19,6 +19,8 @@ from dataclasses import replace
 import sys
 from pathlib import Path
 
+from unison.auth import RunAuthorizationError, authorize_run
+from unison.interfaces import TRUSTED_LOCAL_PRINCIPAL
 from unison.orchestrator import Orchestrator
 from unison.pipeline import PipelineLoader, PipelineValidationError
 from unison.state import State
@@ -202,6 +204,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
         project_root = Path(args.project).resolve()
         spec = replace(spec, world=World(root=project_root))
 
+    if not authorize_run(spec, TRUSTED_LOCAL_PRINCIPAL):
+        print(
+            "AUTHORIZATION ERROR: local CLI is not allowed by who_can_run",
+            file=sys.stderr,
+        )
+        return 3
+
     orchestrator = Orchestrator(spec=spec, dry_run=args.dry_run)
 
     # Pre-flight: check required tools (halt if missing)
@@ -335,6 +344,9 @@ def main(argv: list[str] | None = None) -> int:
     except PipelineValidationError as e:
         print(f"VALIDATION ERROR: {e}", file=sys.stderr)
         return 1
+    except RunAuthorizationError as e:
+        print(f"AUTHORIZATION ERROR: {e}", file=sys.stderr)
+        return 3
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
         return 130
