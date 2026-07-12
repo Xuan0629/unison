@@ -526,7 +526,9 @@ class Orchestrator:
         # MoA mode uses a dedicated N-round analyze→synthesize loop
         # driven by MoaConfig.rounds rather than a fixed PhaseRouter
         # sequence (which always emits 4 phases regardless of rounds).
-        if mode == "moa":
+        # P0-3: All MoA family modes (moa, moa:analyze, moa:plan, moa:review)
+        # dispatch to _run_moa_pipeline — not just bare "moa".
+        if mode in ("moa", "moa:analyze", "moa:plan", "moa:review"):
             self._run_moa_pipeline()
             return
 
