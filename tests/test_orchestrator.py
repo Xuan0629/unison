@@ -161,8 +161,8 @@ agents:
         assert runs[0]["status"] == "done"
         assert runs[0]["verdict"] == "PASS"
 
-    def test_orchestrator_pre_invoke_cleanup(self, tmp_path):
-        """Orchestrator.pre_invoke_cleanup() runs git reset + clean."""
+    def test_orchestrator_pre_invoke_cleanup_is_noop(self, tmp_path):
+        """P2-4: pre_invoke_cleanup() is a safe no-op (does NOT run git reset/clean)."""
         world = World(root=tmp_path)
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text("""
