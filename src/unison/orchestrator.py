@@ -827,7 +827,7 @@ class Orchestrator:
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             log_path = world.agent_log(
                 spec.role, round_n,  # type: ignore[arg-type]
-                timestamp,
+                timestamp, ctx=getattr(self, "_run_ctx", None),
             )
 
             result = runner.run(
@@ -1307,7 +1307,7 @@ class Orchestrator:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         log_path = world.agent_log(
             "moa-synthesizer", round_n,  # type: ignore[arg-type]
-            timestamp,
+            timestamp, ctx=getattr(self, "_run_ctx", None),
         )
 
         result = runner.run(
@@ -2328,6 +2328,7 @@ class Orchestrator:
             log_path = world.agent_log(
                 pipeline_role, iteration,  # type: ignore[arg-type]
                 f"{timestamp}_{spec.role}",
+                ctx=getattr(self, "_run_ctx", None),
             )
             result = runner.run(
                 spec=spec,
@@ -2454,6 +2455,7 @@ class Orchestrator:
             log_path = world.agent_log(
                 "planner", iteration,  # type: ignore[arg-type]
                 f"{timestamp}_{spec.role}",
+                ctx=getattr(self, "_run_ctx", None),
             )
 
             runner.run(
@@ -2594,6 +2596,7 @@ class Orchestrator:
             log_path = world.agent_log(
                 "developer", iteration,  # type: ignore[arg-type]
                 f"{timestamp}_{spec.role}",
+                ctx=getattr(self, "_run_ctx", None),
             )
 
             # P8 S9: Capture result and check success
@@ -2732,7 +2735,7 @@ class Orchestrator:
             full_prompt = system_prompt + "\n\n" + prompt
 
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            log_path = world.agent_log("developer", iteration, f"{timestamp}_{feature_name}")  # type: ignore[arg-type]
+            log_path = world.agent_log("developer", iteration, f"{timestamp}_{feature_name}", ctx=getattr(self, "_run_ctx", None))  # type: ignore[arg-type]
 
             # P8 S9: Capture result and check success
             result = runner.run(
@@ -2908,6 +2911,7 @@ class Orchestrator:
             log_path = world.agent_log(
                 "reviewer", iteration,  # type: ignore[arg-type]
                 f"{timestamp}_R{idx}",
+                ctx=getattr(self, "_run_ctx", None),
             )
 
             # Run the agent subprocess
