@@ -262,13 +262,20 @@ class BudgetTracker:
         """Load persisted state from the JSON file.
 
         No-op when *persist_path* is ``None`` or the file is unreadable.
+        P1-1: When *daily_persist_path* is configured, daily usage comes
+        from _load_daily() only — this method does NOT load daily_used
+        to avoid overwriting the project-scoped daily value. When
+        *daily_persist_path* is None (legacy single-file mode), daily
+        usage is loaded from this file for backward compatibility.
         """
         if self._persist_path is None:
             return
 
         try:
             data = json.loads(self._persist_path.read_text(encoding="utf-8"))
-            self._daily_used = int(data.get("daily_used", 0))
+            # P1-1: Only load daily_used when there's no separate daily path.
+            if self._daily_persist_path is None:
+                self._daily_used = int(data.get("daily_used", 0))
             self._per_task_used = int(data.get("task_used", 0))
 
             phases_raw = data.get("phases", [])
@@ -331,13 +338,6 @@ class BudgetTracker:
                 self._daily_used = int(data.get("daily_used", 0))
         except (json.JSONDecodeError, OSError, ValueError):
             pass  # Start fresh on corrupt file
-        tmp_path = self._persist_path.with_suffix(self._persist_path.suffix + ".tmp")
-        try:
-            tmp_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-            tmp_path.rename(self._persist_path)
-        except OSError:
-            # Best-effort persistence — don't crash on I/O errors
-            pass
 
 
 # ============================================================================
