@@ -321,54 +321,47 @@ class TestP113ProviderMapValidation:
 
 
 # ============================================================================
-# P1-9: All 18 pipelines must pass load + dry_run
+# P1-9 / P2-1 / P2-4: public repository asset boundary
 # ============================================================================
 
-class TestP19PipelineDryRun:
-    """P1-9: repository pipeline manifest is complete and executable."""
+class TestP19PublicAssetBoundary:
+    """Private pipelines, phase prompts, and runtime output stay untracked."""
 
-    PIPELINES = (
-        "p10-observer.yaml",
-        "p10b-fix.yaml",
-        "p10b-full-dev.yaml",
-        "p11-security-fixes.yaml",
-        "p12-fixes.yaml",
-        "p12b-tiering.yaml",
-        "p8-production-hardening.yaml",
-        "p8b-implementation.yaml",
-        "p8c-code-dev.yaml",
-        "p9-checklist.yaml",
-        "optimization/moa-discuss-eval.yaml",
-        "optimization/p0-prompt-registry.yaml",
-        "optimization/p1-sdd.yaml",
-        "optimization/p2-phase-router.yaml",
-        "optimization/p3-slim.yaml",
-        "optimization/p5-moa.yaml",
-        "optimization/p6-moa-fixes.yaml",
-        "optimization/p7-moa-remaining.yaml",
-    )
-
-    def test_pipeline_manifest_matches_repository(self):
+    def test_no_private_pipeline_yaml_is_tracked(self):
         repo_root = Path(__file__).parent.parent
-        pipeline_root = repo_root / "pipelines"
-        actual = {
-            str(path.relative_to(pipeline_root))
-            for path in pipeline_root.rglob("*.yaml")
-        }
-        assert actual == set(self.PIPELINES)
-        assert len(actual) == 18
+        tracked = subprocess.run(
+            ["git", "ls-files", "pipelines/*.yaml", "pipelines/**/*.yaml"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        assert tracked == []
 
-    @pytest.mark.parametrize("pipeline_relpath", PIPELINES)
-    def test_all_repository_pipelines_dry_run(self, pipeline_relpath):
-        from unison.pipeline import PipelineLoader
-
+    def test_no_internal_or_generated_assets_are_tracked(self):
         repo_root = Path(__file__).parent.parent
-        pipeline_file = repo_root / "pipelines" / pipeline_relpath
-        assert pipeline_file.is_file(), f"missing pipeline: {pipeline_relpath}"
-
-        loader = PipelineLoader()
-        spec = loader.load(pipeline_file)
-        assert loader.dry_run(spec) is True
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=repo_root, check=True,
+            capture_output=True, text=True,
+        ).stdout.splitlines()
+        forbidden_prefixes = (
+            "build/", ".plan/", ".unison/", "observer/", "prd/",
+            "reviews/runs/", "scripts/", "pipelines/optimization/",
+        )
+        forbidden_prompt_names = (
+            "prompts/dev-phase", "prompts/dev-a2a-debate",
+        )
+        leaked = [
+            path for path in tracked
+            if path.startswith(forbidden_prefixes)
+            or path.startswith(forbidden_prompt_names)
+            or (
+                path.startswith("prompts/p")
+                and len(path) > len("prompts/p")
+                and path[len("prompts/p")].isdigit()
+            )
+        ]
+        assert leaked == []
 
 
 # ============================================================================

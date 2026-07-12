@@ -1,12 +1,14 @@
 # Unison
-observer/logs/
+observer/
 *.log
 .unison/
 .venv/
 __pycache__/
 *.pyc
 
-# Internal dev pipelines
+# Internal dev pipelines and scripts
+pipelines/*.yaml
+pipelines/**/*.yaml
 phase*.yaml
 fix-*.yaml
 mode-system.yaml
@@ -18,19 +20,14 @@ ROADMAP.md
 
 # Internal PRDs & working files
 prd/
-prd/prd-fix*.md
-prd/PRD-phase*.md
-prd/PRD-v2-fix.bak.md
-prd/PRD-mode-system.md
-prd/PRD-parallel-system.md
-prd/tech-design-phase*.md
-prd/tech-design-v2-fix.bak.md
-prd/*.bak
 PRD.md
 tech-design.md
-prd/README-V2-FIX.md
 
 # Phase-specific prompts
+pipelines/optimization/*.md
+prompts/dev-phase*.md
+prompts/dev-a2a-debate*.md
+prompts/p[0-9]*.md
 prompts/developer-phase*.md
 prompts/planner-phase*.md
 prompts/reviewer-phase*.md
@@ -53,6 +50,7 @@ reviews/*.md
 v2-review-codex.md
 
 # Runtime state
+.plan/
 .budget.json
 state.json
 
@@ -69,20 +67,23 @@ auth.json
 .DS_Store
 
 # Dependencies
+uv.lock
 node_modules/
 webui-v2-*.yaml
 v2-fix-pipeline.yaml
 
+# Internal scripts
+scripts/
+
 # Python build artifacts
+build/
 src/unison.egg-info/
 dist/
 *.egg-info/
 
-# Internal scripts
-scripts/
-
 # Dev pipeline configs (use .unison/pipelines/ instead)
 p[0-9]*.yaml
 
-# Review archives (runtime artifacts)
+# Review archives and run artifacts
 reviews/archive/
+reviews/runs/

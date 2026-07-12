@@ -83,6 +83,10 @@ project:
   max_iterations: 5
 ```
 
+### Pipeline configuration
+
+Unison does not ship SEAN's internal pipeline YAML or run artifacts. Create project-local configuration from the minimal example above, `unison init`, or `unison new`; private pipeline files must remain outside the Git index.
+
 ---
 
 ## Commands

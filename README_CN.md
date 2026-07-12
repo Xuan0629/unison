@@ -88,6 +88,10 @@ project:
   max_iterations: 5
 ```
 
+### Pipeline 配置
+
+Unison 不随仓库发布 SEAN 的内部 pipeline YAML 或运行产物。请使用上面的最小示例、`unison init` 或 `unison new` 创建项目本地配置；私有 pipeline 文件必须保持在 Git 索引之外。
+
 ---
 
 ## 命令
