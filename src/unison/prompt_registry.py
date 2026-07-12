@@ -257,7 +257,7 @@ class PromptRegistry:
         ),
         "reviewer::discuss": (
             "Discussion Review Iteration {iteration}: "
-            "1. Read prd/PRD.md and prd/tech-design.md for context\n"
+            "1. Read {prd_dir}PRD.md and {prd_dir}tech-design.md for context\n"
             "2. Read reviews/dev-proposal.md — the Developer's implementation plan\n"
             "3. Critique: scope correct? files right? tech approach reasonable? "
             "boundaries clear? test plan adequate?\n"

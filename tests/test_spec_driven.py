@@ -676,12 +676,75 @@ agents:
         assert "spec-driven" in orch.state().halt_reason.lower()
         assert "multi-planner" in orch.state().halt_reason.lower()
 
-    def test_multi_planner_full_dev_does_not_halt(self, tmp_path):
-        """Multi-planner in full-dev mode does NOT trigger the guard."""
+    def test_multi_reviewer_uses_scoped_context_and_outputs(self, tmp_path):
+        """Every parallel reviewer reads and writes inside the active run."""
+        import re
+        from dataclasses import replace
+        from unittest.mock import MagicMock
+
         orch = self._make_orchestrator(tmp_path, mode="full-dev")
-        # Just verify the mode is set correctly and the guard would not fire
-        # (the actual invocation would try to run agents, so we only verify
-        # the mode check passes)
-        assert orch.spec.mode == "full-dev"
-        # The guard only fires for spec-driven
-        assert orch.spec.mode != "spec-driven"
+        base = orch._resolve_agent("reviewer")
+        assert base is not None
+        reviewers = [base, replace(base, role="reviewer-b")]
+        scoped_prd = orch.spec.world.prd_dir_for(orch._run_ctx.pipeline_key)
+        scoped_reviews = orch.spec.world.reviews_dir_for(orch._run_ctx)
+        seen_prompts = []
+        fake_runner = MagicMock()
+
+        def run_reviewer(spec, prompt, workdir, timeout, log_path):
+            seen_prompts.append(prompt)
+            match = re.search(r"Write review to (\S+)", prompt)
+            assert match is not None
+            review_path = Path(match.group(1))
+            assert scoped_reviews in review_path.parents
+            review_path.parent.mkdir(parents=True, exist_ok=True)
+            review_path.write_text(
+                "---\nverdict: PASS\nsummary: ok\nfindings: []\n---\n"
+            )
+            return MagicMock(success=True, exit_code=0, error="")
+
+        fake_runner.run.side_effect = run_reviewer
+        orch._runners["claude"] = fake_runner
+        orch._detector.detect = MagicMock()
+        orch._invoke_multi_reviewer(
+            iteration=1, review_phase="planning_review",
+            agent_specs=reviewers,
+        )
+
+        assert len(seen_prompts) == 2
+        assert fake_runner.run.call_count == 2
+        assert all(str(scoped_prd.relative_to(tmp_path)) in p for p in seen_prompts)
+        assert len(list(scoped_reviews.glob("iter-1-R*.md"))) == 2
+        assert orch._review_file_for_phase("planning_review", 1).exists()
+        assert not list((tmp_path / "reviews").glob("iter-1-R*.md"))
+
+    def test_multi_planner_full_dev_writes_only_scoped_prd(self, tmp_path):
+        """Multi-planner candidates and canonical output stay pipeline-scoped."""
+        from unittest.mock import MagicMock
+
+        orch = self._make_orchestrator(tmp_path, mode="full-dev")
+        planner_agents = orch._resolve_agents("planner")
+        scoped_dir = orch.spec.world.prd_dir_for(orch._run_ctx.pipeline_key)
+
+        fake_runner = MagicMock()
+
+        def run_planner(spec, prompt, workdir, timeout, log_path):
+            assert str(scoped_dir.relative_to(workdir)) in prompt
+            assert "to PRD.md" not in prompt
+            assert "to tech-design.md" not in prompt
+            (scoped_dir / f"PRD-{spec.role}.md").write_text(spec.role)
+            (scoped_dir / f"tech-design-{spec.role}.md").write_text(
+                f"{spec.role}-design"
+            )
+            return MagicMock(success=True, exit_code=0, error="")
+
+        fake_runner.run.side_effect = run_planner
+        orch._runners["claude"] = fake_runner
+        orch._invoke_multi_planner(
+            planner_agents, iteration=1, parallel_mode="homogeneous"
+        )
+
+        assert (scoped_dir / "PRD.md").read_text() == "planner-a"
+        assert (scoped_dir / "tech-design.md").read_text() == "planner-a-design"
+        assert not orch.spec.world.prd.is_symlink()
+        assert not (tmp_path / "prd" / "PRD-planner-a.md").exists()

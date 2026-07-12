@@ -2397,8 +2397,17 @@ class Orchestrator:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         world = self.spec.world
-        prd_dir = world.root / "prd"
+        ctx = getattr(self, "_run_ctx", None)
+        prd_dir = (
+            world.prd_dir_for(ctx.pipeline_key)
+            if ctx is not None
+            else world.root / "prd"
+        )
         prd_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            prompt_prd_dir = prd_dir.relative_to(world.root)
+        except ValueError:
+            prompt_prd_dir = prd_dir
 
         def plan_one(spec: AgentSpec) -> None:
             runner = self._runners.get(spec.runtime)
@@ -2416,13 +2425,14 @@ class Orchestrator:
                 "planner", iteration,
                 test_command=self.spec.project.test_command,
                 mode=self.spec.mode,
+                prd_dir=str(prompt_prd_dir).rstrip("/") + "/",
             )
             prompt = (
                 f"=== Multi-Planner: {spec.role} ===\n"
                 f"Role: {spec.role} (pipeline_role: planner)\n"
                 f"{task}\n"
-                f"- Write PRD to prd/PRD-{spec.role}.md\n"
-                f"- Write tech-design to prd/tech-design-{spec.role}.md\n"
+                f"- Write PRD to {prompt_prd_dir}/PRD-{spec.role}.md\n"
+                f"- Write tech-design to {prompt_prd_dir}/tech-design-{spec.role}.md\n"
                 f"- Do NOT modify src/ or tests/"
             )
             # If agent has a task_instruction, prepend it
@@ -2475,8 +2485,8 @@ class Orchestrator:
             first_role = agent_specs[0].role
             first_prd = prd_dir / f"PRD-{first_role}.md"
             first_design = prd_dir / f"tech-design-{first_role}.md"
-            canonical_prd = world.prd
-            canonical_design = world.tech_design
+            canonical_prd = prd_dir / "PRD.md"
+            canonical_design = prd_dir / "tech-design.md"
             if first_prd.exists():
                 canonical_prd.parent.mkdir(parents=True, exist_ok=True)
                 if canonical_prd.exists() or canonical_prd.is_symlink():
@@ -2810,8 +2820,14 @@ class Orchestrator:
         from unison.reviewer_pool import ReviewerPool
 
         world = self.spec.world
+        ctx = getattr(self, "_run_ctx", None)
+        reviews_dir = (
+            world.reviews_dir_for(ctx)
+            if ctx is not None
+            else world.reviews_dir
+        )
+        reviews_dir.mkdir(parents=True, exist_ok=True)
 
-        # ---- resolve agent specs (Pipeline B: heterogeneous when multiple) ----
         if agent_specs is not None and len(agent_specs) > 0:
             use_heterogeneous = True
             reviewer_count = len(agent_specs)
@@ -2842,7 +2858,7 @@ class Orchestrator:
         def review_one(code_path: Path) -> ReviewVerdict:
             """Run a single reviewer agent and return its parsed verdict."""
             idx = next(reviewer_idx)
-            review_path = world.reviews_dir / f"iter-{iteration}-R{idx}.md"
+            review_path = reviews_dir / f"iter-{iteration}-R{idx}.md"
 
             if use_heterogeneous:
                 spec = agent_specs[idx]
@@ -2868,13 +2884,21 @@ class Orchestrator:
             else:
                 focus = ""
 
-            review_file = str(world.reviews_dir / f"iter-{iteration}-R{idx}.md")
+            review_file = str(review_path)
             task = self._registry.task_for(
                 "reviewer", iteration,
                 test_command=self.spec.project.test_command,
                 review_file=review_file,
+                review_phase=review_phase,
                 mode=self.spec.mode,
+                prd_dir=self._scoped_prd_dir(),
             )
+            if review_phase != "discuss_review":
+                prd_dir = self._scoped_prd_dir()
+                task += (
+                    f"\n6. Read {prd_dir}PRD.md and "
+                    f"{prd_dir}tech-design.md for the active pipeline context."
+                )
 
             header = (
                 f"=== Review Iteration {iteration} "

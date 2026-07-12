@@ -112,6 +112,18 @@ class TestPromptRegistry:
         assert "reviews/iter-3.md" in task
         assert "YAML frontmatter" in task
 
+    def test_discussion_reviewer_uses_scoped_prd_dir(self):
+        """Discussion reviews read the active pipeline's PRD and design."""
+        registry = PromptRegistry()
+        task = registry.task_for(
+            "reviewer", iteration=1, review_phase="discuss_review",
+            review_file="reviews/discuss-1.md",
+            prd_dir="prd/runs/pipeline-a/",
+        )
+        assert "prd/runs/pipeline-a/PRD.md" in task
+        assert "prd/runs/pipeline-a/tech-design.md" in task
+        assert "Read prd/PRD.md" not in task
+
     def test_task_for_reviewer_includes_anti_sycophancy(self):
         """task_for() appends anti-sycophancy note when provided."""
         registry = PromptRegistry()
