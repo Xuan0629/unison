@@ -2074,7 +2074,11 @@ class Orchestrator:
     def _evaluate_post_invoke_risk(
         self, workspace: Path, snapshot_ids: list[str]
     ) -> bool:
-        """Scan git diff for external changes, evaluate risk, restore on L3.
+        """Scan git diff + external paths for changes, evaluate risk, restore on L3.
+
+        P0-8: Also checks external_paths (e.g. ~/.hermes/skills/) which are
+        outside the git repo and invisible to git diff.  If any snapshot shows
+        modification, treat it as L3 and restore.
 
         Returns True if execution was halted (L3 violation → restore).
         """
@@ -2083,8 +2087,14 @@ class Orchestrator:
         if evaluator is None or mgr is None:
             return False
 
-        # Get list of files changed by the agent
+        # Get list of files changed by the agent (git repo)
         changed_files = self._get_git_diff_files(workspace)
+
+        # P0-8: Also check external paths for modifications
+        if not changed_files and snapshot_ids:
+            if self._check_external_paths_modified(snapshot_ids):
+                changed_files = [("external_paths", Operation.MODIFY)]
+
         if not changed_files:
             return False
 
