@@ -415,6 +415,7 @@ class PipelineLoader:
                 task_instruction=ad.get("task_instruction"),
                 pipeline_role=ad.get("pipeline_role"),
                 context_budget=ad.get("context_budget"),
+                reasoning_effort=ad.get("reasoning_effort"),
             )
 
         # Bug 3: Require explicit pipeline_role on every agent.
