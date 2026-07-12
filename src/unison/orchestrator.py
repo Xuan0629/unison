@@ -4120,7 +4120,12 @@ class Orchestrator:
         """
         pid_dir = Path.home() / ".unison" / "observer"
         pid_dir.mkdir(parents=True, exist_ok=True)
-        pid_file = pid_dir / f"{self.spec.world.root.name}.pid"
+        # P1-6: Use project_id hash to match Observer's PID file naming
+        import hashlib
+        project_id = hashlib.sha256(
+            str(self.spec.world.root.resolve()).encode()
+        ).hexdigest()[:16]
+        pid_file = pid_dir / f"{project_id}.pid"
 
         # Check existing Observer
         if pid_file.exists():
