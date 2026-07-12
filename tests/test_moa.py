@@ -20,9 +20,16 @@ class TestMoaConfigDefaults:
         """MoaConfig has sensible defaults."""
         cfg = MoaConfig()
         assert cfg.agents == 3
-        assert cfg.rounds == 2
+        assert cfg.rounds == 1
         assert cfg.runtime == "claude"
         assert cfg.model == "deepseek-v4-pro"
+        assert cfg.analyzer_runtime == "claude"
+        assert cfg.analyzer_model == "deepseek-v4-pro"
+        assert cfg.synthesizer_runtime == "claude"
+        assert cfg.synthesizer_model == "deepseek-v4-pro"
+        assert cfg.granularity == "auto"
+        assert cfg.target == ""
+        assert cfg.scope == ""
 
     def test_custom_values(self):
         """MoaConfig accepts custom values."""
@@ -31,6 +38,26 @@ class TestMoaConfigDefaults:
         assert cfg.rounds == 3
         assert cfg.runtime == "hermes"
         assert cfg.model == "gpt-4"
+
+    def test_role_specific_models(self):
+        cfg = MoaConfig(
+            analyzer_runtime="hermes",
+            analyzer_model="fast-model",
+            synthesizer_runtime="claude",
+            synthesizer_model="strong-model",
+        )
+        assert cfg.analyzer_runtime == "hermes"
+        assert cfg.analyzer_model == "fast-model"
+        assert cfg.synthesizer_runtime == "claude"
+        assert cfg.synthesizer_model == "strong-model"
+
+    @pytest.mark.parametrize("granularity", ["auto", "compact", "standard", "deep"])
+    def test_valid_granularity(self, granularity):
+        assert MoaConfig(granularity=granularity).granularity == granularity
+
+    def test_invalid_granularity_rejected(self):
+        with pytest.raises(ValueError, match="moa.granularity"):
+            MoaConfig(granularity="huge")
 
     def test_non_frozen(self):
         """MoaConfig is non-frozen (allows __post_init__ validation)."""
@@ -103,18 +130,34 @@ agents:
     system_prompt_path: "prompts/reviewer.md"
 moa:
   agents: 5
-  rounds: 3
+  rounds: 1
   runtime: hermes
   model: gpt-4
+  analyzer:
+    runtime: hermes
+    model: fast-model
+  synthesizer:
+    runtime: claude
+    model: strong-model
+  granularity: deep
+  target: https://github.com/acme/project
+  scope: src/core.py
 """)
         loader = PipelineLoader()
         spec = loader.load(pipeline_file)
 
         assert spec.moa is not None
         assert spec.moa.agents == 5
-        assert spec.moa.rounds == 3
+        assert spec.moa.rounds == 1
         assert spec.moa.runtime == "hermes"
         assert spec.moa.model == "gpt-4"
+        assert spec.moa.analyzer_runtime == "hermes"
+        assert spec.moa.analyzer_model == "fast-model"
+        assert spec.moa.synthesizer_runtime == "claude"
+        assert spec.moa.synthesizer_model == "strong-model"
+        assert spec.moa.granularity == "deep"
+        assert spec.moa.target == "https://github.com/acme/project"
+        assert spec.moa.scope == "src/core.py"
 
     def test_moa_section_absent_returns_none(self, tmp_path):
         """No moa: section → spec.moa is None."""
@@ -164,12 +207,36 @@ moa:
 
         assert spec.moa is not None
         assert spec.moa.agents == 4
-        assert spec.moa.rounds == 2  # default
-        assert spec.moa.runtime == "claude"  # default
-        assert spec.moa.model == "deepseek-v4-pro"  # default
+        assert spec.moa.rounds == 1  # canonical MoA is single fan-out/fan-in
+        assert spec.moa.runtime == "claude"  # legacy analyzer default
+        assert spec.moa.model == "deepseek-v4-pro"  # legacy analyzer default
+
+    def test_invalid_nested_role_config_rejected(self, tmp_path):
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text('''version: "1.0"
+mode: moa:analyze
+project_root: "."
+moa:
+  analyzer: fast-model
+''')
+        with pytest.raises(Exception, match="moa.analyzer must be a mapping"):
+            PipelineLoader().load(pipeline_file)
+
+    @pytest.mark.parametrize("field", ["target", "scope"])
+    def test_target_and_scope_must_be_strings(self, tmp_path, field):
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f'''version: "1.0"
+mode: moa:review
+project_root: "."
+moa:
+  {field}:
+    invalid: value
+''')
+        with pytest.raises(Exception, match=f"moa.{field} must be a string"):
+            PipelineLoader().load(pipeline_file)
 
     def test_moa_mode_detected(self, tmp_path):
-        """mode: moa is preserved in PipelineSpec."""
+        """Legacy mode: moa loads as an analyze-compatible alias."""
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text("""
 version: "1.0"
@@ -188,7 +255,8 @@ agents:
     system_prompt_path: "prompts/reviewer.md"
 """)
         loader = PipelineLoader()
-        spec = loader.load(pipeline_file)
+        with pytest.warns(DeprecationWarning, match="moa:analyze"):
+            spec = loader.load(pipeline_file)
 
         assert spec.mode == "moa"
 
@@ -237,9 +305,202 @@ moa:
         assert spec.agents == {}  # no agents defined
 
 
-# ============================================================================
-# Phase Sequence
-# ============================================================================
+class TestMoaSubmodeContracts:
+    @staticmethod
+    def _make_orchestrator(tmp_path, mode, moa_yaml=""):
+        from unison.orchestrator import Orchestrator
+
+        for directory in ["prompts", "prd", "reviews", ".unison"]:
+            (tmp_path / directory).mkdir(exist_ok=True)
+        (tmp_path / "prompts" / "moa-analyzer.md").write_text("analyzer")
+        (tmp_path / "prompts" / "moa-synthesizer.md").write_text("synthesizer")
+        pipeline_file = tmp_path / f"{mode.replace(':', '-')}.yaml"
+        pipeline_file.write_text(f'''version: "1.0"
+mode: {mode}
+project_root: "."
+project:
+  name: contract-test
+moa:
+  agents: 2
+{moa_yaml}
+''')
+        return Orchestrator(PipelineLoader().load(pipeline_file))
+
+    def test_non_moa_contract_request_is_rejected(self, tmp_path):
+        from unison.pipeline import PipelineValidationError
+
+        orch = self._make_orchestrator(tmp_path, "moa:analyze")
+        with pytest.raises(PipelineValidationError, match="requires a MoA mode"):
+            orch._moa_contract(orch.spec.moa, mode="chain")
+
+    def test_default_pipeline_runs_one_analyze_and_one_synthesis(
+        self, tmp_path, monkeypatch
+    ):
+        from unittest.mock import MagicMock
+
+        orch = self._make_orchestrator(tmp_path, "moa:analyze")
+        analyze = MagicMock()
+        synthesis = MagicMock()
+        monkeypatch.setattr(orch, "_run_moa_analyze", analyze)
+        monkeypatch.setattr(orch, "_run_moa_synthesis", synthesis)
+        monkeypatch.setattr(orch, "_save_checkpoint", MagicMock())
+        monkeypatch.setattr(orch, "_archive_reviews", MagicMock())
+        monkeypatch.setattr(orch, "_count_commits", lambda: 0)
+        monkeypatch.setattr(orch, "_publish_phase_event", MagicMock())
+        monkeypatch.setattr(orch, "_write_lifecycle_notification", MagicMock())
+
+        orch._run_moa_pipeline()
+
+        analyze.assert_called_once()
+        synthesis.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("mode", "artifact", "required_prompt"),
+        [
+            ("moa:analyze", "reviews/moa-analysis.md", "open_questions"),
+            ("moa:plan", "prd/moa-plan.md", "granularity: deep"),
+            ("moa:review", "reviews/moa-review.md", "must_fix"),
+        ],
+    )
+    def test_submode_uses_distinct_output_contract(
+        self, tmp_path, mode, artifact, required_prompt, monkeypatch
+    ):
+        from unison.interfaces import AgentResult
+
+        moa_yaml = "  granularity: deep\n  target: .\n  scope: src/core.py\n"
+        orch = self._make_orchestrator(tmp_path, mode, moa_yaml)
+        reviews_dir = orch.spec.world.reviews_dir_for(orch._run_ctx)
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        for index in range(1, 3):
+            (reviews_dir / f"moa-moa-agent{index}-round1.md").write_text(
+                "analysis " * 20
+            )
+
+        captured = {}
+
+        class FakeRunner:
+            def run(self, spec, prompt, workdir, timeout, log_path):
+                captured["spec"] = spec
+                captured["prompt"] = prompt
+                output = Path(orch._moa_contract(orch.spec.moa)["artifact"])
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text("synthesis " * 20)
+                return AgentResult(
+                    success=True, exit_code=0, duration=0,
+                    stdout_tail="", stderr_tail="", log_path=log_path,
+                )
+
+        orch._runners["claude"] = FakeRunner()
+        orch._run_moa_synthesis_unprotected(1, orch.spec.moa)
+
+        assert required_prompt in captured["prompt"]
+        assert captured["spec"].model == "deepseek-v4-pro"
+        expected = Path(orch._moa_contract(orch.spec.moa)["artifact"])
+        assert expected.exists()
+
+    def test_analyzers_use_analyzer_model_and_distinct_perspectives(self, tmp_path):
+        from threading import Lock
+        from unison.interfaces import AgentResult
+
+        orch = self._make_orchestrator(
+            tmp_path,
+            "moa:review",
+            "  analyzer:\n    model: fast-model\n"
+            "  synthesizer:\n    model: strong-model\n"
+            "  target: .\n  scope: src/core.py\n",
+        )
+        calls = []
+        lock = Lock()
+
+        class FakeRunner:
+            def run(self, spec, prompt, workdir, timeout, log_path):
+                output_marker = "Write your analysis to: "
+                output = Path(prompt.split(output_marker, 1)[1].splitlines()[0])
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text("analysis " * 20)
+                with lock:
+                    calls.append((spec.model, prompt))
+                return AgentResult(
+                    success=True, exit_code=0, duration=0,
+                    stdout_tail="", stderr_tail="", log_path=log_path,
+                )
+
+        orch._runners["claude"] = FakeRunner()
+        orch._run_moa_analyze_unprotected(1, orch.spec.moa)
+
+        assert len(calls) == 2
+        assert {model for model, _ in calls} == {"fast-model"}
+        assert all("Scope: src/core.py" in prompt for _, prompt in calls)
+        perspectives = {
+            prompt.split("Primary perspective: ", 1)[1].splitlines()[0]
+            for _, prompt in calls
+        }
+        assert len(perspectives) == 2
+
+    def test_synthesizer_rejects_non_substantive_output(self, tmp_path):
+        from unison.interfaces import AgentResult
+
+        orch = self._make_orchestrator(tmp_path, "moa:analyze")
+        reviews_dir = orch.spec.world.reviews_dir_for(orch._run_ctx)
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        (reviews_dir / "moa-moa-agent1-round1.md").write_text("analysis " * 20)
+
+        class FakeRunner:
+            def run(self, spec, prompt, workdir, timeout, log_path):
+                output = Path(orch._moa_contract(orch.spec.moa)["artifact"])
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text("TBD")
+                return AgentResult(
+                    success=True, exit_code=0, duration=0,
+                    stdout_tail="", stderr_tail="", log_path=log_path,
+                )
+
+        orch._runners["claude"] = FakeRunner()
+        orch._run_moa_synthesis_unprotected(1, orch.spec.moa)
+        assert orch.state().halt_signal is True
+        assert "not substantive" in (orch.state().halt_reason or "")
+
+    def test_synthesizer_does_not_run_when_all_analyses_are_empty(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        orch = self._make_orchestrator(tmp_path, "moa:review")
+        reviews_dir = orch.spec.world.reviews_dir_for(orch._run_ctx)
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        (reviews_dir / "moa-moa-agent1-round1.md").write_text("short")
+        runner = MagicMock()
+        orch._runners["claude"] = runner
+
+        orch._run_moa_synthesis_unprotected(1, orch.spec.moa)
+
+        assert orch.state().halt_signal is True
+        runner.run.assert_not_called()
+
+    def test_synthesizer_uses_its_own_model(self, tmp_path):
+        from unison.interfaces import AgentResult
+
+        orch = self._make_orchestrator(
+            tmp_path,
+            "moa:analyze",
+            "  analyzer:\n    model: fast-model\n"
+            "  synthesizer:\n    model: strong-model\n",
+        )
+        reviews_dir = orch.spec.world.reviews_dir_for(orch._run_ctx)
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        (reviews_dir / "moa-moa-agent1-round1.md").write_text("analysis " * 20)
+        seen_models = []
+
+        class FakeRunner:
+            def run(self, spec, prompt, workdir, timeout, log_path):
+                seen_models.append(spec.model)
+                (reviews_dir / "moa-analysis.md").write_text("synthesis " * 20)
+                return AgentResult(
+                    success=True, exit_code=0, duration=0,
+                    stdout_tail="", stderr_tail="", log_path=log_path,
+                )
+
+        orch._runners["claude"] = FakeRunner()
+        orch._run_moa_synthesis_unprotected(1, orch.spec.moa)
+        assert seen_models == ["strong-model"]
 
 
 class TestMoaPhaseSequence:

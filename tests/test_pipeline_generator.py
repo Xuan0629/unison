@@ -46,12 +46,50 @@ class TestDetectMode:
     def test_detect_design_debate_from_spec(self):
         assert detect_mode("write spec for auth module") == "design-debate"
 
+    @pytest.mark.parametrize(
+        ("description", "mode"),
+        [
+            ("MoA analyze competing caching approaches", "moa:analyze"),
+            ("MoA plan a payment platform architecture", "moa:plan"),
+            ("MoA review this repository for security", "moa:review"),
+        ],
+    )
+    def test_detect_explicit_moa_modes(self, description, mode):
+        assert detect_mode(description) == mode
+
     def test_default_falls_back_to_code_dev(self):
         """No matching keywords → default to code-dev."""
         assert detect_mode("do some random task") == "code-dev"
 
     def test_empty_description(self):
         assert detect_mode("") == "code-dev"
+
+
+class TestGenerateMoa:
+    @pytest.mark.parametrize(
+        ("description", "mode"),
+        [
+            ("MoA analyze database choices", "moa:analyze"),
+            ("MoA plan payment architecture", "moa:plan"),
+            ("MoA review local repository", "moa:review"),
+        ],
+    )
+    def test_generated_moa_pipeline_loads(self, tmp_path, description, mode):
+        output = tmp_path / mode.replace(":", "-")
+        output.mkdir()
+        path = generate(description, output_dir=output, yes=True)
+
+        spec = PipelineLoader().load(path)
+        assert spec.mode == mode
+        assert spec.agents == {}
+        assert spec.moa is not None
+        assert spec.moa.rounds == 1
+        assert spec.moa.granularity == "auto"
+        assert spec.moa.analyzer_model == "claude-sonnet-4-6"
+        assert spec.moa.synthesizer_model == "deepseek-v4-pro"
+        assert spec.moa.analyzer_model != spec.moa.synthesizer_model
+        assert (output / "prompts" / "moa-analyzer.md").exists()
+        assert PipelineLoader().dry_run(spec) is True
 
 
 class TestGenerateCodeDev:

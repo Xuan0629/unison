@@ -168,34 +168,20 @@ class PromptRegistry:
         ),
         "moa-analyzer": (
             "# MoA Analyzer Prompt\n\n"
-            "You are an analyzer agent in the Unison MoA (Mixture of Agents) pipeline.\n\n"
-            "## Responsibilities\n"
-            "1. Read the task context (PRD, tech-design, and any previous synthesis)\n"
-            "2. Produce an independent, thorough analysis\n"
-            "3. Cover: approach, risks, edge cases, assumptions, and trade-offs\n"
-            "4. Be opinionated — your unique perspective is valuable for synthesis\n"
-            "5. Do NOT read other agents' analyses (this preserves independence)\n\n"
-            "## Output\n"
-            "Write your analysis to the specified output file in reviews/.\n"
-            "Structure it clearly so the synthesizer can extract key points.\n"
+            "You are one independent analyzer in a fan-out/fan-in MoA pipeline.\n"
+            "Follow the target, scope, mode, and primary perspective supplied by "
+            "the orchestrator. Inspect evidence directly, state assumptions, and "
+            "separate facts from recommendations. Do not read other analyzers' "
+            "outputs and do not synthesize the final artifact. Write only to the "
+            "specified analysis file.\n"
         ),
         "moa-synthesizer": (
             "# MoA Synthesizer Prompt\n\n"
-            "You are a synthesizer agent in the Unison MoA (Mixture of Agents) pipeline.\n\n"
-            "## Responsibilities\n"
-            "1. Read ALL agent analysis files for the current round\n"
-            "2. Identify agreements (all agents concur)\n"
-            "3. Identify disagreements (conflicting views — surface them explicitly)\n"
-            "4. Identify unique insights (only one agent noticed — flag these)\n"
-            "5. Assign confidence levels to conclusions\n"
-            "6. Write a consolidated synthesis to the specified output file\n\n"
-            "## Output Format\n"
-            "Structure your synthesis with clear sections:\n"
-            "- Agreements\n"
-            "- Disagreements (with agent positions)\n"
-            "- Unique Insights\n"
-            "- Confidence Assessment\n"
-            "- Recommended Approach\n"
+            "You are the final synthesizer in a fan-out/fan-in MoA pipeline. "
+            "Read every supplied analysis, reconcile agreements and disagreements, "
+            "deduplicate findings, retain evidence and uncertainty, and obey the "
+            "mode-specific output contract supplied by the orchestrator. Write only "
+            "the canonical output artifact requested by the orchestrator.\n"
         ),
     }
 
@@ -267,19 +253,15 @@ class PromptRegistry:
         ),
         "moa-analyzer": (
             "Iteration {iteration} — MoA Analyzer Operational Constraints:\n"
-            "- Analyze the task described in prd/PRD.md and prd/tech-design.md\n"
-            "- Write your independent analysis to {review_file}\n"
-            "- Focus on: approach, risks, edge cases, assumptions, and trade-offs\n"
-            "- Be opinionated — surface disagreements later phases will reconcile\n"
-            "- Do NOT read other agents' analyses (this is an independent analysis round)"
+            "- Follow the orchestrator-supplied mode, target, scope, and primary perspective\n"
+            "- Write independent evidence-backed analysis to {review_file}\n"
+            "- Do not read other analyzer files or write the canonical synthesis"
         ),
         "moa-synthesizer": (
             "Iteration {iteration} — MoA Synthesizer Operational Constraints:\n"
-            "- Read all agent analysis files in reviews/moa-*-round{iteration}.md\n"
-            "- Write a consolidated synthesis to {review_file}\n"
-            "- Identify: agreements (all agents concur), disagreements (conflicting views),\n"
-            "  unique insights (only one agent noticed), and confidence levels\n"
-            "- Be concise but comprehensive — the next round's agents will read this"
+            "- Read all current analyzer files in reviews/moa-*-round{iteration}.md\n"
+            "- Obey the orchestrator-supplied mode-specific output contract\n"
+            "- Write only the canonical artifact to {review_file}"
         ),
     }
 

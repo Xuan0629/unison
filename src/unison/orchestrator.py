@@ -22,17 +22,14 @@ import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-from unison.interfaces import AgentResult, AgentSpec, MoaConfig, Notification, Operation, PipelineSpec, RedirectControl, ReviewVerdict, VerdictParseError
-from unison.pipeline import PipelineValidationError
+from unison.interfaces import AgentResult, AgentSpec, MOA_MODES, MoaConfig, Notification, Operation, PipelineSpec, RedirectControl, ReviewVerdict, VerdictParseError
+from unison.pipeline import PipelineValidationError, VALID_CHAIN_MODES
 from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
-# P13: Include deprecated mode names for backward compatibility.
-# NOTE: 'chain' is intentionally excluded — chain-in-chain is forbidden.
-_KNOWN_MODES = (
-    (set(PhaseRouter.PHASES_BY_MODE.keys()) - {"chain"})
-    | set(_DEPRECATED_MODE_ALIASES.keys())
-    | {"moa", "dag"}
-)
+# All runtime mode checks derive from PhaseRouter; chain validation uses the
+# single exported set shared with PipelineLoader.
+_KNOWN_MODES = VALID_CHAIN_MODES
 from unison.prompt_registry import PromptRegistry
 from unison.state import State
 from unison.lock import FileLockManager
@@ -510,7 +507,7 @@ class Orchestrator:
         # sequence (which always emits 4 phases regardless of rounds).
         # P0-3: All MoA family modes (moa, moa:analyze, moa:plan, moa:review)
         # dispatch to _run_moa_pipeline — not just bare "moa".
-        if mode in ("moa", "moa:analyze", "moa:plan", "moa:review"):
+        if mode in MOA_MODES:
             self._run_moa_pipeline()
             return
 
@@ -596,17 +593,90 @@ class Orchestrator:
     # MoA (Mixture of Agents) handlers
     # ==================================================================
 
+    def _moa_mode(self, mode: str | None = None) -> str:
+        """Return the semantic MoA operation, normalizing legacy bare mode."""
+        selected = mode or self.spec.mode or "moa:analyze"
+        return "analyze" if selected == "moa" else selected.removeprefix("moa:")
+
+    def _moa_contract(self, moa_config, mode: str | None = None) -> dict[str, Any]:
+        """Single source of truth for MoA prompts and canonical artifacts."""
+        mode = self._moa_mode(mode)
+        world = self.spec.world
+        ctx = getattr(self, "_run_ctx", None)
+        reviews_dir = (
+            world.reviews_dir_for(ctx) if ctx is not None else world.reviews_dir
+        )
+        prd_dir = (
+            world.prd_dir_for(ctx.pipeline_key)
+            if ctx is not None
+            else world.root / "prd"
+        )
+        target = moa_config.target or str(world.root)
+        scope = moa_config.scope or "entire target"
+        if mode not in {"analyze", "plan", "review"}:
+            raise PipelineValidationError(
+                f"MoA contract requires a MoA mode, got {mode!r}"
+            )
+        contracts = {
+            "analyze": {
+                "dimensions": [
+                    "problem framing and assumptions",
+                    "approaches and alternatives",
+                    "risks and edge cases",
+                    "evidence and trade-offs",
+                ],
+                "artifact": reviews_dir / "moa-analysis.md",
+                "synthesis": (
+                    "Produce a general analysis report with sections: summary, "
+                    "dimensions, agreements, disagreements, risks, recommendations, "
+                    "and open_questions. Do not turn it into a PRD or code review."
+                ),
+            },
+            "plan": {
+                "dimensions": [
+                    "product requirements and success criteria",
+                    "architecture and system boundaries",
+                    "technology choices and trade-offs",
+                    "specification, testing, delivery, and operations",
+                ],
+                "artifact": prd_dir / "moa-plan.md",
+                "synthesis": (
+                    f"Produce one canonical planning document at granularity: "
+                    f"{moa_config.granularity}. Cover PRD, architecture, technology "
+                    "choices, and specification. For auto granularity, choose depth "
+                    "based on task complexity and state that choice. Compact may merge "
+                    "sections; standard/deep must make all four explicit."
+                ),
+            },
+            "review": {
+                "dimensions": [
+                    "correctness and contract compliance",
+                    "security, isolation, and failure handling",
+                    "architecture, maintainability, and performance",
+                    "tests, regressions, evidence, and scope discipline",
+                ],
+                "artifact": reviews_dir / "moa-review.md",
+                "synthesis": (
+                    "Produce a review report with exactly two finding groups: must_fix "
+                    "and strengthen. Every finding must include severity, evidence, "
+                    "location, and recommendation. Do not mix mandatory defects with "
+                    "optional optimization."
+                ),
+            },
+        }
+        contract = dict(contracts[mode])
+        contract["mode"] = mode
+        contract["target"] = target
+        contract["scope"] = scope
+        return contract
+
     def _run_moa_pipeline(self) -> None:
-        """Run the full MoA pipeline: N rounds of analyze→synthesize.
+        """Run MoA fan-out/fan-in analysis and synthesis.
 
-        Unlike other pipeline modes, MoA does not iterate PhaseRouter
-        phases.  It generates the phase sequence dynamically from
-        ``MoaConfig.rounds``, running an analyze batch followed by a
-        single synthesizer for each round.
-
-        Round 1 uses "moa-analyze" / "moa-synthesize" naming; subsequent
-        rounds use "moa-rebuttal" / "moa-synthesize"; the final round's
-        synthesize is named "moa-finalize".
+        The default is one parallel analyzer batch followed by one stronger
+        synthesizer. ``rounds > 1`` is an explicit rebuttal override, not the
+        canonical default. Mode-specific prompts and artifacts come from
+        :meth:`_moa_contract`.
         """
         moa_config = self.spec.moa or MoaConfig()
 
@@ -616,13 +686,13 @@ class Orchestrator:
         for i in range(1, moa_config.agents + 1):
             moa_agents.append({
                 "role": f"moa-analyzer-{i}",
-                "runtime": moa_config.runtime,
-                "model": moa_config.model,
+                "runtime": moa_config.analyzer_runtime,
+                "model": moa_config.analyzer_model,
             })
         moa_agents.append({
             "role": "moa-synthesizer",
-            "runtime": moa_config.runtime,
-            "model": moa_config.model,
+            "runtime": moa_config.synthesizer_runtime,
+            "model": moa_config.synthesizer_model,
         })
         self._state.runtime_agents.extend(moa_agents)
 
@@ -740,14 +810,19 @@ class Orchestrator:
         )
         reviews_dir.mkdir(parents=True, exist_ok=True)
 
+        contract = self._moa_contract(moa_config)
+        dimensions = "\n".join(
+            f"- {dimension}" for dimension in contract["dimensions"]
+        )
+
         # Generate dynamic agent specs
         agent_specs: list[AgentSpec] = []
         for i in range(1, moa_config.agents + 1):
             role = f"moa-agent{i}"
             agent_specs.append(AgentSpec(
                 role=role,
-                runtime=moa_config.runtime,  # type: ignore[arg-type]
-                model=moa_config.model,
+                runtime=moa_config.analyzer_runtime,  # type: ignore[arg-type]
+                model=moa_config.analyzer_model,
                 system_prompt_path=Path("prompts/moa-analyzer.md"),
                 pipeline_role="analyzer",
             ))
@@ -755,7 +830,7 @@ class Orchestrator:
         # Read previous synthesis for rebuttal context
         synthesis_context = ""
         if round_n > 1:
-            prev_synthesis = reviews_dir / f"moa-synthesis-round{round_n - 1}.md"
+            prev_synthesis = Path(contract["artifact"])
             if prev_synthesis.exists():
                 raw = prev_synthesis.read_text(encoding="utf-8")
                 # Truncate to 24KB to keep context manageable while
@@ -796,8 +871,17 @@ class Orchestrator:
             )
 
             # Build prompt
+            primary_dimension = contract["dimensions"][
+                (int(spec.role.removeprefix("moa-agent")) - 1)
+                % len(contract["dimensions"])
+            ]
             prompt_parts = [
-                f"=== MoA Analyzer: {spec.role} (Round {round_n}) ===",
+                f"=== MoA {contract['mode'].title()} Analyzer: "
+                f"{spec.role} (Round {round_n}) ===",
+                f"Target: {contract['target']}",
+                f"Scope: {contract['scope']}",
+                f"Primary perspective: {primary_dimension}",
+                f"All required dimensions:\n{dimensions}",
                 task,
             ]
             if synthesis_context:
@@ -858,6 +942,16 @@ class Orchestrator:
                 )
                 failed_agents.append(spec.role)
                 return
+            output_text = output_file.read_text(encoding="utf-8").strip()
+            if len(output_text) < 100 or output_text.upper() in {"TBD", "TODO"}:
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "MoA analyze round %d: %s output is not substantive",
+                    round_n, spec.role,
+                )
+                failed_agents.append(spec.role)
+                return
 
             # Budget tracking
             tracker = self._get_budget_tracker("analyzer")
@@ -890,6 +984,59 @@ class Orchestrator:
                 f"Failed: {', '.join(failed_agents)}"
             )
             return
+
+    def _copy_chain_outputs(
+        self, stage, stage_index: int, root: Path, moa_config=None
+    ) -> None:
+        """Copy a completed stage's declared outputs to downstream inputs."""
+        aliases: dict[str, Path] = {}
+        if stage.mode in MOA_MODES and moa_config is not None:
+            contract = self._moa_contract(moa_config, mode=stage.mode)
+            artifact = Path(contract["artifact"])
+            artifact_aliases = {
+                "analyze": "reviews/moa-analysis.md",
+                "review": "reviews/moa-review.md",
+                "plan": "prd/moa-plan.md",
+            }
+            aliases[artifact_aliases[contract["mode"]]] = artifact
+
+        for src_rel, dst_rel in stage.output_map.items():
+            if not isinstance(src_rel, str) or not isinstance(dst_rel, str):
+                raise PipelineValidationError(
+                    f"chain stage {stage_index} output_map paths must be strings"
+                )
+            if Path(src_rel).is_absolute():
+                raise PipelineValidationError(
+                    f"chain stage {stage_index} output_map absolute source: "
+                    f"{src_rel}"
+                )
+            if Path(dst_rel).is_absolute():
+                raise PipelineValidationError(
+                    f"chain stage {stage_index} output_map absolute destination: "
+                    f"{dst_rel}"
+                )
+            src = aliases.get(src_rel, root / src_rel)
+            dst = root / dst_rel
+            try:
+                src.resolve().relative_to(root)
+            except ValueError as exc:
+                raise PipelineValidationError(
+                    f"chain stage {stage_index} output_map source path escapes "
+                    f"project root: {src_rel}"
+                ) from exc
+            try:
+                dst.resolve().relative_to(root)
+            except ValueError as exc:
+                raise PipelineValidationError(
+                    f"chain stage {stage_index} output_map destination path escapes "
+                    f"project root: {dst_rel}"
+                ) from exc
+            if not src.exists():
+                raise FileNotFoundError(
+                    f"chain stage {stage_index} output source not found: {src}"
+                )
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(src, dst)
 
     def _run_chain(self) -> None:
         """Run chained pipeline stages sequentially.
@@ -933,38 +1080,7 @@ class Orchestrator:
             self._state.iteration = 0
             self._save_checkpoint(iteration=0)
 
-            # P8 S11: Validate all stage modes at load time before any
-            # stage runs.  A typo in stage 5's mode would otherwise waste
-            # the wall-clock time of stages 1-4 before halting.
-            from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
-            # P13: Include deprecated mode names. chain intentionally excluded.
-            _KNOWN_MODES = (
-                (set(PhaseRouter.PHASES_BY_MODE.keys()) - {"chain"})
-                | set(_DEPRECATED_MODE_ALIASES.keys())
-                | {"moa", "dag"}
-            )
-            for i, stage in enumerate(self.spec.chain.stages):
-                if stage.mode not in _KNOWN_MODES:
-                    self.halt(
-                        f"chain stage {i}: unknown mode {stage.mode!r}. "
-                        f"Known modes: {chr(44).join(sorted(_KNOWN_MODES))}",
-                        category="external",
-                    )
-                    return
-            # P13: Include deprecated mode names for backward compatibility.
-            _KNOWN_MODES = (
-                set(PhaseRouter.PHASES_BY_MODE.keys())
-                | set(_DEPRECATED_MODE_ALIASES.keys())
-                | {"moa", "dag"}
-            )
-            # "dag" is handled by the DAG scheduler; "chain" is already
-            from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
-            # P13: Include deprecated mode names for backward compatibility.
-            _KNOWN_MODES = (
-                set(PhaseRouter.PHASES_BY_MODE.keys())
-                | set(_DEPRECATED_MODE_ALIASES.keys())
-                | {"moa", "dag"}
-            )
+            # Validate all stage modes once from the module-level canonical set.
             for i, stage in enumerate(self.spec.chain.stages):
                 if stage.mode not in _KNOWN_MODES:
                     self.halt(
@@ -984,6 +1100,7 @@ class Orchestrator:
                 # validation or pipeline loading.
                 saved_spec = None
                 saved_mode = None
+                stage_moa_config = None
 
                 self._publish_phase_event("chain_stage",
                                           note=f"stage {i}: {stage.mode}")
@@ -995,69 +1112,7 @@ class Orchestrator:
                 # guarantees self.spec is restored even on early returns
                 # from self.halt() + return inside the try body.
                 try:
-                    # Map upstream outputs → downstream inputs
                     root = self.spec.world.root.resolve()
-                    for src_rel, dst_rel in stage.output_map.items():
-                        # Defence-in-depth: reject path traversal (load-time
-                        # validation via PipelineLoader._validate_output_map
-                        # should already catch these, but verify again in case
-                        # a PipelineSpec was constructed without going through
-                        # PipelineLoader.load).
-                        if not isinstance(src_rel, str) or not isinstance(dst_rel, str):
-                            self.halt(
-                                f"chain stage {i} output_map: all keys and values "
-                                f"must be strings, got {type(src_rel).__name__!r} → "
-                                f"{type(dst_rel).__name__!r}"
-                            )
-                            return
-                        if Path(src_rel).is_absolute():
-                            self.halt(
-                                f"chain stage {i} output_map: source path must be "
-                                f"relative, got absolute: {src_rel!r}"
-                            )
-                            return
-                        if Path(dst_rel).is_absolute():
-                            self.halt(
-                                f"chain stage {i} output_map: destination path must "
-                                f"be relative, got absolute: {dst_rel!r}"
-                            )
-                            return
-                        try:
-                            (root / src_rel).resolve().relative_to(root)
-                        except ValueError:
-                            self.halt(
-                                f"chain stage {i} output_map source path escapes "
-                                f"project root: {src_rel!r} resolves to "
-                                f"{(root / src_rel).resolve()!s}"
-                            )
-                            return
-                        try:
-                            (root / dst_rel).resolve().relative_to(root)
-                        except ValueError:
-                            self.halt(
-                                f"chain stage {i} output_map destination path "
-                                f"escapes project root: {dst_rel!r} resolves to "
-                                f"{(root / dst_rel).resolve()!s}"
-                            )
-                            return
-                        src = root / src_rel
-                        dst = root / dst_rel
-                        if src.exists():
-                            # P8 P1.3: mkdir + copy are now inside the
-                            # outer try/except — OSError here is caught
-                            # and turned into a stage halt instead of
-                            # escaping the chain entirely.
-                            dst.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.copy(src, dst)
-                        else:
-                            # P0.5: log missing source as warning — non-fatal,
-                            # stage may not need it (e.g. optional upstream
-                            # artefact), but it's unusual enough to surface.
-                            _log.warning(
-                                "chain stage %d output_map: source %s not found, "
-                                "skipping copy to %s", i, src_rel, dst_rel,
-                            )
-
                     # Run the stage.
                     # If the stage specifies a pipeline YAML, load it via
                     # PipelineLoader so the stage runs with its own agent/moa/
@@ -1103,9 +1158,14 @@ class Orchestrator:
                     self._state.runtime_agents = []
                     self._state.iteration = 0
 
+                    # Capture stage-owned MoA config explicitly; output mapping
+                    # must not depend on the parent chain spec.
+                    if self.spec.mode in MOA_MODES:
+                        stage_moa_config = self.spec.moa or MoaConfig()
+
                     # P0.3: Populate runtime_agents for non-MoA stages
                     # (_run_moa_pipeline handles its own population).
-                    if self.spec.mode != "moa":
+                    if self.spec.mode not in MOA_MODES:
                         for agent in self.spec.agents.values():
                             self._state.runtime_agents.append({
                                 "role": agent.role,
@@ -1139,6 +1199,17 @@ class Orchestrator:
                         )
                     finally:
                         self._chain_depth -= 1
+
+                    # A stage owns its output_map: copy only after successful
+                    # completion so downstream stages never consume stale or
+                    # partial artifacts.
+                    if not self._state.halt_signal and stage.output_map:
+                        try:
+                            self._copy_chain_outputs(
+                                stage, i, root, moa_config=stage_moa_config
+                            )
+                        except (PipelineValidationError, FileNotFoundError) as exc:
+                            self.halt(str(exc))
                 # P8 P1.3: Catch unexpected exceptions from stage setup
                 # (output_map file ops, pipeline loading, replace() calls)
                 # that previously escaped the chain entirely.
@@ -1276,17 +1347,27 @@ class Orchestrator:
             analyses_text += header + truncated + "\n"
             total_chars = len(analyses_text)
 
+        if not analyses_text.strip():
+            self.halt(
+                f"MoA synthesis round {round_n}: no substantive analysis "
+                "content found — refusing empty synthesis"
+            )
+            return
+
+        contract = self._moa_contract(moa_config)
+
         # Build synthesizer agent spec
         from unison.interfaces import AgentSpec
         synth_spec = AgentSpec(
             role="moa-synthesizer",
-            runtime=moa_config.runtime,  # type: ignore[arg-type]
-            model=moa_config.model,
+            runtime=moa_config.synthesizer_runtime,  # type: ignore[arg-type]
+            model=moa_config.synthesizer_model,
             system_prompt_path=Path("prompts/moa-synthesizer.md"),
             pipeline_role="synthesizer",
         )
 
-        output_file = reviews_dir / f"moa-synthesis-round{round_n}.md"
+        output_file = Path(contract["artifact"])
+        output_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Build task instruction via registry
         task = self._registry.task_for(
@@ -1303,11 +1384,15 @@ class Orchestrator:
 
         full_prompt = (
             f"{system_prompt}\n\n"
-            f"=== MoA Synthesizer (Round {round_n}) ===\n"
+            f"=== MoA {str(contract['mode']).title()} Synthesizer "
+            f"(Round {round_n}) ===\n"
+            f"Target: {contract['target']}\n"
+            f"Scope: {contract['scope']}\n"
+            f"Output contract: {contract['synthesis']}\n\n"
             f"{task}\n\n"
             f"## Agent Analyses (Round {round_n})\n"
             f"{analyses_text}\n\n"
-            f"Write your consolidated synthesis to: {output_file}"
+            f"Write the canonical output to: {output_file}"
         )
 
         runner = self._runners.get(synth_spec.runtime)
@@ -1347,6 +1432,13 @@ class Orchestrator:
                 f"MoA synthesis round {round_n}: runner exited 0 but "
                 f"output file {output_file} was not created — "
                 f"synthesis artifact is missing"
+            )
+            return
+        output_text = output_file.read_text(encoding="utf-8").strip()
+        if len(output_text) < 100 or output_text.upper() in {"TBD", "TODO"}:
+            self.halt(
+                f"MoA synthesis round {round_n}: canonical output "
+                f"{output_file} is not substantive"
             )
             return
 

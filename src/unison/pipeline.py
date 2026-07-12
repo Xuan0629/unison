@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import threading
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,7 @@ class _NonWaitingThreadPoolExecutor(ThreadPoolExecutor):
 
 import yaml
 
+from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
 from unison.interfaces import (
     AgentSpec,
     BootstrapConfig,
@@ -45,6 +47,7 @@ from unison.interfaces import (
     ChainConfig,
     ChainStage,
     GreenfieldConfig,
+    MOA_MODES,
     MoaConfig,
     PipelineMode,
     PipelineSpec,
@@ -62,6 +65,13 @@ from unison.interfaces import (
 # ============================================================================
 # Exceptions
 # ============================================================================
+
+
+VALID_CHAIN_MODES = frozenset(
+    (set(PhaseRouter.PHASES_BY_MODE) - {"chain"})
+    | set(_DEPRECATED_MODE_ALIASES)
+    | {"moa"}
+)
 
 
 class PipelineValidationError(Exception):
@@ -168,8 +178,8 @@ class PipelineLoader:
         # ---- agents ----
         agents_raw = raw.get("agents")
         _mode = raw.get("mode")
-        if _mode == "moa":
-            # MoA mode generates analyzer/synthesizer agents dynamically
+        if _mode in MOA_MODES:
+            # MoA modes generate analyzer/synthesizer agents dynamically
             # from MoaConfig — developer and reviewer are not required.
             agents_raw = agents_raw if isinstance(agents_raw, dict) else {}
         elif _mode == "inspect-only":
@@ -217,6 +227,12 @@ class PipelineLoader:
         # _run_state_machine() — catch them at load time instead.
         if mode is not None:
             self._validate_mode(mode)
+            if mode == "moa":
+                warnings.warn(
+                    "Pipeline mode 'moa' is deprecated; use 'moa:analyze'",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
 
         # P8 P1.2: Build moa_config before PipelineSpec so it can also be
         # passed to _build_chain for validation (moa mode without moa config).
@@ -653,11 +669,30 @@ class PipelineLoader:
         """Build MoaConfig from raw YAML, returns None if not set."""
         if not raw:
             return None
+        analyzer = raw.get("analyzer") or {}
+        synthesizer = raw.get("synthesizer") or {}
+        if not isinstance(analyzer, dict):
+            raise PipelineValidationError("moa.analyzer must be a mapping")
+        if not isinstance(synthesizer, dict):
+            raise PipelineValidationError("moa.synthesizer must be a mapping")
+        target = raw.get("target", "")
+        scope = raw.get("scope", "")
+        if not isinstance(target, str):
+            raise PipelineValidationError("moa.target must be a string")
+        if not isinstance(scope, str):
+            raise PipelineValidationError("moa.scope must be a string")
         return MoaConfig(
             agents=raw.get("agents", 3),
-            rounds=raw.get("rounds", 2),
+            rounds=raw.get("rounds", 1),
             runtime=raw.get("runtime", "claude"),
             model=raw.get("model", "deepseek-v4-pro"),
+            analyzer_runtime=analyzer.get("runtime", ""),
+            analyzer_model=analyzer.get("model", ""),
+            synthesizer_runtime=synthesizer.get("runtime", ""),
+            synthesizer_model=synthesizer.get("model", ""),
+            granularity=raw.get("granularity", "auto"),
+            target=target,
+            scope=scope,
         )
 
     @staticmethod
@@ -757,17 +792,6 @@ class PipelineLoader:
             )
             return ChainConfig()
 
-        # P8 S11: Build set of valid chain stage modes at load time.
-        # Modes in PhaseRouter.PHASES_BY_MODE plus special modes that
-        # are handled outside _run_state_machine.
-        from unison.phase_router import PhaseRouter
-        # P13: Also accept deprecated mode names for backward compatibility.
-        from unison.phase_router import _DEPRECATED_MODE_ALIASES
-        _VALID_CHAIN_MODES = set(PhaseRouter.PHASES_BY_MODE.keys()) | set(_DEPRECATED_MODE_ALIASES.keys()) | {
-            "moa",    # handled by _run_moa_pipeline
-            "dag",    # handled by DAG scheduler
-        }
-
         # Resolve logger once for all per-stage warnings below.
         import logging
         _log = logging.getLogger(__name__)
@@ -784,20 +808,18 @@ class PipelineLoader:
                 )
             # P8 S11: Reject unknown modes at load time so a typo in
             # stage 5 doesn't waste wall-clock time on stages 1-4.
-            if mode not in _VALID_CHAIN_MODES:
+            if mode not in VALID_CHAIN_MODES:
                 raise PipelineValidationError(
                     f"chain.stages[{i}]: unknown mode {mode!r}. "
-                    f"Valid modes: {sorted(_VALID_CHAIN_MODES)}"
+                    f"Valid modes: {sorted(VALID_CHAIN_MODES)}"
                 )
-            # P8 P1.2: warn when mode="moa" but no moa config exists —
-            # the MoA pipeline will run with defaults but the user may
-            # have intended to configure agent count / rounds.
-            if mode == "moa" and moa_config is None:
+            # Warn when a MoA stage has no explicit role/model/scope config.
+            if mode in MOA_MODES and moa_config is None:
                 _log.warning(
-                    "chain.stages[%d]: mode='moa' but no moa config "
-                    "is set in pipeline.yaml. MoA will run with "
-                    "defaults (agents=3, rounds=2).",
-                    i,
+                    "chain.stages[%d]: mode=%r but no moa config is set. "
+                    "MoA will use single-round defaults (agents=3, inherited "
+                    "analyzer/synthesizer model, granularity=auto).",
+                    i, mode,
                 )
             output_map = s.get("output_map", {}) or {}
             # Validate output_map paths for path-traversal

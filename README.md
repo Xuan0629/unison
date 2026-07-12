@@ -147,7 +147,7 @@ unison webui --project . --port 9099
 | Start here | |
 |---|---|
 | [Quick Start](#quick-start) | Clone → install → run your first pipeline |
-| [Pipeline Modes](#pipeline-modes-auto-detected) | 10 modes: code-dev, full-dev, spec-driven, moa, more |
+| [Pipeline Modes](#pipeline-modes-auto-detected) | Canonical mode families plus backward-compatible aliases |
 | [Web Dashboard](#web-dashboard) | Live view at `http://127.0.0.1:9099` |
 | [Model Fallback](#model-fallback) | Claude Code / Hermes / Codex / OpenClaw fallback config |
 | [Troubleshooting](#troubleshooting) | Common fixes for lock, budget, verdict issues |
@@ -169,7 +169,10 @@ unison webui --project . --port 9099
 | `migrate` | Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer | Cross-project migration |
 | `greenfield` | Developer ↔ Reviewer (isolated new module) | New feature from scratch, no existing code access |
 | `spec-driven` | Planner → Spec Gate → Discuss → Developer ↔ Reviewer | Spec-driven development with mandatory GIVEN-WHEN-THEN specs |
-| `moa` | N-Agent parallel → Synthesizer → Rebuttal → Final | Mixture of Agents — reliable where Hermes delegate_task isn't |
+| `moa:analyze` | Multi-perspective analyzers → stronger synthesizer | General analysis report |
+| `moa:plan` | Product/architecture/technology/spec analyzers → stronger synthesizer | Auto/compact/standard/deep planning document |
+| `moa:review` | Correctness/security/architecture/testing analyzers → stronger synthesizer | `must_fix` + `strengthen` review report |
+| `moa` | Deprecated alias for `moa:analyze` | Backward compatibility |
 
 ### Custom Roles
 
@@ -325,7 +328,7 @@ Unison Orchestrator (state machine)
 ├── Planner Agent    ⇄  Reviewer Agent   ← planning loop
 ├── Discuss Phase       (pre-implementation proposal review)
 ├── Developer Agent  ⇄  Reviewer Agent   ← dev loop
-├── MoA Mode            (N-agent parallel → Synthesizer)
+├── MoA Modes           (multi-perspective fan-out → stronger synthesizer)
 ├── Spec-Driven Mode    (GIVEN-WHEN-THEN spec gate)
 ├── A2A Debate Mode  (multi-agent filesystem debate)
 ├── FileLockManager     (O_CREAT|O_EXCL)
@@ -341,7 +344,8 @@ Observer (independent process, 60s poll)
 World (shared filesystem)
 ├── prd/PRD.md, tech-design.md
 ├── reviews/iter-N.md, dev-proposal.md, findings.md, dev-notes.md, acceptance-criteria.md
-├── reviews/moa-*-roundN.md, moa-synthesis.md
+├── run-scoped reviews/moa-*-roundN.md + moa-analysis.md/moa-review.md
+├── run-scoped prd/moa-plan.md
 ├── inbox/ outbox/ (A2A debate messages)
 ├── observer/ logs/ reports/
 └── .unison/ state, lock, checkpoints, budget

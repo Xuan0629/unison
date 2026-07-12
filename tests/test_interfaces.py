@@ -114,7 +114,7 @@ class TestMoaConfig:
         """MoaConfig has sensible defaults."""
         cfg = MoaConfig()
         assert cfg.agents == 3
-        assert cfg.rounds == 2
+        assert cfg.rounds == 1
         assert cfg.runtime == "claude"
         assert cfg.model == "deepseek-v4-pro"
 

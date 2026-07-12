@@ -194,6 +194,16 @@ class TestBuildChainParsing:
         assert cfg.stages[0].mode == "moa"
         assert "no moa config" in caplog.text
 
+    @pytest.mark.parametrize("mode", ["moa", "moa:analyze", "moa:plan", "moa:review"])
+    def test_build_chain_moa_family_without_config_warns(self, caplog, mode):
+        """Every MoA mode warns when no role/model/scope config is present."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        raw = {"stages": [{"mode": mode}]}
+        cfg = PipelineLoader._build_chain(raw, moa_config=None)
+        assert cfg.stages[0].mode == mode
+        assert "no moa config" in caplog.text
+
     def test_build_chain_moa_with_config_no_warn(self, caplog):
         """mode='moa' with MoaConfig does NOT warn."""
         import logging
@@ -203,6 +213,12 @@ class TestBuildChainParsing:
         cfg = PipelineLoader._build_chain(raw, moa_config=moa)
         assert cfg.stages[0].mode == "moa"
         assert "no moa config" not in caplog.text
+
+    def test_build_chain_rejects_dag_as_mode(self):
+        """DAG is configuration on a dev mode, not a standalone mode."""
+        raw = {"stages": [{"mode": "dag"}]}
+        with pytest.raises(PipelineValidationError, match="unknown mode 'dag'"):
+            PipelineLoader._build_chain(raw)
 
     def test_build_chain_non_moa_mode_no_warn(self, caplog):
         """Non-moa modes do not trigger the moa config warning."""
@@ -471,7 +487,7 @@ chain:
   stages:
     - mode: moa
       output_map:
-        reviews/moa-synthesis-round2.md: prd/PRD.md
+        reviews/moa-analysis.md: prd/PRD.md
     - mode: full-dev
       halt_on_fail: false
 """)
@@ -482,7 +498,7 @@ chain:
         assert len(spec.chain.stages) == 2
         assert spec.chain.stages[0].mode == "moa"
         assert spec.chain.stages[0].output_map == {
-            "reviews/moa-synthesis-round2.md": "prd/PRD.md",
+            "reviews/moa-analysis.md": "prd/PRD.md",
         }
         assert spec.chain.stages[1].mode == "full-dev"
         assert spec.chain.stages[1].halt_on_fail is False
@@ -757,6 +773,96 @@ agents:
         spec = loader.load(pipeline_file)
         spec.chain.stages = stages
         return Orchestrator(spec=spec)
+
+    def test_output_map_copies_after_producer_stage(self, tmp_path, monkeypatch):
+        stages = [
+            ChainStage(
+                mode="code-dev",
+                output_map={"reviews/generated.md": "prd/PRD.md"},
+            ),
+            ChainStage(mode="code-dev"),
+        ]
+        orch = self._make_orchestrator(tmp_path, stages)
+        calls = 0
+
+        def run_stage():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                output = tmp_path / "reviews" / "generated.md"
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text("generated after stage one")
+            else:
+                assert (tmp_path / "prd" / "PRD.md").read_text() == (
+                    "generated after stage one"
+                )
+
+        monkeypatch.setattr(orch, "_run_state_machine", run_stage)
+        orch._run_chain()
+        assert calls == 2
+
+    def test_missing_declared_output_halts_chain(self, tmp_path, monkeypatch):
+        stages = [
+            ChainStage(
+                mode="code-dev",
+                output_map={"reviews/missing.md": "prd/input.md"},
+            ),
+            ChainStage(mode="code-dev"),
+        ]
+        orch = self._make_orchestrator(tmp_path, stages)
+        run_stage = MagicMock()
+        monkeypatch.setattr(orch, "_run_state_machine", run_stage)
+
+        orch._run_chain()
+
+        assert run_stage.call_count == 1
+        assert orch.state().halt_signal is True
+        assert "output source not found" in (orch.state().halt_reason or "")
+
+    def test_missing_declared_output_can_continue_when_explicit(self, tmp_path, monkeypatch):
+        stages = [
+            ChainStage(
+                mode="code-dev",
+                output_map={"reviews/missing.md": "prd/input.md"},
+                halt_on_fail=False,
+            ),
+            ChainStage(mode="code-dev"),
+        ]
+        orch = self._make_orchestrator(tmp_path, stages)
+        run_stage = MagicMock()
+        monkeypatch.setattr(orch, "_run_state_machine", run_stage)
+
+        orch._run_chain()
+
+        assert run_stage.call_count == 2
+        assert orch.state().halt_signal is False
+
+    def test_moa_output_alias_resolves_after_parent_spec_restore(
+        self, tmp_path, monkeypatch
+    ):
+        from unison.interfaces import MoaConfig
+
+        stage = ChainStage(
+            mode="moa:analyze",
+            output_map={"reviews/moa-analysis.md": "prd/input.md"},
+        )
+        orch = self._make_orchestrator(tmp_path, [stage])
+        orch.spec.moa = MoaConfig()
+
+        def run_moa_stage():
+            artifact = Path(
+                orch._moa_contract(orch.spec.moa, mode="moa:analyze")["artifact"]
+            )
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            artifact.write_text("run-scoped analysis")
+
+        monkeypatch.setattr(orch, "_run_state_machine", run_moa_stage)
+        orch._run_chain()
+
+        assert orch.spec.mode == "chain"
+        assert (tmp_path / "prd" / "input.md").read_text() == (
+            "run-scoped analysis"
+        )
 
     def test_moa_stage_dispatches_to_state_machine(self, tmp_path, monkeypatch):
         """mode='moa' stage → _run_state_machine() is called (P0.8: no

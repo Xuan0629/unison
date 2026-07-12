@@ -152,7 +152,7 @@ unison webui --project . --port 9099
 | 从这里开始 | |
 |---|---|
 | [快速开始](#快速开始) | 克隆 → 安装 → 运行第一条管道 |
-| [Pipeline 模式](#pipeline-模式自动检测) | 10 种模式：code-dev、full-dev、spec-driven、moa 等 |
+| [Pipeline 模式](#pipeline-模式自动检测) | Canonical 模式族 + 向后兼容别名 |
 | [Web 面板](#web-面板) | `http://127.0.0.1:9099` 实时查看 |
 | [模型降级](#模型降级) | Claude Code / Hermes / Codex / OpenClaw 降级配置 |
 | [故障排除](#故障排除) | 常见问题：锁、预算、verdict 解析 |
@@ -174,7 +174,10 @@ unison webui --project . --port 9099
 | `a2a-debate` | 多 Agent 异步文件系统辩论 | Agent 间设计审查 |
 | `greenfield` | Developer ↔ Reviewer（隔离新模块） | 从零构建新功能，不碰已有代码 |
 | `spec-driven` | Planner → Spec Gate → Discuss → Developer ↔ Reviewer | 规范驱动开发，强制 GIVEN-WHEN-THEN 规范 |
-| `moa` | N Agent 并行 → 合成 → 辩论 → 终稿 | MoA 模式 — Hermes delegate_task 不稳定时的可靠替代 |
+| `moa:analyze` | 多视角 Analyzer 并行 → 强 Synthesizer | 通用综合分析报告 |
+| `moa:plan` | 产品/架构/技术/spec 多视角 → 强 Synthesizer | auto/compact/standard/deep 规划文档 |
+| `moa:review` | 正确性/安全/架构/测试多视角 → 强 Synthesizer | `must_fix` + `strengthen` 审查报告 |
+| `moa` | `moa:analyze` 的弃用兼容别名 | 向后兼容 |
 
 ### 自定义角色
 
@@ -325,7 +328,7 @@ Unison Orchestrator（状态机）
 ├── Planner Agent    ⇄  Reviewer Agent   ← 规划循环
 ├── Discuss 阶段         （编码前提案审查）
 ├── Developer Agent  ⇄  Reviewer Agent   ← 开发循环
-├── MoA Mode            （N Agent 并行 → 合成）
+├── MoA Modes           （多视角 fan-out → 强 Synthesizer）
 ├── Spec-Driven Mode    （GIVEN-WHEN-THEN 规范门禁）
 ├── A2A Debate Mode  （多 agent 文件系统辩论）
 ├── FileLockManager     （O_CREAT|O_EXCL）
@@ -341,7 +344,8 @@ Observer（独立进程，60s 轮询）
 World（共享文件系统）
 ├── prd/PRD.md、tech-design.md
 ├── reviews/iter-N.md、dev-proposal.md、findings.md、dev-notes.md、acceptance-criteria.md
-├── reviews/moa-*-roundN.md、moa-synthesis.md
+├── run-scoped reviews/moa-*-roundN.md + moa-analysis.md/moa-review.md
+├── run-scoped prd/moa-plan.md
 ├── inbox/ outbox/（A2A 辩论消息）
 ├── observer/ logs/ reports/
 └── .unison/ state、lock、checkpoints、budget

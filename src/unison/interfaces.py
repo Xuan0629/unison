@@ -44,17 +44,14 @@ Actor: TypeAlias = AgentRole | Literal["orchestrator", "observer", "harness_opti
 ProjectLanguage: TypeAlias = Literal["python", "node", "rust", "go", "custom"]
 
 PipelineMode: TypeAlias = Literal[
-    "code-dev",       # Developer ↔ Reviewer (no planner)
-    "full-dev",       # Planner ↔ Reviewer → Developer ↔ Reviewer
-    "design-debate",  # Multi-Planner ↔ Multi-Reviewer (no planner)
-    "inspect-only",   # Reviewer(s) → report (no planner, no dev)
-    "agent-fix",      # Multi-Developer → Multi-Reviewer (no planner)
-    "migrate",        # Planner ↔ Reviewer → Developer ↔ Reviewer
-    "greenfield",     # New module from scratch — agent works only on specified files, no existing code
-    "spec-driven",    # Planner → spec verification gate → Developer ↔ Reviewer
-    "moa",            # Mixture of Agents — parallel analyze → synthesize → rebuttal → finalize
-    "chain",          # Multi-pipeline chaining — run stages sequentially, map outputs→inputs
+    "dev:quick", "dev:standard", "dev:deep",
+    "moa:analyze", "moa:plan", "moa:review",
+    "custom", "chain",
+    # Backward-compatible legacy names.
+    "code-dev", "full-dev", "design-debate", "inspect-only",
+    "agent-fix", "migrate", "greenfield", "spec-driven", "moa",
 ]
+MOA_MODES = frozenset({"moa", "moa:analyze", "moa:plan", "moa:review"})
 
 class RiskLevel(Enum):
     L0 = "auto_allow"              # 直接放行
@@ -424,24 +421,41 @@ class GreenfieldConfig:
 
 @dataclass
 class MoaConfig:
-    """Mixture of Agents configuration.
+    """Single fan-out/fan-in Mixture of Agents configuration.
 
-    Attributes:
-        agents: Number of parallel analyzer agents per round (default 3).
-        rounds: Number of analyze→synthesize rounds (default 2).
-        runtime: Runtime for moa agents (default "claude").
-        model: Model for moa agents (default "deepseek-v4-pro").
+    ``runtime``/``model`` remain legacy analyzer defaults. Role-specific
+    settings allow a cheaper analyzer tier and a stronger synthesizer tier.
+    ``rounds`` defaults to one; values above one are an explicit rebuttal loop.
     """
     agents: int = 3
-    rounds: int = 2
+    rounds: int = 1
     runtime: str = "claude"
     model: str = "deepseek-v4-pro"
+    analyzer_runtime: str = ""
+    analyzer_model: str = ""
+    synthesizer_runtime: str = ""
+    synthesizer_model: str = ""
+    granularity: str = "auto"
+    target: str = ""
+    scope: str = ""
 
     def __post_init__(self):
         if self.agents < 1:
             raise ValueError(f"moa.agents must be >= 1, got {self.agents}")
         if self.rounds < 1:
             raise ValueError(f"moa.rounds must be >= 1, got {self.rounds}")
+        if self.granularity not in {"auto", "compact", "standard", "deep"}:
+            raise ValueError(
+                "moa.granularity must be auto, compact, standard, or deep"
+            )
+        if not self.analyzer_runtime:
+            self.analyzer_runtime = self.runtime
+        if not self.analyzer_model:
+            self.analyzer_model = self.model
+        if not self.synthesizer_runtime:
+            self.synthesizer_runtime = self.runtime
+        if not self.synthesizer_model:
+            self.synthesizer_model = self.model
 
 
 @dataclass
@@ -467,9 +481,10 @@ class WebUiConfig:
 class ChainStage:
     """A single stage in a chained pipeline.
 
-    Each stage runs one pipeline mode.  ``output_map`` maps upstream
-    output files to downstream input files (e.g. MoA synthesis →
-    PRD for full-dev).
+    Each stage runs one pipeline mode. ``output_map`` declares required
+    outputs produced by this stage and copies them to downstream input paths
+    only after successful completion. Missing declared outputs halt the stage;
+    set ``halt_on_fail=False`` to allow the chain to continue explicitly.
     """
     mode: PipelineMode
     pipeline: str = ""         # path to pipeline YAML for this stage

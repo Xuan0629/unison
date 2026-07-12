@@ -27,6 +27,12 @@ from unison.prompt_registry import PromptRegistry
 # ────────────────────────────────────────────────────────────────
 
 _KEYWORD_MODE_MAP: list[tuple[re.Pattern, PipelineMode]] = [
+    (re.compile(r"\bmoa\b.*\b(review|audit|inspect)\b", re.IGNORECASE),
+     "moa:review"),
+    (re.compile(r"\bmoa\b.*\b(plan|prd|architecture|spec)\b", re.IGNORECASE),
+     "moa:plan"),
+    (re.compile(r"\bmoa\b.*\b(analy[sz]e|research|compare)\b", re.IGNORECASE),
+     "moa:analyze"),
     # design-debate: talk about design, debate, architecture decisions, no code
     (re.compile(r"\b(design|debate|architecture|brainstorm|proposal|spec|RFC)\b",
                 re.IGNORECASE), "design-debate"),
@@ -161,6 +167,20 @@ def _build_pipeline_yaml(
             "per_agent_timeout": per_agent_timeout,
         },
     }
+    if mode in {"moa:analyze", "moa:plan", "moa:review"}:
+        data["moa"] = {
+            "agents": 3,
+            "rounds": 1,
+            "granularity": "auto",
+            "analyzer": {
+                "runtime": "claude",
+                "model": "claude-sonnet-4-6",
+            },
+            "synthesizer": {
+                "runtime": "claude",
+                "model": "deepseek-v4-pro",
+            },
+        }
     return yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
@@ -217,14 +237,20 @@ def _interactive_configure(
     print(f"Detected mode: {detected_mode}")
 
     # --- mode ---
-    mode_choices = ["code-dev", "full-dev", "design-debate"]
+    mode_choices: list[PipelineMode] = [
+        "code-dev", "full-dev", "design-debate",
+        "moa:analyze", "moa:plan", "moa:review",
+    ]
     mode = detected_mode
     if not _ask_yes_no(f"Use mode '{mode}'?", default=True):
         print("  Available modes:")
         for i, m in enumerate(mode_choices, 1):
             marker = " <--" if m == detected_mode else ""
             print(f"    {i}. {m}{marker}")
-        choice = _prompt("  Choose (1-3)", str(mode_choices.index(detected_mode) + 1))
+        choice = _prompt(
+            f"  Choose (1-{len(mode_choices)})",
+            str(mode_choices.index(detected_mode) + 1),
+        )
         try:
             mode = mode_choices[int(choice) - 1]
         except (ValueError, IndexError):
@@ -233,8 +259,13 @@ def _interactive_configure(
 
     # --- agents ---
     print(f"\n--- Agent Configuration ---")
-    agents: dict = _MODE_AGENT_TEMPLATES.get(mode, _MODE_AGENT_TEMPLATES["code-dev"])
-    agents = {k: dict(v) for k, v in agents.items()}  # deep copy
+    if mode in {"moa:analyze", "moa:plan", "moa:review"}:
+        agents = {}
+    else:
+        agents = _MODE_AGENT_TEMPLATES.get(
+            mode, _MODE_AGENT_TEMPLATES["code-dev"]
+        )
+        agents = {k: dict(v) for k, v in agents.items()}  # deep copy
 
     for name, cfg in agents.items():
         print(f"\n  [{name}] role={cfg['role']}")
@@ -302,10 +333,15 @@ def generate(
 
     if yes:
         mode = detected_mode
-        agents = {
-            k: dict(v)
-            for k, v in _MODE_AGENT_TEMPLATES.get(mode, _MODE_AGENT_TEMPLATES["code-dev"]).items()
-        }
+        if mode in {"moa:analyze", "moa:plan", "moa:review"}:
+            agents = {}
+        else:
+            agents = {
+                k: dict(v)
+                for k, v in _MODE_AGENT_TEMPLATES.get(
+                    mode, _MODE_AGENT_TEMPLATES["code-dev"]
+                ).items()
+            }
         test_command = _DEFAULT_TEST_COMMAND
         max_iterations = _DEFAULT_MAX_ITERATIONS
         per_agent_timeout = _DEFAULT_PER_AGENT_TIMEOUT
@@ -319,16 +355,23 @@ def generate(
     prompts_dir.mkdir(parents=True, exist_ok=True)
 
     registry = PromptRegistry()
-    _write_prompt_file(
-        prompts_dir / "developer.md",
-        registry.DEFAULT_PROMPTS["developer"],
-        description,
-    )
-    _write_prompt_file(
-        prompts_dir / "reviewer.md",
-        registry.DEFAULT_PROMPTS["reviewer"],
-        description,
-    )
+    if mode in {"moa:analyze", "moa:plan", "moa:review"}:
+        _write_prompt_file(
+            prompts_dir / "moa-analyzer.md",
+            registry.DEFAULT_PROMPTS["moa-analyzer"],
+            description,
+        )
+    else:
+        _write_prompt_file(
+            prompts_dir / "developer.md",
+            registry.DEFAULT_PROMPTS["developer"],
+            description,
+        )
+        _write_prompt_file(
+            prompts_dir / "reviewer.md",
+            registry.DEFAULT_PROMPTS["reviewer"],
+            description,
+        )
     if mode in ("full-dev", "design-debate"):
         _write_prompt_file(
             prompts_dir / "planner.md",
@@ -351,8 +394,11 @@ def generate(
     # --- report ---
     print(f"\nGenerated:")
     print(f"  {pipeline_path}")
-    print(f"  {prompts_dir}/developer.md")
-    print(f"  {prompts_dir}/reviewer.md")
+    if mode in {"moa:analyze", "moa:plan", "moa:review"}:
+        print(f"  {prompts_dir}/moa-analyzer.md")
+    else:
+        print(f"  {prompts_dir}/developer.md")
+        print(f"  {prompts_dir}/reviewer.md")
     if mode in ("full-dev", "design-debate"):
         print(f"  {prompts_dir}/planner.md")
     print(f"\nNext: unison run --pipeline {pipeline_path}")
