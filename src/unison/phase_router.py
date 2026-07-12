@@ -51,13 +51,20 @@ class PhaseDef:
 _DEPRECATED_MODE_ALIASES: dict[str, str] = {
     "code-dev":       "dev:quick",
     "full-dev":       "dev:standard",
-    "design-debate":  "dev:standard",  # was planning-only
-    "inspect-only":   "custom",
     "agent-fix":      "dev:quick",
     "migrate":        "dev:standard",
     "greenfield":     "dev:quick",
-    "spec-driven":    "dev:standard",  # spec-check embedded
 }
+
+# P0-2: These deprecated modes need their OWN phase definitions to preserve
+# backward-compatible behavior. They are NOT remapped to canonical modes
+# because their old contracts differ from the canonical equivalents:
+#   - design-debate: old = planning + review only (NOT discuss + dev)
+#   - inspect-only:  old = reviewer only (NOT developer + reviewer)
+#   - spec-driven:   old = includes mandatory spec-check phase
+_DEPRECATED_MODES_OWN_PHASES: frozenset[str] = frozenset({
+    "design-debate", "inspect-only", "spec-driven",
+})
 
 
 @dataclass
@@ -117,6 +124,30 @@ class PhaseRouter:
             PhaseDef("dev", "dev_active", "dev_review", "developer",
                      "code + tests"),
         ],
+
+        # ── Deprecated modes with own phase definitions (P0-2) ──────────
+        # These preserve the EXACT old behavior before the canonical rename.
+        # design-debate: planning → review (NO discuss/dev like dev:standard)
+        "design-debate": [
+            PhaseDef("planning", "planning_active", "planning_review",
+                     "planner", "PRD + tech-design"),
+            PhaseDef("review", "dev_review", "", "reviewer",
+                     "design review"),
+        ],
+        # inspect-only: reviewer only (NO developer)
+        "inspect-only": [
+            PhaseDef("review", "dev_review", "", "reviewer",
+                     "comprehensive review"),
+        ],
+        # spec-driven: dev with mandatory spec-check before review
+        "spec-driven": [
+            PhaseDef("planning", "planning_active", "planning_review",
+                     "planner", "PRD + tech-design"),
+            PhaseDef("dev", "dev_active", "dev_review", "developer",
+                     "code + tests"),
+            PhaseDef("spec-check", "spec-check", "", "reviewer",
+                     "spec compliance"),
+        ],
     }
 
     # ── Canonical modes used for validation ────────────────────────────
@@ -135,6 +166,14 @@ class PhaseRouter:
             Ordered list of ``PhaseDef`` instances.  Returns an empty
             list for unknown modes (caller should handle the error).
         """
+        # Deprecated modes with own phase definitions: emit warning but
+        # return their own phases (NOT a remap to a canonical mode).
+        if mode in _DEPRECATED_MODES_OWN_PHASES:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.info("Pipeline mode '%s' is deprecated.", mode)
+            return cls.PHASES_BY_MODE.get(mode, [])
+
         # Resolve deprecated alias → canonical name
         if mode in _DEPRECATED_MODE_ALIASES:
             canonical = _DEPRECATED_MODE_ALIASES[mode]

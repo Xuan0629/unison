@@ -48,12 +48,13 @@ class TestPhaseRouterKnownModes:
     @pytest.mark.parametrize("mode,expected_names", [
         ("code-dev",      ["dev"]),
         ("full-dev",      ["planning", "discuss", "dev"]),
-        ("design-debate", ["planning", "discuss", "dev"]),
-        ("inspect-only",  ["dev"]),
+        # P0-2: deprecated modes preserve old phase contracts
+        ("design-debate", ["planning", "review"]),
+        ("inspect-only",  ["review"]),
         ("agent-fix",     ["dev"]),
         ("migrate",       ["planning", "discuss", "dev"]),
         ("greenfield",    ["dev"]),
-        ("spec-driven",   ["planning", "discuss", "dev"]),
+        ("spec-driven",   ["planning", "dev", "spec-check"]),
     ])
     def test_mode_phase_sequence(self, mode, expected_names):
         """Each mode returns the expected ordered phase names."""
@@ -66,12 +67,13 @@ class TestPhaseRouterKnownModes:
     @pytest.mark.parametrize("mode,expected_active_phases", [
         ("code-dev",      ["dev_active"]),
         ("full-dev",      ["planning_active", "discuss_active", "dev_active"]),
-        ("design-debate", ["planning_active", "discuss_active", "dev_active"]),
-        ("inspect-only",  ["dev_active"]),
+        # P0-2: deprecated modes preserve old phase contracts
+        ("design-debate", ["planning_active", "dev_review"]),
+        ("inspect-only",  ["dev_review"]),
         ("agent-fix",     ["dev_active"]),
         ("migrate",       ["planning_active", "discuss_active", "dev_active"]),
         ("greenfield",    ["dev_active"]),
-        ("spec-driven",   ["planning_active", "discuss_active", "dev_active"]),
+        ("spec-driven",   ["planning_active", "dev_active", "spec-check"]),
     ])
     def test_mode_active_phases(self, mode, expected_active_phases):
         """Each mode returns the expected active_phase values."""
@@ -121,32 +123,32 @@ class TestPhaseRouterBackwardCompat:
         assert phases[2].name == "dev"
 
     def test_design_debate_has_only_planning(self):
-        """design-debate: only planning (old: _run_planning_loop)."""
+        """P0-2: design-debate: planning → review (NOT dev:standard)."""
         phases = PhaseRouter.get_phases("design-debate")
-        assert len(phases) == 3  # P13: maps to dev:standard
+        assert len(phases) == 2
         assert phases[0].name == "planning"
+        assert phases[1].name == "review"
 
     def test_inspect_only_has_review_phase(self):
-        """inspect-only: maps to custom (dev phase) P13."""
+        """P0-2: inspect-only: reviewer only (NOT dev phase)."""
         phases = PhaseRouter.get_phases("inspect-only")
-        assert len(phases) == 1  # P13: maps to custom
-        assert phases[0].name == "dev"  # P13: maps to custom
-        assert phases[0].active_phase == "dev_active"  # P13: maps to custom
-        assert phases[0].role == "developer"  # P13: maps to custom (dev role)
+        assert len(phases) == 1
+        assert phases[0].name == "review"
+        assert phases[0].role == "reviewer"
 
     def test_spec_driven_has_four_phases(self):
-        """spec-driven: maps to dev:standard (planning → discuss → dev) P13."""
+        """P0-2: spec-driven: planning → dev → spec-check."""
         phases = PhaseRouter.get_phases("spec-driven")
-        assert len(phases) == 3  # P13: maps to dev:standard
+        assert len(phases) == 3
         assert phases[0].name == "planning"
-        assert phases[1].name == "discuss"
-        assert phases[2].name == "dev"
+        assert phases[1].name == "dev"
+        assert phases[2].name == "spec-check"
 
     def test_spec_check_phase_has_spec_check_active_phase(self):
-        """spec-check phase uses 'spec-check' as its active_phase for routing."""
+        """P0-2: spec-check phase uses 'spec-check' as its active_phase for routing."""
         phases = PhaseRouter.get_phases("spec-driven")
-        # P13: spec-driven maps to dev:standard (no spec-check)
-        assert phases[1].name == "discuss"
+        assert phases[2].name == "spec-check"
+        assert phases[2].active_phase == "spec-check"
 
     def test_agent_fix_and_code_dev_have_same_phases(self):
         """agent-fix and code-dev use the same phase sequence."""

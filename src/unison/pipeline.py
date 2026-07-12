@@ -167,10 +167,19 @@ class PipelineLoader:
 
         # ---- agents ----
         agents_raw = raw.get("agents")
-        if raw.get("mode") == "moa":
+        _mode = raw.get("mode")
+        if _mode == "moa":
             # MoA mode generates analyzer/synthesizer agents dynamically
             # from MoaConfig — developer and reviewer are not required.
             agents_raw = agents_raw if isinstance(agents_raw, dict) else {}
+        elif _mode == "inspect-only":
+            # P0-2: inspect-only only requires reviewer, not developer.
+            # Old YAML files with reviewer-only agents must still load.
+            if not agents_raw or not isinstance(agents_raw, dict):
+                raise PipelineValidationError("Missing required field: agents")
+            self._validate_required_agents(
+                agents_raw, required=frozenset({"reviewer"})
+            )
         else:
             if not agents_raw or not isinstance(agents_raw, dict):
                 raise PipelineValidationError("Missing required field: agents")
@@ -342,15 +351,19 @@ class PipelineLoader:
 
     # -- validation ----------------------------------------------------
 
-    def _validate_required_agents(self, agents_raw: dict[str, Any]) -> None:
+    def _validate_required_agents(
+        self, agents_raw: dict[str, Any],
+        required: frozenset[str] | None = None,
+    ) -> None:
         """Check that all required pipeline roles are covered.
 
         Each agent in *agents_raw* has an effective pipeline role:
         ``pipeline_role`` if explicitly set, otherwise its ``role`` field.
-        At least one agent must map to each role in
-        ``REQUIRED_PIPELINE_ROLES``.
+        At least one agent must map to each role in *required*
+        (default: :attr:`REQUIRED_PIPELINE_ROLES`).
         """
-        for required_role in self.REQUIRED_PIPELINE_ROLES:
+        required_roles = required if required is not None else self.REQUIRED_PIPELINE_ROLES
+        for required_role in required_roles:
             found = False
             for key, ad in agents_raw.items():
                 if not isinstance(ad, dict):
