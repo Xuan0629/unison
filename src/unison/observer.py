@@ -662,9 +662,14 @@ class Observer:
         self.world.ensure_directories()
 
         # ---- Write PID file for liveness monitoring -----------------------------
+        # P12c: Use project_id hash instead of basename to prevent same-name collision
+        import hashlib
+        project_id = hashlib.sha256(
+            str(self.world.root.resolve()).encode()
+        ).hexdigest()[:16]
         pid_dir = Path.home() / ".unison" / "observer"
         pid_dir.mkdir(parents=True, exist_ok=True)
-        pid_file = pid_dir / f"{self.world.root.name}.pid"
+        pid_file = pid_dir / f"{project_id}.pid"
         pid_file.write_text(str(os.getpid()))
         try:
             self._run_loop()
