@@ -129,19 +129,19 @@ class TestBuildSelfHeal:
 
     def test_none_returns_defaults(self):
         result = PipelineLoader._build_self_heal(None)
-        assert result.auto_fix_unison is True
+        assert result.auto_fix_unison is False  # P0-7
         assert result.auto_fix_consumer is False
         assert result.max_fix_rounds == 2
         assert result.fix_timeout == 300
 
     def test_empty_dict_returns_defaults(self):
         result = PipelineLoader._build_self_heal({})
-        assert result.auto_fix_unison is True
+        assert result.auto_fix_unison is False  # P0-7
 
     def test_partial_keys(self):
         result = PipelineLoader._build_self_heal({"max_fix_rounds": 5})
         assert result.max_fix_rounds == 5
-        assert result.auto_fix_unison is True  # default preserved
+        assert result.auto_fix_unison is False  # P0-7  # default preserved
 
     def test_all_keys(self):
         result = PipelineLoader._build_self_heal({
