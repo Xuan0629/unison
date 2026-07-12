@@ -178,6 +178,26 @@ class Orchestrator:
         if not scoped_design.exists() and self.spec.world.tech_design.exists():
             shutil.copy2(self.spec.world.tech_design, scoped_design)
 
+        # P0-1: One-time migration of legacy review files into scoped path.
+        # Instead of falling back to legacy paths at runtime (which lets stale
+        # PASS verdicts from other pipelines pollute this run), copy any
+        # existing legacy reviews into the scoped directory ONCE at init.
+        # New runs with no legacy files simply start with an empty scoped dir.
+        scoped_reviews = self.spec.world.reviews_dir_for(self._run_ctx)
+        scoped_reviews.mkdir(parents=True, exist_ok=True)
+        legacy_reviews = self.spec.world.reviews_dir
+        if legacy_reviews.exists():
+            for legacy_file in legacy_reviews.glob("iter-*.md"):
+                iter_num = legacy_file.name  # e.g. "iter-1.md"
+                dest = scoped_reviews / iter_num
+                if not dest.exists():
+                    shutil.copy2(legacy_file, dest)
+            for legacy_file in legacy_reviews.glob("plan-iter-*.md"):
+                iter_num = legacy_file.name  # e.g. "plan-iter-1.md"
+                dest = scoped_reviews / iter_num
+                if not dest.exists():
+                    shutil.copy2(legacy_file, dest)
+
         # -- budget tracking (V2, lazy-init) -----------------------------------
         self._budget_tracker: BudgetTracker | None = None
         self._budget_task_reset_done: bool = False  # P12c: reset task on first use
@@ -4113,22 +4133,14 @@ class Orchestrator:
         """
         ctx = getattr(self, "_run_ctx", None)
         if ctx is not None and hasattr(self.spec.world, "review_file_for"):
+            # P0-1: When a RunContext is active, NEVER fall back to legacy
+            # global review files — stale PASS verdicts from other pipelines
+            # or old reruns must not be accepted by the current run.
             scoped = (
                 self.spec.world.plan_review_file_for(ctx, iteration)
                 if review_phase == "planning_review"
                 else self.spec.world.review_file_for(ctx, iteration)
             )
-            if scoped.exists():
-                return scoped
-            # Fallback: check legacy path (existing tests/pipelines)
-            legacy = (
-                self.spec.world.reviews_dir / f"plan-iter-{iteration}.md"
-                if review_phase == "planning_review"
-                else self.spec.world.reviews_dir / f"iter-{iteration}.md"
-            )
-            if legacy.exists():
-                return legacy
-            # New pipeline: return scoped (will be written there)
             return scoped
         # Legacy fallback (no _run_ctx)
         if review_phase == "planning_review":
