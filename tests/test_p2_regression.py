@@ -286,3 +286,62 @@ class TestP19PipelineDryRun:
         loader = PipelineLoader()
         spec = loader.load(pipeline_file)
         assert loader.dry_run(spec) is True
+
+
+# ============================================================================
+# Round 3 P0-1: Production World must support run-scoped agent logs
+# ============================================================================
+
+class TestRound3ProductionWorldAgentLog:
+    """A loaded pipeline must reach the runner with a run-scoped log path."""
+
+    def test_loaded_pipeline_invocation_reaches_runner(self, tmp_path):
+        from unison.orchestrator import Orchestrator
+        from unison.pipeline import PipelineLoader
+
+        world_root = tmp_path / "project"
+        world_root.mkdir()
+        for d in ["prd", "reviews", ".unison", "prompts"]:
+            (world_root / d).mkdir(parents=True, exist_ok=True)
+        (world_root / "prd" / "PRD.md").write_text("# PRD")
+        (world_root / "prd" / "tech-design.md").write_text("# Design")
+        (world_root / "prompts" / "developer.md").write_text("Dev")
+        (world_root / "prompts" / "reviewer.md").write_text("Rev")
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f"""
+version: "2.0"
+project_root: "{world_root}"
+project:
+  test_command: python3 -c "exit(0)"
+agents:
+  developer:
+    role: developer
+    pipeline_role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: prompts/developer.md
+  reviewer:
+    role: reviewer
+    pipeline_role: reviewer
+    runtime: claude
+    model: test
+    system_prompt_path: prompts/reviewer.md
+""")
+        spec = PipelineLoader().load(pipeline_file)
+        orch = Orchestrator(spec=spec)
+        runner = MagicMock()
+        runner.run.return_value = MagicMock(
+            success=True, error="", exit_code=0,
+        )
+        orch._runners["claude"] = runner
+        orch._detector.detect = MagicMock(
+            return_value=MagicMock(success=True, commit=None),
+        )
+
+        orch._invoke_agent_for_role("developer", 1)
+
+        runner.run.assert_called_once()
+        log_path = runner.run.call_args.kwargs["log_path"]
+        assert orch._run_ctx.pipeline_key in str(log_path)
+        assert orch._run_ctx.run_id in str(log_path)

@@ -242,7 +242,17 @@ class World:
     def optimizer_report(self, iter_n: int) -> Path:
         return self.reports_dir / f"optimizer-{iter_n}.md"
 
-    def agent_log(self, role: AgentRole, iter_n: int, timestamp: str) -> Path:
+    def agent_log(
+        self,
+        role: AgentRole,
+        iter_n: int,
+        timestamp: str,
+        ctx=None,
+    ) -> Path:
+        if ctx is not None:
+            subdir = self.logs_dir / ctx.pipeline_key / ctx.run_id
+            subdir.mkdir(parents=True, exist_ok=True)
+            return subdir / f"{role}_iter-{iter_n}_{timestamp}.log"
         return self.logs_dir / f"{role}_iter-{iter_n}_{timestamp}.log"
 
     def ensure_run_directories(self, ctx) -> None:
