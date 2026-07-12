@@ -28,15 +28,39 @@ _BUILTIN_PROVIDER_MAP: dict[str, str] = {
 }
 
 def _load_provider_map() -> dict[str, str]:
-    """Merge built-in map with env var overrides."""
+    """Merge built-in map with env var overrides.
+
+    P1-13: Validates that the env var is a dict with string values.
+    Non-string provider values would leak into subprocess argv.
+    """
     env = os.environ.get("UNISON_CLAUDE_PROVIDER_MAP", "")
     if not env:
         return dict(_BUILTIN_PROVIDER_MAP)
     import json
     try:
         overrides = json.loads(env)
+        # P1-13: Reject non-dict or non-string-values JSON
+        if not isinstance(overrides, dict):
+            import logging
+            logging.getLogger(__name__).warning(
+                "UNISON_CLAUDE_PROVIDER_MAP must be a JSON object, got %s",
+                type(overrides).__name__,
+            )
+            return dict(_BUILTIN_PROVIDER_MAP)
+        # Validate all keys and values are strings
+        validated: dict[str, str] = {}
+        for k, v in overrides.items():
+            if not isinstance(k, str) or not isinstance(v, str):
+                import logging
+                logging.getLogger(__name__).warning(
+                    "UNISON_CLAUDE_PROVIDER_MAP has non-string key/value: "
+                    "%r=%r (type %s/%s) — skipping",
+                    k, v, type(k).__name__, type(v).__name__,
+                )
+                continue
+            validated[k] = v
         merged = dict(_BUILTIN_PROVIDER_MAP)
-        merged.update(overrides)
+        merged.update(validated)
         return merged
     except json.JSONDecodeError:
         return dict(_BUILTIN_PROVIDER_MAP)
