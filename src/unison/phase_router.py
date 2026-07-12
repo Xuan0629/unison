@@ -127,26 +127,24 @@ class PhaseRouter:
 
         # ── Deprecated modes with own phase definitions (P0-2) ──────────
         # These preserve the EXACT old behavior before the canonical rename.
-        # design-debate: planning → review (NO discuss/dev like dev:standard)
+        # design-debate: the planning loop already includes its review step.
         "design-debate": [
             PhaseDef("planning", "planning_active", "planning_review",
                      "planner", "PRD + tech-design"),
-            PhaseDef("review", "dev_review", "", "reviewer",
-                     "design review"),
         ],
         # inspect-only: reviewer only (NO developer)
         "inspect-only": [
             PhaseDef("review", "dev_review", "", "reviewer",
                      "comprehensive review"),
         ],
-        # spec-driven: dev with mandatory spec-check before review
+        # spec-driven: planning, then mandatory gate, then development
         "spec-driven": [
             PhaseDef("planning", "planning_active", "planning_review",
                      "planner", "PRD + tech-design"),
-            PhaseDef("dev", "dev_active", "dev_review", "developer",
-                     "code + tests"),
             PhaseDef("spec-check", "spec-check", "", "reviewer",
                      "spec compliance"),
+            PhaseDef("dev", "dev_active", "dev_review", "developer",
+                     "code + tests"),
         ],
     }
 

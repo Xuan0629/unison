@@ -49,12 +49,12 @@ class TestPhaseRouterKnownModes:
         ("code-dev",      ["dev"]),
         ("full-dev",      ["planning", "discuss", "dev"]),
         # P0-2: deprecated modes preserve old phase contracts
-        ("design-debate", ["planning", "review"]),
+        ("design-debate", ["planning"]),
         ("inspect-only",  ["review"]),
         ("agent-fix",     ["dev"]),
         ("migrate",       ["planning", "discuss", "dev"]),
         ("greenfield",    ["dev"]),
-        ("spec-driven",   ["planning", "dev", "spec-check"]),
+        ("spec-driven",   ["planning", "spec-check", "dev"]),
     ])
     def test_mode_phase_sequence(self, mode, expected_names):
         """Each mode returns the expected ordered phase names."""
@@ -68,12 +68,12 @@ class TestPhaseRouterKnownModes:
         ("code-dev",      ["dev_active"]),
         ("full-dev",      ["planning_active", "discuss_active", "dev_active"]),
         # P0-2: deprecated modes preserve old phase contracts
-        ("design-debate", ["planning_active", "dev_review"]),
+        ("design-debate", ["planning_active"]),
         ("inspect-only",  ["dev_review"]),
         ("agent-fix",     ["dev_active"]),
         ("migrate",       ["planning_active", "discuss_active", "dev_active"]),
         ("greenfield",    ["dev_active"]),
-        ("spec-driven",   ["planning_active", "dev_active", "spec-check"]),
+        ("spec-driven",   ["planning_active", "spec-check", "dev_active"]),
     ])
     def test_mode_active_phases(self, mode, expected_active_phases):
         """Each mode returns the expected active_phase values."""
@@ -123,11 +123,10 @@ class TestPhaseRouterBackwardCompat:
         assert phases[2].name == "dev"
 
     def test_design_debate_has_only_planning(self):
-        """P0-2: design-debate: planning → review (NOT dev:standard)."""
+        """P0-2: design-debate is exactly the historical planning loop."""
         phases = PhaseRouter.get_phases("design-debate")
-        assert len(phases) == 2
+        assert len(phases) == 1
         assert phases[0].name == "planning"
-        assert phases[1].name == "review"
 
     def test_inspect_only_has_review_phase(self):
         """P0-2: inspect-only: reviewer only (NOT dev phase)."""
@@ -136,19 +135,69 @@ class TestPhaseRouterBackwardCompat:
         assert phases[0].name == "review"
         assert phases[0].role == "reviewer"
 
-    def test_spec_driven_has_four_phases(self):
-        """P0-2: spec-driven: planning → dev → spec-check."""
+    def test_spec_driven_has_three_phases(self):
+        """P0-2: spec-driven: planning → spec-check → dev."""
         phases = PhaseRouter.get_phases("spec-driven")
         assert len(phases) == 3
         assert phases[0].name == "planning"
-        assert phases[1].name == "dev"
-        assert phases[2].name == "spec-check"
+        assert phases[1].name == "spec-check"
+        assert phases[2].name == "dev"
 
     def test_spec_check_phase_has_spec_check_active_phase(self):
-        """P0-2: spec-check phase uses 'spec-check' as its active_phase for routing."""
+        """P0-2: spec-check runs before development as the historical gate."""
         phases = PhaseRouter.get_phases("spec-driven")
-        assert phases[2].name == "spec-check"
-        assert phases[2].active_phase == "spec-check"
+        assert phases[1].name == "spec-check"
+        assert phases[1].active_phase == "spec-check"
+
+    def test_deprecated_mode_state_machine_order(self, tmp_path):
+        """Deprecated modes execute the exact historical handler order."""
+        from typing import cast
+        from unittest.mock import MagicMock
+        from unison.interfaces import AgentSpec, PipelineMode, PipelineSpec, World
+        from unison.orchestrator import Orchestrator
+
+        agents = {
+            "planner": AgentSpec(
+                role="planner", pipeline_role="planner", runtime="claude",
+                model="test", system_prompt_path=tmp_path / "planner.md",
+            ),
+            "developer": AgentSpec(
+                role="developer", pipeline_role="developer", runtime="claude",
+                model="test", system_prompt_path=tmp_path / "developer.md",
+            ),
+            "reviewer": AgentSpec(
+                role="reviewer", pipeline_role="reviewer", runtime="claude",
+                model="test", system_prompt_path=tmp_path / "reviewer.md",
+            ),
+        }
+
+        expected = {
+            "design-debate": ["planning"],
+            "inspect-only": ["review-only"],
+            "spec-driven": ["planning", "spec-check", "dev"],
+        }
+        for mode, expected_order in expected.items():
+            orch = Orchestrator(PipelineSpec(
+                version="2.0", world=World(tmp_path / mode),
+                agents=agents, mode=cast(PipelineMode, mode),
+            ))
+            order = []
+
+            def record_loop(active_phase, review_phase, review_of, role=None):
+                if active_phase == "planning_active":
+                    order.append("planning")
+                elif active_phase == "dev_active":
+                    order.append("dev")
+
+            orch._run_loop = record_loop
+            orch._run_review_only = lambda: order.append("review-only")
+            orch._run_spec_verification = lambda: order.append("spec-check")
+            orch._save_checkpoint = MagicMock()
+            orch._archive_reviews = MagicMock()
+
+            orch._run_state_machine()
+
+            assert order == expected_order
 
     def test_agent_fix_and_code_dev_have_same_phases(self):
         """agent-fix and code-dev use the same phase sequence."""
