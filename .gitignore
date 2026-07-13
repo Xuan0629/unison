@@ -90,3 +90,7 @@ p[0-9]*.yaml
 # Review archives and run artifacts
 reviews/archive/
 reviews/runs/
+
+# Private/local pipeline archives
+prompts/legacy/
+pipelines/archive/
