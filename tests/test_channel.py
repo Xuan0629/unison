@@ -3,6 +3,7 @@ import json
 import sqlite3
 import tempfile
 import threading
+import time
 from pathlib import Path
 import pytest
 
@@ -79,6 +80,100 @@ class TestFileChannel:
         assert [message["payload"]["content"] for message in messages] == [
             "Finding 0", "Finding 1", "Finding 2",
         ]
+
+    def test_concurrent_large_writes_preserve_json_lines(self, tmp_path, monkeypatch):
+        """Concurrent multi-syscall writes must not interleave JSON lines."""
+        import builtins
+        import unison.channel as channel_module
+
+        world = World(root=tmp_path)
+        channels = [FileChannel(world=world), FileChannel(world=world)]
+        start = threading.Barrier(2)
+        errors = []
+        real_open = builtins.open
+
+        class SplitWriter:
+            def __init__(self, file_obj):
+                self.file_obj = file_obj
+
+            def __enter__(self):
+                self.file_obj.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self.file_obj.__exit__(*args)
+
+            def write(self, text):
+                midpoint = len(text) // 2
+                written = self.file_obj.write(text[:midpoint])
+                self.file_obj.flush()
+                time.sleep(0.05)
+                written += self.file_obj.write(text[midpoint:])
+                self.file_obj.flush()
+                return written
+
+            def fileno(self):
+                return self.file_obj.fileno()
+
+            def flush(self):
+                return self.file_obj.flush()
+
+        def open_with_split_write(path, *args, **kwargs):
+            file_obj = real_open(path, *args, **kwargs)
+            if Path(path).name == "reviewer.jsonl" and args[0] == "a":
+                return SplitWriter(file_obj)
+            return file_obj
+
+        monkeypatch.setattr(channel_module, "open", open_with_split_write, raising=False)
+
+        def write(channel, iteration, marker):
+            try:
+                start.wait()
+                channel.write(
+                    sender="developer",
+                    payload={
+                        "recipient": "reviewer",
+                        "iter_n": iteration,
+                        "content": marker * 20_000,
+                    },
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=write, args=(channels[0], 1, "A")),
+            threading.Thread(target=write, args=(channels[1], 2, "B")),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        lines = (world.inbox_dir / "reviewer.jsonl").read_text().splitlines()
+        assert errors == []
+        assert len(lines) == 2
+        messages = [json.loads(line) for line in lines]
+        assert {message["iter_n"] for message in messages} == {1, 2}
+
+    def test_write_times_out_when_inbox_lock_stays_busy(self, tmp_path, monkeypatch):
+        import unison.channel as channel_module
+
+        world = World(root=tmp_path)
+        channel = FileChannel(world=world)
+        times = iter((0.0, 4.9, 5.0))
+        monkeypatch.setattr(channel_module._time, "monotonic", lambda: next(times))
+        monkeypatch.setattr(channel_module._time, "sleep", lambda seconds: None)
+        monkeypatch.setattr(
+            channel_module.fcntl,
+            "flock",
+            lambda *args: (_ for _ in ()).throw(BlockingIOError()),
+        )
+
+        with pytest.raises(TimeoutError, match="Timed out locking inbox"):
+            channel.write(
+                sender="developer",
+                payload={"recipient": "reviewer", "content": "blocked"},
+            )
 
     def test_read_inbox_filters_by_iter(self, tmp_path):
         """read_inbox filters messages by iter_n."""

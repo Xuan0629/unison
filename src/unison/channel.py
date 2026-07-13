@@ -6,6 +6,10 @@ import json
 import sqlite3
 import time as _time
 import uuid as _uuid
+try:
+    import fcntl
+except ImportError:  # Native Windows is not a supported runtime.
+    fcntl = None
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,7 +68,24 @@ class FileChannel:
         self.world.ensure_directories()
         inbox_file = self.world.inbox_dir / f"{recipient}.jsonl"
         with open(inbox_file, "a") as f:
-            f.write(json.dumps(message, ensure_ascii=False) + "\n")
+            locked = False
+            if fcntl is not None:
+                deadline = _time.monotonic() + 5.0
+                while True:
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        locked = True
+                        break
+                    except BlockingIOError:
+                        if _time.monotonic() >= deadline:
+                            raise TimeoutError(f"Timed out locking inbox: {inbox_file}")
+                        _time.sleep(0.05)
+            try:
+                f.write(json.dumps(message, ensure_ascii=False) + "\n")
+                f.flush()
+            finally:
+                if locked and fcntl is not None:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     # ------------------------------------------------------------------
     # read_inbox
