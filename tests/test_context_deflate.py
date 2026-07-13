@@ -512,6 +512,21 @@ class TestAssembleContext:
         # prd_content should either be truncated or not appear at all
         assert "prd_content" in result.truncated_sections or "PRD" not in result.prompt
 
+    def test_phase_summary_does_not_shift_truncation_names(self):
+        """Dropped sections are reported by content name with phase status present."""
+        result = assemble_context(
+            system_prompt="system",
+            phase_summary="phase status",
+            last_review_findings="finding " * 100,
+            git_diff="diff " * 100,
+            design_content="design " * 100,
+            prd_content="prd " * 100,
+            token_budget=20,
+        )
+
+        assert "prd_content" in result.truncated_sections
+        assert "phase_summary" not in result.truncated_sections
+
     def test_no_sections_prompt_still_valid(self):
         """Prompt is valid even with no optional sections."""
         result = assemble_context(

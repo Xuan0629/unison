@@ -472,28 +472,33 @@ def assemble_context(
 
     # --- Assemble (budget headers into the token count) ---
     sections = [system_prompt]
+    section_names: list[str | None] = [None]
     if phase_summary:
         sections.append("\n## Phase Status\n" + phase_summary)
+        section_names.append("phase_summary")
     if findings_text:
         sections.append("\n## Last Review Findings\n" + findings_text)
+        section_names.append("last_review_findings")
     if diff_text:
         sections.append("\n## Git Diff\n" + diff_text)
+        section_names.append("git_diff")
     if design_text:
         sections.append("\n## Design\n" + design_text)
+        section_names.append("design_content")
     if prd_text:
         sections.append("\n## PRD\n" + prd_text)
+        section_names.append("prd_content")
 
     prompt = "\n".join(sections)
     total_est = _estimate_tokens(prompt, chars_per_token)
 
-    # Final enforcement: if prompt exceeds budget, drop lowest priority sections
-    # sections order: [system_prompt, findings?, diff?, design?, prd?]
-    # sections[0] is system_prompt, never dropped
-    section_names = {1: "last_review_findings", 2: "git_diff", 3: "design_content", 4: "prd_content"}
+    # Final enforcement: if prompt exceeds budget, drop lowest priority sections.
+    # ``section_names`` is built alongside ``sections`` so optional phase status
+    # cannot shift the reported name of a dropped section.
     while total_est > token_budget and len(sections) > 1:
-        dropped_idx = len(sections) - 1
-        if dropped_idx in section_names:
-            truncated_sections.append(section_names[dropped_idx])
+        dropped_name = section_names.pop()
+        if dropped_name is not None:
+            truncated_sections.append(dropped_name)
         sections.pop()
         prompt = "\n".join(sections)
         total_est = _estimate_tokens(prompt, chars_per_token)
