@@ -440,6 +440,7 @@ class FileSnapshotManager:
         Returns the number of snapshots cleaned up.
         """
         orphaned_trash: list[Path] = []
+        trash_dirs: list[Path] = []
         with self._manifest_lock():
             manifest = self._read_manifest_unlocked()
             trash_root = self.base_dir / ".trash"
@@ -450,7 +451,6 @@ class FileSnapshotManager:
                     if trash_dir.name not in manifest
                 ]
             if not manifest:
-                snapshot_dirs: list[Path] = []
                 cleaned = 0
             else:
                 now = datetime.now(timezone.utc)
@@ -468,14 +468,30 @@ class FileSnapshotManager:
                         continue
 
                 cleaned = 0
-                snapshot_dirs = []
-                for audit_id in expired_ids:
-                    snapshot_dirs.append(self.base_dir / audit_id)
-                    del manifest[audit_id]
-                    cleaned += 1
+                staged: list[tuple[Path, Path]] = []
+                try:
+                    for audit_id in expired_ids:
+                        snapshot_dir = self.base_dir / audit_id
+                        trash_dir = self.base_dir / ".trash" / audit_id
+                        if snapshot_dir.exists():
+                            if trash_dir.exists():
+                                raise FileExistsError(trash_dir)
+                            trash_dir.parent.mkdir(parents=True, exist_ok=True)
+                            os.replace(snapshot_dir, trash_dir)
+                            staged.append((snapshot_dir, trash_dir))
+                        elif trash_dir.exists():
+                            staged.append((snapshot_dir, trash_dir))
+                        del manifest[audit_id]
+                        cleaned += 1
 
-                if cleaned:
-                    self._write_manifest(manifest)
+                    if cleaned:
+                        self._write_manifest(manifest)
+                except Exception:
+                    for snapshot_dir, trash_dir in reversed(staged):
+                        if trash_dir.exists():
+                            os.replace(trash_dir, snapshot_dir)
+                    raise
+                trash_dirs = [trash_dir for _, trash_dir in staged]
 
         for trash_dir in orphaned_trash:
             try:
@@ -486,7 +502,14 @@ class FileSnapshotManager:
                     trash_dir,
                     exc,
                 )
-        for snapshot_dir in snapshot_dirs:
-            if snapshot_dir.exists():
-                shutil.rmtree(snapshot_dir)
+        for trash_dir in trash_dirs:
+            if trash_dir.exists():
+                try:
+                    shutil.rmtree(trash_dir)
+                except OSError as exc:
+                    logging.getLogger(__name__).warning(
+                        "Could not remove expired snapshot trash %s: %s",
+                        trash_dir,
+                        exc,
+                    )
         return cleaned

@@ -465,6 +465,58 @@ class TestFileSnapshotManager:
         assert cleaned == 1
         assert sm.list_snapshots("") == []
 
+    def test_cleanup_expired_quarantines_failed_deletes(self, tmp_path, monkeypatch):
+        """Expired data stays reachable from trash when final deletion fails."""
+        original = tmp_path / "original.txt"
+        original.write_text("content")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots", retention_hours=0)
+        record = sm.snapshot(
+            path=original,
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1,
+            project_id="project",
+        )
+        monkeypatch.setattr(
+            "unison.snapshot.shutil.rmtree",
+            lambda path: (_ for _ in ()).throw(OSError("delete failed")),
+        )
+
+        assert sm.cleanup_expired(project_id="project") == 1
+
+        assert not record.snapshot_path.parent.exists()
+        assert (sm.base_dir / ".trash" / record.audit_id).exists()
+
+    def test_cleanup_expired_rolls_back_when_manifest_write_fails(
+        self, tmp_path, monkeypatch
+    ):
+        original = tmp_path / "original.txt"
+        original.write_text("content")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots", retention_hours=0)
+        records = [
+            sm.snapshot(
+                path=original,
+                operation=Operation.MODIFY,
+                agent="developer",
+                iteration=iteration,
+                project_id="project",
+            )
+            for iteration in (1, 2)
+        ]
+        monkeypatch.setattr(
+            sm,
+            "_write_manifest",
+            lambda manifest: (_ for _ in ()).throw(OSError("disk full")),
+        )
+
+        with pytest.raises(OSError, match="disk full"):
+            sm.cleanup_expired(project_id="project")
+
+        assert {item.audit_id for item in sm.list_snapshots("project")} == {
+            record.audit_id for record in records
+        }
+        assert all(record.snapshot_path.exists() for record in records)
+
     def test_cleanup_expired_is_scoped_to_project(self, tmp_path):
         """Project cleanup must not remove another project's snapshots."""
         original = tmp_path / "original.txt"
