@@ -338,7 +338,11 @@ class UnisonHandler(BaseHTTPRequestHandler):
             pipeline_link = project_root / "pipeline.yaml"
             if pipeline is None and pipeline_link.is_symlink():
                 pipeline_file_hint = Path(os.readlink(pipeline_link)).name
-            data["budget"] = self._load_budget(pipeline)
+            data["budget"] = self._load_budget(
+                pipeline,
+                run_id=state.run_id,
+                pipeline_name=state.pipeline_name,
+            )
             data["agents"] = self._load_agents(state, pipeline)
         finally:
             self.project_root = previous_root
@@ -384,23 +388,43 @@ class UnisonHandler(BaseHTTPRequestHandler):
             return "code-dev"
         return "inspect-only"
 
-    def _load_budget(self, pipeline: dict | None = None) -> dict:
-        """Return usage plus limits, reusing a supplied pipeline snapshot."""
+    def _load_budget(
+        self,
+        pipeline: dict | None = None,
+        *,
+        run_id: str = "",
+        pipeline_name: str = "",
+    ) -> dict:
+        """Return project-daily and selected-run usage plus pipeline limits."""
         if pipeline is None:
             pipeline = self._load_pipeline_config()
         daily_used = 0
         per_task_used = 0
-        budget_path = self.project_root / ".unison" / "budget.json"
-        if budget_path.exists():
+        world = World(self.project_root)
+        daily_path = world.daily_budget_file()
+        if daily_path.exists():
             try:
-                with open(budget_path, "r", encoding="utf-8") as f:
+                with open(daily_path, "r", encoding="utf-8") as f:
                     bd = json.load(f)
                 daily_used = bd.get("daily_used", 0)
-                # budget.py stores "task_used"; also accept "per_task_used"
-                # for backward compatibility with hand-crafted test data
-                per_task_used = bd.get("task_used", bd.get("per_task_used", 0))
             except (json.JSONDecodeError, OSError):
                 pass
+
+        if run_id and pipeline_name:
+            ctx = RunContext(
+                project_id=world.project_id,
+                pipeline_key=world.pipeline_key(pipeline_name),
+                run_id=run_id,
+                pipeline_name=pipeline_name,
+            )
+            budget_path = world.run_budget_file(ctx)
+            if budget_path.exists():
+                try:
+                    with open(budget_path, "r", encoding="utf-8") as f:
+                        bd = json.load(f)
+                    per_task_used = bd.get("task_used", 0)
+                except (json.JSONDecodeError, OSError):
+                    pass
 
         daily_limit = 1_000_000
         per_task_limit = 200_000

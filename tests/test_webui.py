@@ -130,6 +130,32 @@ class TestProjectRegistry:
 
 
 class TestUnifiedDataSources:
+    def test_load_state_forwards_state_identity_to_budget_loader(self, tmp_path):
+        import json
+        from unison.webui import UnisonHandler
+
+        unison_dir = tmp_path / ".unison"
+        unison_dir.mkdir()
+        unison_dir.joinpath("state.json").write_text(json.dumps({
+            "version": "2.0",
+            "phase": "dev_active",
+            "history": [],
+            "run_id": "run-current",
+            "pipeline_name": "alpha",
+        }))
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+        handler.registry = ProjectRegistry(tmp_path / "projects.json")
+
+        with patch.object(handler, "_load_pipeline_config", return_value=None), \
+             patch.object(handler, "_load_budget", return_value={}) as load_budget, \
+             patch.object(handler, "_load_agents", return_value=[]):
+            handler._load_state(tmp_path)
+
+        load_budget.assert_called_once_with(
+            None, run_id="run-current", pipeline_name="alpha"
+        )
+
     def test_load_state_exposes_projected_run_id(self, tmp_path):
         import json
         from unison.webui import UnisonHandler
@@ -530,7 +556,7 @@ class TestDeriveMode:
 # ============================================================================
 
 class TestLoadBudget:
-    """Budget is read from budget.json, limits from pipeline YAML config."""
+    """Usage comes from project-daily and current run-scoped files."""
 
     def test_defaults_when_no_budget_file_no_config(self, tmp_path):
         from unison.webui import UnisonHandler
@@ -546,23 +572,35 @@ class TestLoadBudget:
             "per_task_limit": 200_000,
         }
 
-    def test_reads_usage_from_budget_json(self, tmp_path):
+    def test_reads_usage_from_current_budget_files(self, tmp_path):
         import json
+        from datetime import date
         from unison.webui import UnisonHandler
+        from unison.world import World
 
-        unison_dir = tmp_path / ".unison"
-        unison_dir.mkdir()
-        budget_file = unison_dir / "budget.json"
-        budget_file.write_text(json.dumps({
+        world = World(tmp_path)
+        world.unison_dir.mkdir()
+        world.daily_budget_file().write_text(json.dumps({
+            "date": date.today().isoformat(),
             "daily_used": 50000,
-            "task_used": 12000,
+        }))
+        run_budget = (
+            world.unison_dir / "runs" / World.pipeline_key("alpha")
+            / "run-current" / "budget.json"
+        )
+        run_budget.parent.mkdir(parents=True)
+        run_budget.write_text(json.dumps({"task_used": 12000}))
+        # A stale legacy file must never override canonical usage.
+        world.unison_dir.joinpath("budget.json").write_text(json.dumps({
+            "daily_used": 999999,
+            "task_used": 999999,
         }))
 
         handler = UnisonHandler.__new__(UnisonHandler)
         handler.project_root = tmp_path
 
         with patch.object(handler, "_load_pipeline_config", return_value=None):
-            budget = handler._load_budget()
+            budget = handler._load_budget(run_id="run-current", pipeline_name="alpha")
         assert budget["daily_used"] == 50000
         assert budget["per_task_used"] == 12000
 
@@ -585,18 +623,27 @@ class TestLoadBudget:
 
     def test_handles_corrupt_budget_json(self, tmp_path):
         from unison.webui import UnisonHandler
+        from unison.world import World
 
-        unison_dir = tmp_path / ".unison"
-        unison_dir.mkdir()
-        (unison_dir / "budget.json").write_text("not json {{")
+        world = World(tmp_path)
+        world.unison_dir.mkdir()
+        world.daily_budget_file().write_text("not json {{")
+        run_budget = (
+            world.unison_dir / "runs" / World.pipeline_key("alpha")
+            / "run-current" / "budget.json"
+        )
+        run_budget.parent.mkdir(parents=True)
+        run_budget.write_text("not json {{")
 
         handler = UnisonHandler.__new__(UnisonHandler)
         handler.project_root = tmp_path
 
         with patch.object(handler, "_load_pipeline_config", return_value=None):
-            budget = handler._load_budget()
-        # Falls back to defaults
+            budget = handler._load_budget(
+                run_id="run-current", pipeline_name="alpha"
+            )
         assert budget["daily_used"] == 0
+        assert budget["per_task_used"] == 0
         assert budget["daily_limit"] == 1_000_000
 
 
