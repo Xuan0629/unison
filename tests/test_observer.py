@@ -1050,6 +1050,63 @@ class TestObserverReportFile:
             f"Second call should not rewrite report, but mtime changed"
         )
 
+    def test_notification_offset_advances_to_bytes_actually_read(
+        self, tmp_path, monkeypatch
+    ):
+        """A concurrent append read in the same pass must not be reported twice."""
+        import builtins
+        import json as _json
+        import unison.observer as observer_module
+
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        world.notifications_file.write_text(_json.dumps({"title": "first"}) + "\n")
+        observer = Observer(world=world)
+        reports = []
+        monkeypatch.setattr(
+            observer, "send_full_report", lambda *args, **kwargs: reports.append(True)
+        )
+        real_open = builtins.open
+        appended = False
+
+        class AppendBeforeRead:
+            def __init__(self, file_obj):
+                self.file_obj = file_obj
+
+            def __enter__(self):
+                self.file_obj.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self.file_obj.__exit__(*args)
+
+            def seek(self, *args):
+                return self.file_obj.seek(*args)
+
+            def read(self, *args):
+                nonlocal appended
+                if not appended:
+                    appended = True
+                    with real_open(world.notifications_file, "a", encoding="utf-8") as f:
+                        f.write(_json.dumps({"title": "second"}) + "\n")
+                return self.file_obj.read(*args)
+
+            def tell(self):
+                return self.file_obj.tell()
+
+        def open_with_concurrent_append(path, *args, **kwargs):
+            file_obj = real_open(path, *args, **kwargs)
+            if Path(path) == world.notifications_file and args[0] == "rb":
+                return AppendBeforeRead(file_obj)
+            return file_obj
+
+        monkeypatch.setattr(observer_module, "open", open_with_concurrent_append, raising=False)
+
+        observer._process_new_notifications()
+        observer._process_new_notifications()
+
+        assert len(reports) == 1
+
 
 # ============================================================================
 # P10: Phase 1 — Notification data model

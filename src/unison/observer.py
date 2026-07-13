@@ -1480,15 +1480,18 @@ class Observer:
         if current_size <= self._notification_offset:
             return  # No new content since last read
 
-        # Read only new content from the tracked offset
+        # Read only new content from the tracked byte offset.  Use the file
+        # position after reading so bytes appended during this read are not
+        # processed again on the next pass.
         try:
-            with open(self.world.notifications_file, "r", encoding="utf-8") as f:
+            with open(self.world.notifications_file, "rb") as f:
                 f.seek(self._notification_offset)
                 _new_data = f.read()
+                next_offset = f.tell()
         except OSError:
             return
 
-        self._notification_offset = current_size
+        self._notification_offset = next_offset
 
         # Write a full report on each new state change
         report_path = self.world.report_file(1)
