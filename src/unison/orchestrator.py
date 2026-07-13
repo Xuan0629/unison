@@ -18,7 +18,6 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -89,7 +88,6 @@ class Orchestrator:
         self.spec = spec
         self.dry_run = dry_run
         self._state = State()
-        self._run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
         self._run_history = RunHistoryStore(self.spec.world.root)
         self._run_history_started = False
         self._halt_category: str = "stage"  # "stage" or "external" (P0.5)
@@ -164,6 +162,10 @@ class Orchestrator:
             self.spec.world.root,
             self.spec.pipeline_name,
         )
+        # One execution has one canonical identity across history, controls,
+        # state, budget, reviews, and snapshots.
+        self._run_id = self._run_ctx.run_id
+        self._state.run_id = self._run_id
         self.spec.world.ensure_run_directories(self._run_ctx)
 
         # P12c: Seed scoped PRD from legacy if scoped doesn't exist yet.
@@ -1803,7 +1805,7 @@ class Orchestrator:
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
                     redirect_path = (
-                        self.spec.world.root / ".unison" / "control" / "redirect.json"
+                        self.spec.world.run_control_dir(self._run_ctx) / "redirect.json"
                     )
                     try:
                         redirect_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3529,10 +3531,7 @@ class Orchestrator:
         return max(1, int(min(base, remaining)))
 
     def _check_control_files(self) -> list[str]:
-        """Check for dashboard control files in ``.unison/control/``.
-
-        P12c: Checks run-scoped directory first, then legacy path for
-        backward compatibility.
+        """Check the current run's scoped dashboard control directory.
 
         Called at phase boundaries.  Reads and consumes ALL control
         files (P8 S18: previously only consumed the first match,
@@ -3542,14 +3541,9 @@ class Orchestrator:
             List of action strings (``"pause"``, ``"skip"``, ``"report"``)
             for all control files consumed, or empty list.
         """
-        ctx = getattr(self, "_run_ctx", None)
-        if ctx is not None:
-            # P1-5: When a RunContext is active, NEVER fall back to legacy
-            # control directory — stale pause/skip/report from other runs
-            # must not affect this pipeline.
-            control_dir = self.spec.world.run_control_dir(ctx)
-        else:
-            control_dir = self.spec.world.root / ".unison" / "control"
+        # Never fall back to the legacy global directory: stale controls from
+        # another run must not affect this execution.
+        control_dir = self.spec.world.run_control_dir(self._run_ctx)
         if not control_dir.exists():
             return []
 
@@ -3565,7 +3559,7 @@ class Orchestrator:
         return actions
 
     def _check_redirect_file(self) -> RedirectControl | None:
-        """P10: Read and consume ``.unison/control/redirect.json``.
+        """P10: Read and consume this run's scoped ``redirect.json``.
 
         P12c: Uses run-scoped control directory.
         Returns:
@@ -3575,13 +3569,7 @@ class Orchestrator:
         import logging
         _log = logging.getLogger(__name__)
 
-        ctx = getattr(self, "_run_ctx", None)
-        control_dir = (
-            self.spec.world.run_control_dir(ctx)
-            if ctx is not None
-            else self.spec.world.root / ".unison" / "control"
-        )
-        # P1-5: No legacy fallback — control actions must target this run
+        control_dir = self.spec.world.run_control_dir(self._run_ctx)
         redirect_path = control_dir / "redirect.json"
         if not redirect_path.exists():
             return None

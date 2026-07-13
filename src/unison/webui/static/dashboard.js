@@ -415,10 +415,15 @@ function poll() {
 // ======================================================================
 
 function sendControl(action) {
+  var runId = _prev && _prev.run_id;
+  if (!runId) {
+    console.warn("Control requires an active run");
+    return;
+  }
   fetch(apiUrl("/api/control"), {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({action: action})
+    body: JSON.stringify({action: action, run_id: runId})
   }).then(function (r) { return r.json(); })
     .then(function (data) {
       if (data.ok) {

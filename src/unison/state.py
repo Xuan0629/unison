@@ -107,6 +107,7 @@ class State:
     runtime_agents: list[dict] = field(default_factory=list)    # V2: 运行时 agent 列表（含 MoA 等动态 agent）
     observer_language: str = "en"  # P10: Language for observer notifications
     pipeline_name: str = ""        # P10: Human-readable pipeline name
+    run_id: str = ""               # Canonical execution identity
 
     def __post_init__(self) -> None:
         if self.phase not in VALID_PHASES:
@@ -139,6 +140,7 @@ class State:
             "runtime_agents": self.runtime_agents,
             "observer_language": self.observer_language,
             "pipeline_name": self.pipeline_name,
+            "run_id": self.run_id,
         }
 
     @classmethod
@@ -173,6 +175,7 @@ class State:
             runtime_agents=d.get("runtime_agents", []),
             observer_language=d.get("observer_language", "en"),
             pipeline_name=d.get("pipeline_name", ""),
+            run_id=d.get("run_id", ""),
         )
 
     # ---- State Machine ------------------------------------------------------

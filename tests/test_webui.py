@@ -130,6 +130,29 @@ class TestProjectRegistry:
 
 
 class TestUnifiedDataSources:
+    def test_load_state_exposes_projected_run_id(self, tmp_path):
+        import json
+        from unison.webui import UnisonHandler
+
+        state_dir = tmp_path / ".unison"
+        state_dir.mkdir()
+        state_dir.joinpath("state.json").write_text(json.dumps({
+            "version": "2.0",
+            "phase": "dev_active",
+            "history": [],
+            "run_id": "run-current",
+        }))
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+        handler.registry = ProjectRegistry(tmp_path / "projects.json")
+
+        with patch.object(handler, "_load_pipeline_config", return_value=None), \
+             patch.object(handler, "_load_budget", return_value={}), \
+             patch.object(handler, "_load_agents", return_value=[]):
+            data = handler._load_state(tmp_path)
+
+        assert data["run_id"] == "run-current"
+
     def test_load_state_reads_active_pipeline_once(self, tmp_path):
         from unison.webui import UnisonHandler
 
@@ -954,44 +977,105 @@ class TestDeriveModeEdgeCases:
 # ============================================================================
 
 class TestHandleControl:
-    """Tests for _handle_control — writes control files to .unison/control/."""
+    """Controls must target one live run-scoped control directory."""
 
-    def test_pause_writes_control_file(self, tmp_path):
+    @staticmethod
+    def _start_run(root, run_id="run-1", pipeline_name="alpha"):
+        from unison.run_history import RunHistoryStore
+        RunHistoryStore(root).start(
+            run_id, pipeline_name=pipeline_name, mode="code-dev"
+        )
+
+    def test_pause_writes_run_scoped_control_file(self, tmp_path):
+        import json
+        from unison.webui import UnisonHandler
+        from unison.world import RunContext, World
+
+        self._start_run(tmp_path)
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        result = handler._handle_control("pause", run_id="run-1")
+
+        ctx = RunContext(
+            project_id=World(tmp_path).project_id,
+            pipeline_key=World.pipeline_key("alpha"),
+            run_id="run-1",
+            pipeline_name="alpha",
+        )
+        control_file = World(tmp_path).run_control_dir(ctx) / "pause.json"
+        assert result == {"ok": True, "action": "pause", "run_id": "run-1"}
+        assert json.loads(control_file.read_text())["action"] == "pause"
+        assert not (tmp_path / ".unison" / "control" / "pause.json").exists()
+
+    @pytest.mark.parametrize("action", ["skip", "report"])
+    def test_other_actions_write_run_scoped_control_file(self, tmp_path, action):
+        from unison.webui import UnisonHandler
+        from unison.world import World
+
+        self._start_run(tmp_path)
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        result = handler._handle_control(action, run_id="run-1")
+
+        control_file = (
+            tmp_path / ".unison" / "control" / "runs"
+            / World.pipeline_key("alpha") / "run-1" / f"{action}.json"
+        )
+        assert result["ok"] is True
+        assert control_file.exists()
+
+    def test_missing_run_id_fails_closed(self, tmp_path):
         from unison.webui import UnisonHandler
         handler = UnisonHandler.__new__(UnisonHandler)
         handler.project_root = tmp_path
+        self._start_run(tmp_path)
 
         result = handler._handle_control("pause")
-        assert result["ok"] is True
-        assert result["action"] == "pause"
 
-        cf = tmp_path / ".unison" / "control" / "pause.json"
-        assert cf.exists()
-        import json
-        data = json.loads(cf.read_text())
-        assert data["action"] == "pause"
+        assert result["ok"] is False
+        assert "run_id" in result["error"]
+        assert not (tmp_path / ".unison" / "control" / "pause.json").exists()
 
-    def test_skip_writes_control_file(self, tmp_path):
+    def test_unknown_or_finished_run_fails_closed(self, tmp_path):
+        from unison.run_history import RunHistoryStore
         from unison.webui import UnisonHandler
+
+        store = RunHistoryStore(tmp_path)
+        store.start("done-run", pipeline_name="alpha", mode="code-dev")
+        store.finish(
+            "done-run", status="done", phase="done", iteration=1,
+            verdict="PASS", commit="abc",
+        )
         handler = UnisonHandler.__new__(UnisonHandler)
         handler.project_root = tmp_path
 
-        result = handler._handle_control("skip")
-        assert result["ok"] is True
+        assert handler._handle_control("pause", run_id="missing")["ok"] is False
+        assert handler._handle_control("pause", run_id="done-run")["ok"] is False
 
-        cf = tmp_path / ".unison" / "control" / "skip.json"
-        assert cf.exists()
-
-    def test_report_writes_control_file(self, tmp_path):
+    def test_project_and_run_isolation(self, tmp_path):
         from unison.webui import UnisonHandler
+        from unison.world import World
+
+        left = tmp_path / "left"
+        right = tmp_path / "right"
+        left.mkdir()
+        right.mkdir()
+        self._start_run(left, "left-run", "same-name")
+        self._start_run(right, "right-run", "same-name")
         handler = UnisonHandler.__new__(UnisonHandler)
-        handler.project_root = tmp_path
+        handler.project_root = left
 
-        result = handler._handle_control("report")
+        result = handler._handle_control("pause", right, "right-run")
+
+        expected = (
+            right / ".unison" / "control" / "runs"
+            / World.pipeline_key("same-name") / "right-run" / "pause.json"
+        )
         assert result["ok"] is True
-
-        cf = tmp_path / ".unison" / "control" / "report.json"
-        assert cf.exists()
+        assert expected.exists()
+        assert not (left / ".unison" / "control" / "pause.json").exists()
 
     def test_invalid_action_returns_error(self, tmp_path):
         from unison.webui import UnisonHandler
@@ -1013,13 +1097,18 @@ class TestHandleControl:
 
     def test_control_dir_created_if_missing(self, tmp_path):
         from unison.webui import UnisonHandler
+        from unison.world import World
         handler = UnisonHandler.__new__(UnisonHandler)
         handler.project_root = tmp_path
+        self._start_run(tmp_path)
 
-        control_dir = tmp_path / ".unison" / "control"
+        control_dir = (
+            tmp_path / ".unison" / "control" / "runs"
+            / World.pipeline_key("alpha") / "run-1"
+        )
         assert not control_dir.exists()
 
-        handler._handle_control("pause")
+        handler._handle_control("pause", run_id="run-1")
         assert control_dir.exists()
         assert control_dir.is_dir()
 

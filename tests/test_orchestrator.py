@@ -157,6 +157,9 @@ agents:
         runs = RunHistoryStore(tmp_path).list_runs(migrate=False)
         assert final.phase == "done"
         assert len(runs) == 1
+        assert runs[0]["id"] == orchestrator._run_ctx.run_id
+        assert orchestrator._run_id == orchestrator._run_ctx.run_id
+        assert final.run_id == orchestrator._run_ctx.run_id
         assert runs[0]["pipeline_name"] == "pipeline"
         assert runs[0]["status"] == "done"
         assert runs[0]["verdict"] == "PASS"
@@ -2174,10 +2177,11 @@ class TestP10023ExhaustionAndSkipRedirect:
             "planning_active", "planning_review", "planning", "planner",
         )
 
-        redirect_path = tmp_path / ".unison" / "control" / "redirect.json"
+        redirect_path = orch.spec.world.run_control_dir(orch._run_ctx) / "redirect.json"
         assert redirect_path.exists(), (
             "redirect.json should be written when SKIP quality gate fails"
         )
+        assert not (tmp_path / ".unison" / "control" / "redirect.json").exists()
         data = _json.loads(redirect_path.read_text(encoding="utf-8"))
         assert "reason" in data
         assert "SKIP rejected" in data["reason"]
@@ -2203,7 +2207,7 @@ class TestP10023ExhaustionAndSkipRedirect:
             "planning_active", "planning_review", "planning", "planner",
         )
 
-        redirect_path = tmp_path / ".unison" / "control" / "redirect.json"
+        redirect_path = orch.spec.world.run_control_dir(orch._run_ctx) / "redirect.json"
         data = _json.loads(redirect_path.read_text(encoding="utf-8"))
 
         # Schema: {"reason": "...", "corrective_prompt": "...", "timestamp": "..."}

@@ -39,6 +39,7 @@ from urllib.request import Request, urlopen
 
 from unison.state import State
 from unison.run_history import RunHistoryStore
+from unison.world import RunContext, World
 
 # ============================================================================
 # F8: Session token — generated on startup, required for control endpoints
@@ -266,6 +267,7 @@ class UnisonHandler(BaseHTTPRequestHandler):
                     result = self._handle_control(
                         data.get("action", ""),
                         self._request_project_root(parsed.query),
+                        data.get("run_id"),
                     )
                 self._json_response(result)
             except KeyError as e:
@@ -524,8 +526,13 @@ class UnisonHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def _handle_control(self, action: str, project_root: Path | None = None) -> dict:
-        """Write a control-file to ``.unison/control/`` for the orchestrator.
+    def _handle_control(
+        self,
+        action: str,
+        project_root: Path | None = None,
+        run_id: str | None = None,
+    ) -> dict:
+        """Write a control file for one explicitly selected live run.
 
         The orchestrator polls this directory at phase boundaries and
         acts on ``pause`` (halt), ``skip`` (force PASS), or ``report``
@@ -535,9 +542,28 @@ class UnisonHandler(BaseHTTPRequestHandler):
         if action not in valid:
             return {"ok": False, "error":
                     f"Unknown action: {action}. Valid: {', '.join(sorted(valid))}"}
+        if not isinstance(run_id, str) or not run_id:
+            return {"ok": False, "error": "run_id is required"}
 
         root = Path(project_root or self.project_root).resolve()
-        control_dir = root / ".unison" / "control"
+        runs = RunHistoryStore(root).list_runs(migrate=False)
+        run = next((item for item in runs if item.get("id") == run_id), None)
+        if run is None:
+            return {"ok": False, "error": f"Unknown run_id: {run_id}"}
+        if run.get("status") != "running" or run.get("legacy"):
+            return {"ok": False, "error": f"Run is not active: {run_id}"}
+
+        pipeline_name = run.get("pipeline_name")
+        if not isinstance(pipeline_name, str) or not pipeline_name:
+            return {"ok": False, "error": f"Run has no pipeline identity: {run_id}"}
+        world = World(root)
+        ctx = RunContext(
+            project_id=world.project_id,
+            pipeline_key=world.pipeline_key(pipeline_name),
+            run_id=run_id,
+            pipeline_name=pipeline_name,
+        )
+        control_dir = world.run_control_dir(ctx)
         control_dir.mkdir(parents=True, exist_ok=True)
 
         control_file = control_dir / f"{action}.json"
@@ -546,7 +572,7 @@ class UnisonHandler(BaseHTTPRequestHandler):
             "timestamp": time.time(),
         }))
 
-        return {"ok": True, "action": action}
+        return {"ok": True, "action": action, "run_id": run_id}
 
     def _sse_response(self, project_root: Path | None = None) -> None:
         """Stream state changes to an SSE (Server-Sent Events) client.
