@@ -1,14 +1,74 @@
 """Tests for orchestrator.py — Orchestrator state machine driver."""
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 import pytest
 
 from unison.orchestrator import Orchestrator
 from unison.state import State
 from unison.world import World
 from unison.pipeline import PipelineLoader
-from unison.interfaces import PipelineSpec
+from unison.interfaces import AgentResult, PipelineSpec
+
+
+class TestSelfHealHaltIsolation:
+    @pytest.mark.parametrize(
+        ("category", "expected_halt"),
+        [("stage", False), ("external", True)],
+    )
+    def test_successful_self_heal_only_clears_stage_halt(
+        self, tmp_path, category, expected_halt
+    ):
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(
+            """version: "2.0"
+project_root: "."
+mode: dev:quick
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test-model
+    system_prompt_path: prompts/developer.md
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: test-model
+    system_prompt_path: prompts/reviewer.md
+"""
+        )
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "developer.md").write_text("developer")
+        (prompts / "reviewer.md").write_text("reviewer")
+        spec = PipelineLoader().load(pipeline_file)
+        orchestrator = Orchestrator(spec=spec)
+        orchestrator._state.halt_signal = True
+        orchestrator._state.halt_reason = "halted"
+        orchestrator._halt_category = category
+        orchestrator._invoke_agent_for_role = MagicMock()
+        result = AgentResult(
+            success=False,
+            exit_code=1,
+            duration=1.0,
+            stdout_tail="",
+            stderr_tail="src/app.py",
+            log_path=tmp_path / "missing.log",
+            error="bug",
+        )
+
+        fixer = MagicMock()
+        fixer.attempt_fix.return_value.success = True
+        fixer.attempt_fix.return_value.fix_applied = True
+        with patch("unison.self_heal.ErrorClassifier.classify", return_value="CONSUMER_BUG"), \
+             patch("unison.self_heal.FixOrchestrator", return_value=fixer):
+            orchestrator._attempt_self_heal("developer", 1, "dev_review", result)
+
+        assert orchestrator._state.halt_signal is expected_halt
+        assert orchestrator._state.halt_reason == ("halted" if expected_halt else None)
+        orchestrator._invoke_agent_for_role.assert_called_once_with(
+            "developer", 1, "dev_review"
+        )
 
 
 class TestOrchestrator:

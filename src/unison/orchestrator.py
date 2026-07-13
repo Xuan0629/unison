@@ -126,6 +126,18 @@ class Orchestrator:
                 matrix=self.spec.risk_matrix,
                 workspace=self.spec.world.root,
             )
+            # P2: Clean up expired snapshots at pipeline start.
+            # Without this, pytest runs accumulate thousands of test
+            # snapshots that are never cleaned.
+            try:
+                cleaned = self._snapshot_mgr.cleanup_expired()
+                if cleaned > 0:
+                    import logging
+                    logging.getLogger(__name__).info(
+                        "Cleaned %d expired snapshots", cleaned
+                    )
+            except Exception:
+                pass  # best-effort cleanup
 
         # -- observer tracking (P8 S10) ----------------------------------------
         self._observer_proc: subprocess.Popen | None = None
@@ -2162,8 +2174,9 @@ class Orchestrator:
         heal_result = fixer.attempt_fix(error_type, result)
 
         if heal_result.success and heal_result.fix_applied:
-            self._state.halt_reason = None  # clear any partial halt
-            self._state.halt_signal = False
+            if self._halt_category == "stage":
+                self._state.halt_reason = None
+                self._state.halt_signal = False
             # Retry the failed step
             self._invoke_agent_for_role(role, iteration, review_phase)
         else:
