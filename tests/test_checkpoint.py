@@ -23,7 +23,6 @@ class TestFileCheckpointManager:
         import unison.checkpoint as checkpoint_module
 
         cm = FileCheckpointManager(base_dir=tmp_path)
-        monkeypatch.setattr(checkpoint_module.time, "time", lambda: 1234)
         original = State(phase="dev_active", iteration=1)
         path = cm.save("project", original, iter_n=1, commit="old")
         previous = path.read_text()
@@ -37,8 +36,31 @@ class TestFileCheckpointManager:
             cm.save("project", updated, iter_n=1, commit="new")
 
         assert path.read_text() == previous
-        failed_path = tmp_path / "project" / "ckpt-1-done-1234.json"
-        assert not list(failed_path.parent.glob(f".{failed_path.name}.*.tmp"))
+        assert len(cm.list_checkpoints("project")) == 1
+        assert not list(path.parent.glob(".*.tmp"))
+
+    def test_save_same_iteration_and_second_keeps_both_checkpoints(
+        self, tmp_path, monkeypatch,
+    ):
+        cm = FileCheckpointManager(base_dir=tmp_path)
+        timestamps = iter((1234000000000, 1234000000001))
+        monkeypatch.setattr(
+            "unison.checkpoint.time.time_ns", lambda: next(timestamps)
+        )
+        first_state = State(phase="dev_active", iteration=2)
+        first_state.last_review_verdict = "REQUEST_CHANGES"
+        second_state = State(phase="dev_active", iteration=2)
+        second_state.last_review_verdict = "PASS"
+        first = cm.save("test-project", first_state, iter_n=2)
+        second = cm.save("test-project", second_state, iter_n=2)
+
+        assert first != second
+        assert len(cm.list_checkpoints("test-project")) == 2
+        resumed = cm.load_latest("test-project")
+        assert resumed is not None
+        assert resumed.phase == "dev_active"
+        assert resumed.iteration == 2
+        assert resumed.last_review_verdict == "PASS"
 
     def test_save_checkpoint(self, tmp_path):
         """Save a checkpoint creates a file."""

@@ -16,7 +16,7 @@ class FileCheckpointManager:
     """Checkpoint persistence backed by the filesystem.
 
     Stores checkpoints as JSON files in ``base_dir/<project>/`` with the
-    naming convention ``ckpt-<iter>-<phase>-<timestamp>.json``.
+    naming convention ``ckpt-<iter>-<phase>-<timestamp>-<unique>.json``.
 
     Usage::
 
@@ -45,7 +45,7 @@ class FileCheckpointManager:
         project_dir = self.base_dir / project
         project_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = int(time.time())
+        timestamp = time.time_ns()
         filename = f"ckpt-{iter_n}-{state.phase}-{timestamp}.json"
         path = project_dir / filename
 
@@ -90,6 +90,6 @@ class FileCheckpointManager:
             return []
         checkpoints = sorted(
             project_dir.glob("ckpt-*.json"),
-            key=lambda p: p.stat().st_mtime,
+            key=lambda p: (p.stat().st_mtime_ns, p.name),
         )
         return checkpoints
