@@ -178,6 +178,27 @@ class TestState:
         assert s.phase == "init"
         assert s.iteration == 0
 
+    def test_atomic_read_corrupt_file_returns_default_state(self, tmp_path):
+        state_file = tmp_path / "state.json"
+        state_file.write_text("not json {{", encoding="utf-8")
+
+        s = State.atomic_read(state_file)
+
+        assert s.phase == "init"
+        assert s.iteration == 0
+
+    @pytest.mark.parametrize("payload", [b"\xff\xfe", b'{"phase":"invalid_phase"}'])
+    def test_atomic_read_invalid_encoding_or_schema_returns_default_state(
+        self, tmp_path, payload
+    ):
+        state_file = tmp_path / "state.json"
+        state_file.write_bytes(payload)
+
+        s = State.atomic_read(state_file)
+
+        assert s.phase == "init"
+        assert s.iteration == 0
+
 
 class TestStateValidation:
     """State validation tests."""

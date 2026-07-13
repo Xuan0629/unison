@@ -236,10 +236,16 @@ class State:
 
     @classmethod
     def atomic_read(cls, filepath: Path | str) -> "State":
-        """从文件读取 State。文件不存在时返回默认 State。"""
+        """从文件读取 State；文件缺失、不可读或损坏时返回默认 State。"""
         filepath = Path(filepath)
         if not filepath.exists():
             return cls()
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return cls.from_dict(data)
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return cls()
+        try:
+            return cls.from_dict(data)
+        except (TypeError, ValueError, KeyError):
+            return cls()
