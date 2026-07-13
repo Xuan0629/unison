@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 import queue
+import secrets
 import tempfile
 import threading
 import time
@@ -49,9 +50,8 @@ _SESSION_TOKEN: str | None = None
 
 
 def _generate_session_token() -> str:
-    """Generate a session token from PID + timestamp (sha256 hex)."""
-    raw = f"{os.getpid()}-{time.time()}"
-    return hashlib.sha256(raw.encode()).hexdigest()
+    """Generate a cryptographically secure control-endpoint token."""
+    return secrets.token_hex(32)
 
 
 def _set_owner_only(path: Path) -> None:

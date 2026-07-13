@@ -1339,21 +1339,16 @@ class TestRunHistoryStore:
 class TestSessionToken:
     """F8: WebUI control token generation and validation."""
 
-    def test_token_generation_is_stable_for_same_input(self):
-        """Token generation produces deterministic output for same PID+timestamp."""
+    def test_token_generation_uses_cryptographic_randomness(self):
+        """Each token is an independent 256-bit hexadecimal value."""
         from unison.webui.server import _generate_session_token
-        import hashlib
 
-        # Calling _generate_session_token twice will produce different tokens
-        # (different timestamps), but the format should be consistent
         token1 = _generate_session_token()
         token2 = _generate_session_token()
 
-        # Both should be 64-char hex strings (sha256)
         assert len(token1) == 64
         assert len(token2) == 64
         assert all(c in "0123456789abcdef" for c in token1)
-        # Different calls should produce different tokens
         assert token1 != token2
 
     def test_token_passed_to_serve_is_stored(self, monkeypatch):
