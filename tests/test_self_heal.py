@@ -229,6 +229,22 @@ class TestErrorClassifier:
         )
         assert ErrorClassifier.classify(result, minimal_spec) == "MODEL_ERROR"
 
+    def test_classify_model_error_rate_limit_in_stderr(self, minimal_spec):
+        result = AgentResult(
+            success=False, exit_code=1, duration=1.0,
+            stdout_tail="", stderr_tail="Error: 429 rate limit exceeded",
+            log_path=Path("/tmp/log"), error="request failed",
+        )
+        assert ErrorClassifier.classify(result, minimal_spec) == "MODEL_ERROR"
+
+    def test_classify_timeout_beats_generic_stderr_error(self, minimal_spec):
+        result = AgentResult(
+            success=False, exit_code=1, duration=1.0,
+            stdout_tail="", stderr_tail="Error: request aborted",
+            log_path=Path("/tmp/log"), error="subprocess timeout after 600s",
+        )
+        assert ErrorClassifier.classify(result, minimal_spec) == "TIMEOUT"
+
     def test_classify_model_error_api(self, minimal_spec):
         result = AgentResult(
             success=False, exit_code=1, duration=1.0,

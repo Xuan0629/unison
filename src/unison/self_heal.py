@@ -40,6 +40,7 @@ class ErrorClassifier:
         an API-error keyword.
         """
         err = (result.error or "").lower()
+        tail = (result.stderr_tail or "").lower()
 
         # 1. UNSAFE — traceback in our source code (always a code bug)
         if result.log_path and Path(result.log_path).exists():
@@ -51,10 +52,9 @@ class ErrorClassifier:
 
         # 2. UNSAFE — traceback in stderr tail
         if result.stderr_tail:
-            tail = result.stderr_tail.lower()
             if _UNISON_PREFIX in tail:
                 return "UNISON_BUG"
-            if "traceback" in tail or "error" in tail:
+            if "traceback" in tail and "src/" in tail:
                 return "CONSUMER_BUG"
 
         # 3. SAFE — timeout (transient, safe to retry)
@@ -62,9 +62,13 @@ class ErrorClassifier:
             return "TIMEOUT"
 
         # 4. SAFE — model / API errors (rate-limit, auth, overloaded, …)
+        combined_error = f"{err}\n{tail}" if result.stderr_tail else err
         for kw in _MODEL_ERROR_KW:
-            if kw in err:
+            if kw in combined_error:
                 return "MODEL_ERROR"
+
+        if result.stderr_tail and "traceback" in tail:
+            return "CONSUMER_BUG"
 
         return "UNKNOWN"
 

@@ -247,6 +247,7 @@ class CrashClassifier:
         which was fixed in the same pass to also check UNSAFE first.
         """
         err = (result.error or "").lower()
+        tail = (result.stderr_tail or "").lower()
 
         # ── 1. UNSAFE — read agent log for tracebacks ──────────────────────
         if result.log_path and Path(result.log_path).exists():
@@ -256,12 +257,11 @@ class CrashClassifier:
             if "src/" in log_content:
                 return "CONSUMER_BUG"
 
-        # ── 2. UNSAFE — stderr tail ───────────────────────────────────────
+        # ── 2. UNSAFE — stderr tracebacks ──────────────────────────────────
         if result.stderr_tail:
-            tail = result.stderr_tail.lower()
             if _UNISON_PREFIX in tail:
                 return "UNISON_BUG"
-            if "traceback" in tail or "error" in tail:
+            if "traceback" in tail and "src/" in tail:
                 return "CONSUMER_BUG"
 
         # ── 3. SAFE — timeout ─────────────────────────────────────────────
@@ -269,9 +269,14 @@ class CrashClassifier:
             return "TIMEOUT"
 
         # ── 4. SAFE — model / API errors ──────────────────────────────────
+        combined_error = f"{err}\n{tail}" if result.stderr_tail else err
         for kw in _MODEL_ERROR_KW:
-            if kw in err:
+            if kw in combined_error:
                 return "MODEL_ERROR"
+
+        # ── 5. UNSAFE — explicit consumer traceback without src path ──────
+        if result.stderr_tail and "traceback" in tail:
+            return "CONSUMER_BUG"
 
         return "UNKNOWN"
 
