@@ -51,14 +51,14 @@ def has_converged(
 ) -> bool:
     """Check if reviewer findings have converged across iterations.
 
-    Returns True when >= overlap_ratio of current findings are
-    >= similarity_threshold similar to previous findings.
+    Returns True when >= overlap_ratio of the larger finding set can be
+    matched one-to-one against the other set at >= similarity_threshold.
 
     Args:
         prev_findings: Findings from previous iteration.
         curr_findings: Findings from current iteration.
         similarity_threshold: Minimum Levenshtein ratio to count as "same finding".
-        overlap_ratio: Fraction of current findings that must match previous ones.
+        overlap_ratio: Fraction of the larger finding set that must be matched one-to-one.
 
     Returns:
         True if the review loop has converged (stalled on same issues).
@@ -67,13 +67,20 @@ def has_converged(
         return False
 
     matched = 0
+    unmatched_prev = set(range(len(prev_findings)))
     for curr in curr_findings:
-        for prev in prev_findings:
-            if finding_similarity(curr, prev) >= similarity_threshold:
-                matched += 1
-                break
+        best_index = None
+        best_score = 0.0
+        for index in unmatched_prev:
+            score = finding_similarity(curr, prev_findings[index])
+            if score >= similarity_threshold and score > best_score:
+                best_index = index
+                best_score = score
+        if best_index is not None:
+            matched += 1
+            unmatched_prev.remove(best_index)
 
-    return (matched / len(curr_findings)) >= overlap_ratio
+    return (matched / max(len(prev_findings), len(curr_findings))) >= overlap_ratio
 
 
 def convergence_diagnostic(prev_findings: list[str], curr_findings: list[str]) -> str:

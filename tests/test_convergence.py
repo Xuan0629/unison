@@ -51,7 +51,13 @@ class TestHasConverged:
             ["fix bug A", "add test B", "improve docs C", "optimize D", "clean E"],
             ["fix bug A", "add test B", "improve docs C", "optimize D"],
             overlap_ratio=0.80,
-        ) is True  # 4/4=100% overlap
+        ) is True  # 4/5=80% overlap across the larger set
+
+    def test_large_drop_in_finding_count_is_not_convergence(self):
+        """Resolving nine of ten findings is progress, not a stalled loop."""
+        previous = [f"finding {index}" for index in range(10)]
+
+        assert has_converged(previous, ["finding 0"], overlap_ratio=0.80) is False
 
 
 class TestConvergenceDiagnostic:
