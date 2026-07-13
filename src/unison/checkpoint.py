@@ -59,11 +59,16 @@ class FileCheckpointManager:
     # -- load ------------------------------------------------------------------
 
     def load_latest(self, project: str) -> State | None:
-        """Return the most recent checkpoint for *project*, or ``None``."""
-        checkpoints = self.list_checkpoints(project)
-        if not checkpoints:
-            return None
-        return self.load(checkpoints[-1])
+        """Return the newest valid checkpoint for *project*, or ``None``."""
+        for checkpoint in reversed(self.list_checkpoints(project)):
+            try:
+                return self.load(checkpoint)
+            except (
+                OSError, UnicodeError, json.JSONDecodeError, TypeError,
+                ValueError, KeyError, AttributeError,
+            ):
+                continue
+        return None
 
     def load(self, checkpoint_path: Path) -> State:
         """Deserialize the State stored at *checkpoint_path*."""

@@ -116,6 +116,27 @@ class TestFileCheckpointManager:
         assert result.phase == "dev_review"
         assert result.iteration == 3
 
+    @pytest.mark.parametrize("corrupt_payload", ["not json {{", "[1, 2, 3]"])
+    def test_load_latest_skips_corrupt_newest_checkpoint(
+        self, tmp_path, corrupt_payload
+    ):
+        cm = FileCheckpointManager(base_dir=tmp_path)
+        older = cm.save(
+            "test-project", State(phase="dev_active", iteration=2), iter_n=2
+        )
+        newest = cm.save(
+            "test-project", State(phase="dev_review", iteration=3), iter_n=3
+        )
+        older.touch()
+        newest.write_text(corrupt_payload, encoding="utf-8")
+        newest.touch()
+
+        result = cm.load_latest("test-project")
+
+        assert result is not None
+        assert result.phase == "dev_active"
+        assert result.iteration == 2
+
     def test_list_checkpoints_empty(self, tmp_path):
         """list_checkpoints returns empty list when no checkpoints."""
         cm = FileCheckpointManager(base_dir=tmp_path)
