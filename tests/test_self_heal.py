@@ -549,6 +549,36 @@ class TestAttemptFixEdgeCases:
         assert heal.success is False
         assert "max_fix_rounds" in heal.diagnosis.lower()
 
+    def test_max_fix_rounds_zero_disables_lightweight_consumer_fix(self, minimal_spec):
+        from unison.interfaces import PipelineSpec
+        from unison.self_heal import FixOrchestrator
+
+        config = SelfHealConfig(
+            max_fix_rounds=0,
+            auto_fix_consumer=True,
+            consumer_fix_mode="lightweight",
+        )
+        test_spec = PipelineSpec(
+            version="1.0",
+            world=minimal_spec.world,
+            agents=minimal_spec.agents,
+            self_heal=config,
+        )
+        fixer = FixOrchestrator(test_spec, test_spec.world)
+        fixer._attempt_lightweight_fix = lambda result: pytest.fail(
+            "lightweight fix must not run"
+        )
+        result = AgentResult(
+            success=False, exit_code=1, duration=1.0,
+            stdout_tail="", stderr_tail="src/app.py",
+            log_path=Path("/tmp/log"), error="bug",
+        )
+
+        heal = fixer.attempt_fix("CONSUMER_BUG", result)
+
+        assert heal.success is False
+        assert "max_fix_rounds" in heal.diagnosis.lower()
+
     def test_disabled_auto_fix_unison(self, minimal_spec):
         """auto_fix_unison=False should skip UNISON_BUG."""
         from unison.interfaces import PipelineSpec

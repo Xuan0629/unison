@@ -135,6 +135,9 @@ class FixOrchestrator:
             return SelfHealResult(success=False, error_type=error_type)
 
         # Check switches
+        if self._config.max_fix_rounds < 1:
+            return SelfHealResult(success=False, error_type=error_type,
+                                  diagnosis="max_fix_rounds must be >= 1")
         if error_type == "UNISON_BUG" and not self._config.auto_fix_unison:
             return SelfHealResult(success=False, error_type=error_type,
                                   diagnosis="auto_fix_unison is disabled")
@@ -145,10 +148,6 @@ class FixOrchestrator:
         # Lightweight path: consumer bug only, skip dual-review
         if error_type == "CONSUMER_BUG" and self._config.consumer_fix_mode == "lightweight":
             return self._attempt_lightweight_fix(result)
-
-        if self._config.max_fix_rounds < 1:
-            return SelfHealResult(success=False, error_type=error_type,
-                                  diagnosis="max_fix_rounds must be >= 1")
 
         # 1. Fixer diagnoses and produces a patch
         try:
