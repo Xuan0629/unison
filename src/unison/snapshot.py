@@ -12,6 +12,7 @@ except ImportError:  # Native Windows is not a supported runtime; keep imports u
     fcntl = None
 import fnmatch
 import json
+import logging
 import os
 import shutil
 import uuid
@@ -362,15 +363,37 @@ class FileSnapshotManager:
 
     def discard(self, audit_id: str) -> bool:
         """Delete snapshot data and its manifest entry without restoring it."""
+        trash_dir: Path | None = None
         with self._manifest_lock():
             manifest = self._read_manifest_unlocked()
-            data = manifest.pop(audit_id, None)
-            if data is None:
+            if audit_id not in manifest:
                 return False
             snapshot_dir = self.base_dir / audit_id
-            self._write_manifest(manifest)
-        if snapshot_dir.exists():
-            shutil.rmtree(snapshot_dir)
+            candidate_trash = self.base_dir / ".trash" / audit_id
+            if snapshot_dir.exists():
+                if candidate_trash.exists():
+                    raise FileExistsError(candidate_trash)
+                trash_dir = candidate_trash
+                trash_dir.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(snapshot_dir, trash_dir)
+            elif candidate_trash.exists():
+                trash_dir = candidate_trash
+            del manifest[audit_id]
+            try:
+                self._write_manifest(manifest)
+            except Exception:
+                if trash_dir is not None and trash_dir.exists():
+                    os.replace(trash_dir, snapshot_dir)
+                raise
+        if trash_dir is not None and trash_dir.exists():
+            try:
+                shutil.rmtree(trash_dir)
+            except OSError as exc:
+                logging.getLogger(__name__).warning(
+                    "Could not remove discarded snapshot trash %s: %s",
+                    trash_dir,
+                    exc,
+                )
         return True
 
     def list_snapshots(self, project: str) -> list[SnapshotRecord]:
@@ -416,35 +439,53 @@ class FileSnapshotManager:
 
         Returns the number of snapshots cleaned up.
         """
+        orphaned_trash: list[Path] = []
         with self._manifest_lock():
             manifest = self._read_manifest_unlocked()
+            trash_root = self.base_dir / ".trash"
+            if trash_root.exists():
+                orphaned_trash = [
+                    trash_dir
+                    for trash_dir in trash_root.iterdir()
+                    if trash_dir.name not in manifest
+                ]
             if not manifest:
-                return 0
+                snapshot_dirs: list[Path] = []
+                cleaned = 0
+            else:
+                now = datetime.now(timezone.utc)
+                cutoff = now - timedelta(hours=self.retention_hours)
 
-            now = datetime.now(timezone.utc)
-            cutoff = now - timedelta(hours=self.retention_hours)
+                expired_ids: list[str] = []
+                for audit_id, data in manifest.items():
+                    if project_id is not None and data.get("project_id") != project_id:
+                        continue
+                    try:
+                        ts = datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
+                        if ts < cutoff:
+                            expired_ids.append(audit_id)
+                    except (ValueError, KeyError):
+                        continue
 
-            expired_ids: list[str] = []
-            for audit_id, data in manifest.items():
-                if project_id is not None and data.get("project_id") != project_id:
-                    continue
-                try:
-                    ts = datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
-                    if ts < cutoff:
-                        expired_ids.append(audit_id)
-                except (ValueError, KeyError):
-                    continue
+                cleaned = 0
+                snapshot_dirs = []
+                for audit_id in expired_ids:
+                    snapshot_dirs.append(self.base_dir / audit_id)
+                    del manifest[audit_id]
+                    cleaned += 1
 
-            cleaned = 0
-            snapshot_dirs: list[Path] = []
-            for audit_id in expired_ids:
-                snapshot_dirs.append(self.base_dir / audit_id)
-                del manifest[audit_id]
-                cleaned += 1
+                if cleaned:
+                    self._write_manifest(manifest)
 
-            if cleaned:
-                self._write_manifest(manifest)
-
+        for trash_dir in orphaned_trash:
+            try:
+                shutil.rmtree(trash_dir)
+            except OSError as exc:
+                logging.getLogger(__name__).warning(
+                    "Could not remove orphaned snapshot trash %s: %s",
+                    trash_dir,
+                    exc,
+                )
         for snapshot_dir in snapshot_dirs:
             if snapshot_dir.exists():
                 shutil.rmtree(snapshot_dir)

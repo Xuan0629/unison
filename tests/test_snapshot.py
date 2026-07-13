@@ -1,5 +1,6 @@
 """Tests for snapshot.py — FileSnapshotManager (pre-snapshot + restore)."""
 import json
+import os
 import tempfile
 import threading
 from pathlib import Path
@@ -172,6 +173,78 @@ class TestFileSnapshotManager:
             sm.discard(record.audit_id)
 
         assert record.snapshot_path.exists()
+
+    def test_discard_quarantines_data_when_final_delete_fails(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        original = tmp_path / "original.txt"
+        original.write_text("before")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            path=original,
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1,
+            project_id="project",
+        )
+        monkeypatch.setattr(
+            "unison.snapshot.shutil.rmtree",
+            lambda path: (_ for _ in ()).throw(OSError("delete failed")),
+        )
+
+        assert sm.discard(record.audit_id) is True
+
+        trash_dir = sm.base_dir / ".trash" / record.audit_id
+        assert sm.list_snapshots("project") == []
+        assert not record.snapshot_path.parent.exists()
+        assert trash_dir.exists()
+        assert "Could not remove discarded snapshot trash" in caplog.text
+
+        monkeypatch.undo()
+        sm.cleanup_expired()
+        assert not trash_dir.exists()
+
+    def test_discard_resumes_after_interrupted_rename(self, tmp_path):
+        original = tmp_path / "original.txt"
+        original.write_text("before")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            path=original,
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1,
+            project_id="project",
+        )
+        trash_dir = sm.base_dir / ".trash" / record.audit_id
+        trash_dir.parent.mkdir(parents=True)
+        os.replace(record.snapshot_path.parent, trash_dir)
+
+        assert sm.discard(record.audit_id) is True
+
+        assert sm.list_snapshots("project") == []
+        assert not trash_dir.exists()
+
+    def test_cleanup_keeps_trash_still_referenced_by_manifest(self, tmp_path):
+        original = tmp_path / "original.txt"
+        original.write_text("before")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        record = sm.snapshot(
+            path=original,
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1,
+            project_id="project",
+        )
+        trash_dir = sm.base_dir / ".trash" / record.audit_id
+        trash_dir.parent.mkdir(parents=True)
+        os.replace(record.snapshot_path.parent, trash_dir)
+
+        sm.cleanup_expired(project_id="other-project")
+
+        assert trash_dir.exists()
+        assert [item.audit_id for item in sm.list_snapshots("project")] == [
+            record.audit_id
+        ]
 
     def test_read_corrupt_manifest_quarantines_and_recovers(self, tmp_path):
         snapshots = tmp_path / "snapshots"
