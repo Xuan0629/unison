@@ -119,9 +119,10 @@ class YamlFrontmatterParser:
             )
 
         verdict_value = str(data["verdict"]).strip().upper().replace(" ", "_")
-        # E2E test found that Codex writes "changes_requested" (lowercase)
-        # while the parser expects "REQUEST_CHANGES". Normalize to UPPER_SNAKE
-        # so any reasonable casing works.
+        verdict_value = {
+            "CHANGES_REQUESTED": "REQUEST_CHANGES",
+        }.get(verdict_value, verdict_value)
+        # E2E output may use either REQUEST_CHANGES or CHANGES_REQUESTED.
         if verdict_value not in ("PASS", "REQUEST_CHANGES"):
             raise VerdictParseError(
                 f"Invalid verdict '{verdict_value}' in {review_path} "

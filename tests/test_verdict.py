@@ -61,6 +61,17 @@ Please fix these issues.
         assert result.summary == "Needs fixes"
         assert len(result.findings) == 2
 
+    @pytest.mark.parametrize("value", ["changes_requested", "changes requested"])
+    def test_parse_changes_requested_alias(self, tmp_path, value):
+        review_file = tmp_path / "iter-2.md"
+        review_file.write_text(
+            f"---\nverdict: {value}\nsummary: Needs fixes\nfindings: []\n---\n"
+        )
+
+        result = YamlFrontmatterParser().parse(review_file, expected_iter=2)
+
+        assert result.verdict == "REQUEST_CHANGES"
+
     def test_parse_no_findings(self, tmp_path):
         """Parse a verdict with no findings."""
         review_file = tmp_path / "iter-1.md"
