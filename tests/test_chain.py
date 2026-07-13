@@ -561,69 +561,6 @@ chain:
 # ============================================================================
 
 
-class TestChainOutputMap:
-    """Chain stage output_map copies files between stages."""
-
-    def test_output_map_copies_existing_file(self, tmp_path):
-        """output_map copies an existing source file to destination."""
-        src_file = tmp_path / "reviews" / "synthesis.md"
-        src_file.parent.mkdir(parents=True, exist_ok=True)
-        src_file.write_text("synthesis content")
-
-        dst_file = tmp_path / "prd" / "PRD.md"
-
-        import shutil
-        src_rel = "reviews/synthesis.md"
-        dst_rel = "prd/PRD.md"
-
-        src = tmp_path / src_rel
-        dst = tmp_path / dst_rel
-        assert src.exists()
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(src, dst)
-
-        assert dst.exists()
-        assert dst.read_text() == "synthesis content"
-
-    def test_output_map_skips_missing_source(self, tmp_path):
-        """output_map does not crash when source file doesn't exist."""
-        src_rel = "reviews/nonexistent.md"
-        dst_rel = "prd/PRD.md"
-
-        src = tmp_path / src_rel
-        dst = tmp_path / dst_rel
-
-        # Source does not exist — should be skipped gracefully
-        assert not src.exists()
-        # No exception should be raised
-        if src.exists():
-            import shutil
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(src, dst)
-
-        assert not dst.exists()
-
-    def test_output_map_creates_parent_dir(self, tmp_path):
-        """output_map creates intermediate directories for destination."""
-        src_file = tmp_path / "reviews" / "analysis.md"
-        src_file.parent.mkdir(parents=True, exist_ok=True)
-        src_file.write_text("analysis")
-
-        import shutil
-        dst_file = tmp_path / "deeply" / "nested" / "prd" / "PRD.md"
-
-        src_rel = "reviews/analysis.md"
-        dst_rel = "deeply/nested/prd/PRD.md"
-        src = tmp_path / src_rel
-        dst = tmp_path / dst_rel
-
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(src, dst)
-
-        assert dst.exists()
-        assert dst.read_text() == "analysis"
-
-
 # ============================================================================
 # halt_on_fail Behaviour
 # ============================================================================

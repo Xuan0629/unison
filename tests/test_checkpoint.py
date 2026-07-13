@@ -16,6 +16,30 @@ class TestFileCheckpointManager:
         cm = FileCheckpointManager(base_dir=tmp_path)
         assert cm.base_dir == tmp_path
 
+    def test_save_failure_preserves_previous_checkpoint(
+        self, tmp_path, monkeypatch,
+    ):
+        from unison import io as atomic_io
+        import unison.checkpoint as checkpoint_module
+
+        cm = FileCheckpointManager(base_dir=tmp_path)
+        monkeypatch.setattr(checkpoint_module.time, "time", lambda: 1234)
+        original = State(phase="dev_active", iteration=1)
+        path = cm.save("project", original, iter_n=1, commit="old")
+        previous = path.read_text()
+
+        def fail_replace(source, destination):
+            raise OSError("simulated checkpoint replace failure")
+
+        monkeypatch.setattr(atomic_io.os, "rename", fail_replace)
+        updated = State(phase="done", iteration=2)
+        with pytest.raises(OSError, match="simulated checkpoint replace failure"):
+            cm.save("project", updated, iter_n=1, commit="new")
+
+        assert path.read_text() == previous
+        failed_path = tmp_path / "project" / "ckpt-1-done-1234.json"
+        assert not failed_path.with_suffix(failed_path.suffix + ".tmp").exists()
+
     def test_save_checkpoint(self, tmp_path):
         """Save a checkpoint creates a file."""
         cm = FileCheckpointManager(base_dir=tmp_path)

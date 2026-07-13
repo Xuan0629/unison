@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from unison.io import atomic_write_json
 from unison.state import State
 
 
@@ -51,8 +52,7 @@ class FileCheckpointManager:
         data = state.to_dict()
         data["commit"] = commit
 
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        atomic_write_json(path, data)
 
         return path
 
