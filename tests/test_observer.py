@@ -673,17 +673,85 @@ class TestObserver:
         assert result is True
 
     def test_observer_send_full_report(self, tmp_path):
-        """send_full_report writes report to file."""
+        """send_full_report writes current state and notifications."""
         world = World(root=tmp_path)
+        world.ensure_directories()
+        State(
+            phase="dev_active",
+            iteration=3,
+            last_activity="2026-06-18T10:00:00Z",
+            halt_signal=True,
+            halt_reason="review failed",
+        ).atomic_write(world.state_file)
+        world.notifications_file.write_text(
+            '{"event_type":"transition","phase":"dev_active"}\n',
+            encoding="utf-8",
+        )
         observer = Observer(world=world)
-
-        report_path = tmp_path / "report.md"
-        report_path.write_text("# Full Report\n\nContent here.")
+        report_path = tmp_path / "reports" / "report.md"
 
         result = observer.send_full_report(
             session_id="test-session", report_path=report_path
         )
-        assert isinstance(result, bool)
+
+        assert result is True
+        content = report_path.read_text(encoding="utf-8")
+        assert "Session: test-session" in content
+        assert "- Phase: dev_active" in content
+        assert "- Iteration: 3" in content
+        assert "- Halt signal: True" in content
+        assert "- Halt reason: review failed" in content
+        assert "## Notifications (1 total)" in content
+        assert '"event_type":"transition"' in content
+
+    def test_full_rescan_rechecks_state_and_notifications(self, tmp_path, monkeypatch):
+        """Overflow rescan routes both persisted inputs through their handlers."""
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        State(phase="dev_active", iteration=2).atomic_write(world.state_file)
+        world.notifications_file.write_text("{}\n", encoding="utf-8")
+        observer = Observer(world=world)
+        seen_states = []
+        resets = []
+        notification_scans = []
+        monkeypatch.setattr(
+            observer,
+            "check_liveness",
+            lambda state: seen_states.append(state) or True,
+        )
+        monkeypatch.setattr(observer, "_reset_stall_state", lambda: resets.append(True))
+        monkeypatch.setattr(
+            observer,
+            "_process_new_notifications",
+            lambda: notification_scans.append(True),
+        )
+
+        observer._full_rescan()
+
+        assert len(seen_states) == 1
+        assert seen_states[0].phase == "dev_active"
+        assert seen_states[0].iteration == 2
+        assert resets == [True]
+        assert notification_scans == [True]
+
+    def test_full_rescan_emits_stall_for_inactive_state(self, tmp_path, monkeypatch):
+        """Overflow rescan emits one stalled event for an inactive state."""
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        State(phase="dev_active", iteration=4).atomic_write(world.state_file)
+        observer = Observer(world=world)
+        emitted = []
+        monkeypatch.setattr(observer, "check_liveness", lambda state: False)
+        monkeypatch.setattr(observer, "_should_emit_stall", lambda: (True, "warn"))
+        monkeypatch.setattr(observer, "_emit_event", lambda **kwargs: emitted.append(kwargs))
+
+        observer._full_rescan()
+
+        assert len(emitted) == 1
+        assert emitted[0]["event_type"] == "stalled"
+        assert emitted[0]["phase"] == "dev_active"
+        assert emitted[0]["severity"] == "warn"
+        assert emitted[0]["title"] == emitted[0]["body"] == emitted[0]["summary"]
 
 
 # ============================================================================
