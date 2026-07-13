@@ -438,7 +438,7 @@ class TestObserverWithWatcher:
         assert world.unison_dir in watched
         assert world.observer_dir in watched
 
-    def test_observer_processes_state_event(self, tmp_path):
+    def test_observer_processes_state_event(self, tmp_path, monkeypatch):
         """Observer processes state.json modification event."""
         world = World(root=tmp_path)
         world.ensure_directories()
@@ -462,8 +462,14 @@ class TestObserverWithWatcher:
 
         mock = MockWatcher()
         observer = Observer(world=world, watcher=mock)
+        seen_states = []
 
-        # Inject a state.json modification event
+        def check_liveness(state):
+            seen_states.append(state)
+            observer.stop()
+            return True
+
+        monkeypatch.setattr(observer, "check_liveness", check_liveness)
         mock.inject_event(FileEvent(
             path=world.state_file,
             event_type="modified",
@@ -478,14 +484,13 @@ class TestObserverWithWatcher:
 
         thread = threading.Thread(target=run_observer, daemon=True)
         thread.start()
-        time.sleep(0.3)
-        observer.stop()
         thread.join(timeout=2.0)
 
-        # Should not have crashed
-        assert True
+        assert thread.is_alive() is False
+        assert len(seen_states) == 1
+        assert seen_states[0].phase == "dev_active"
 
-    def test_observer_handles_overflow_event(self, tmp_path):
+    def test_observer_handles_overflow_event(self, tmp_path, monkeypatch):
         """Observer handles overflow events by calling _full_rescan."""
         world = World(root=tmp_path)
         world.ensure_directories()
@@ -507,6 +512,13 @@ class TestObserverWithWatcher:
 
         mock = MockWatcher()
         observer = Observer(world=world, watcher=mock)
+        rescans = []
+
+        def full_rescan():
+            rescans.append(True)
+            observer.stop()
+
+        monkeypatch.setattr(observer, "_full_rescan", full_rescan)
 
         # Inject an overflow event
         mock.inject_event(FileEvent(
@@ -523,13 +535,12 @@ class TestObserverWithWatcher:
 
         thread = threading.Thread(target=run_observer, daemon=True)
         thread.start()
-        time.sleep(0.3)
-        observer.stop()
         thread.join(timeout=2.0)
 
-        assert True  # Should not crash
+        assert thread.is_alive() is False
+        assert rescans == [True]
 
-    def test_observer_filters_non_target_files(self, tmp_path):
+    def test_observer_filters_non_target_files(self, tmp_path, monkeypatch):
         """Observer ignores events for files other than state.json/notifications.jsonl."""
         world = World(root=tmp_path)
         world.ensure_directories()
@@ -550,6 +561,18 @@ class TestObserverWithWatcher:
 
         mock = MockWatcher()
         observer = Observer(world=world, watcher=mock)
+        liveness_calls = []
+        rescans = []
+        monkeypatch.setattr(
+            observer, "check_liveness",
+            lambda state: liveness_calls.append(state) or True,
+        )
+
+        def full_rescan():
+            rescans.append(True)
+            observer.stop()
+
+        monkeypatch.setattr(observer, "_full_rescan", full_rescan)
 
         # Inject event for non-target file
         mock.inject_event(FileEvent(
@@ -572,11 +595,11 @@ class TestObserverWithWatcher:
 
         thread = threading.Thread(target=run_observer, daemon=True)
         thread.start()
-        time.sleep(0.3)
-        observer.stop()
         thread.join(timeout=2.0)
 
-        assert True  # Should not crash or misprocess
+        assert thread.is_alive() is False
+        assert liveness_calls == []
+        assert rescans == [True]
 
     def test_observer_stop(self, tmp_path):
         """stop() sets _running to False and calls watcher.stop()."""

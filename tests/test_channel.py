@@ -20,21 +20,21 @@ class TestFileChannel:
         assert channel.world == world
 
     def test_write_message(self, tmp_path):
-        """Write a message to channel."""
+        """Write without recipient targets the shared ``all`` inbox."""
         world = World(root=tmp_path)
         channel = FileChannel(world=world)
-        
+
         channel.write(
             sender="developer",
-            payload={"type": "finding", "content": "Bug found"}
+            payload={"type": "finding", "content": "Bug found"},
         )
-        
-        # Check that message was written
-        inbox_file = world.inbox_dir / "developer.jsonl"
-        # Actually, FileChannel writes to recipient's inbox, not sender's
-        # Let me check the implementation
-        # For now, just check it doesn't crash
-        assert True
+
+        inbox_file = world.inbox_dir / "all.jsonl"
+        message = json.loads(inbox_file.read_text().strip())
+        assert message["sender"] == "developer"
+        assert message["recipient"] == "all"
+        assert message["type"] == "finding"
+        assert message["payload"] == {"content": "Bug found"}
 
     def test_write_and_read_inbox(self, tmp_path):
         """Write a message and read it from inbox."""
@@ -55,7 +55,10 @@ class TestFileChannel:
         # Read reviewer's inbox
         messages = channel.read_inbox(recipient="reviewer", since_iter=0)
         
-        assert len(messages) >= 0  # At least doesn't crash
+        assert len(messages) == 1
+        assert messages[0]["sender"] == "developer"
+        assert messages[0]["iter_n"] == 1
+        assert messages[0]["payload"] == {"content": "Code complete"}
 
     def test_write_multiple_messages(self, tmp_path):
         """Write multiple messages."""
@@ -65,11 +68,17 @@ class TestFileChannel:
         for i in range(3):
             channel.write(
                 sender="developer",
-                payload={"type": "finding", "iter_n": i, "content": f"Finding {i}"}
+                payload={
+                    "type": "finding", "recipient": "reviewer",
+                    "iter_n": i, "content": f"Finding {i}",
+                },
             )
-        
-        # Should not crash
-        assert True
+
+        messages = channel.read_inbox(recipient="reviewer", since_iter=-1)
+        assert [message["iter_n"] for message in messages] == [0, 1, 2]
+        assert [message["payload"]["content"] for message in messages] == [
+            "Finding 0", "Finding 1", "Finding 2",
+        ]
 
     def test_read_inbox_filters_by_iter(self, tmp_path):
         """read_inbox filters messages by iter_n."""
@@ -80,14 +89,15 @@ class TestFileChannel:
         for i in range(1, 4):
             channel.write(
                 sender="developer",
-                payload={"type": "finding", "iter_n": i, "content": f"Finding {i}"}
+                payload={
+                    "type": "finding", "recipient": "reviewer",
+                    "iter_n": i, "content": f"Finding {i}",
+                },
             )
-        
-        # Read only messages after iter 1
+
         messages = channel.read_inbox(recipient="reviewer", since_iter=1)
-        
-        # Should filter correctly
-        assert isinstance(messages, list)
+
+        assert [message["iter_n"] for message in messages] == [2, 3]
 
     def test_read_inbox_empty(self, tmp_path):
         """read_inbox returns empty list when no messages."""
@@ -108,9 +118,10 @@ class TestFileChannel:
             payload={"type": "test", "content": "hello"}
         )
         
-        # Check that files are created in inbox/outbox directories
-        # The exact implementation may vary
-        assert world.inbox_dir.exists() or world.outbox_dir.exists()
+        inbox_file = world.inbox_dir / "all.jsonl"
+        lines = inbox_file.read_text().splitlines()
+        assert len(lines) == 1
+        assert json.loads(lines[0])["payload"] == {"content": "hello"}
 
     def test_subscribe_polling(self, tmp_path):
         """subscribe() returns an iterator (v1: polling)."""
@@ -146,8 +157,9 @@ class TestFileChannelIntegration:
         # Reviewer reads inbox
         messages = channel.read_inbox(recipient="reviewer", since_iter=0)
         
-        # Should receive the message
-        assert isinstance(messages, list)
+        assert len(messages) == 1
+        assert messages[0]["sender"] == "developer"
+        assert messages[0]["payload"] == {"content": "Ready for review"}
 
     def test_bidirectional_communication(self, tmp_path):
         """Simulate bidirectional communication."""
@@ -170,8 +182,12 @@ class TestFileChannelIntegration:
         dev_messages = channel.read_inbox(recipient="developer", since_iter=0)
         rev_messages = channel.read_inbox(recipient="reviewer", since_iter=0)
         
-        assert isinstance(dev_messages, list)
-        assert isinstance(rev_messages, list)
+        assert len(dev_messages) == 1
+        assert dev_messages[0]["sender"] == "reviewer"
+        assert dev_messages[0]["payload"] == {"verdict": "PASS"}
+        assert len(rev_messages) == 1
+        assert rev_messages[0]["sender"] == "developer"
+        assert rev_messages[0]["type"] == "prompt_context"
 
 
 # =====================================================================

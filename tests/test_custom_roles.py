@@ -215,16 +215,30 @@ agents:
     # 5. Existing pipeline unchanged
     # ------------------------------------------------------------------
 
-    def test_existing_pipeline_unchanged(self):
-        """v2-fix-pipeline.yaml loads unchanged with Phase 11 changes."""
-        import os
-        project_root = Path(__file__).parent.parent
-        pipeline_path = project_root / "v2-fix-pipeline.yaml"
-        if not pipeline_path.exists():
-            pytest.skip("v2-fix-pipeline.yaml not found")
+    def test_existing_pipeline_unchanged(self, tmp_path):
+        """Legacy role-only YAML keeps effective-role fallback semantics."""
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "developer.md").write_text("developer")
+        (prompts / "reviewer.md").write_text("reviewer")
+        pipeline_path = tmp_path / "pipeline.yaml"
+        pipeline_path.write_text("""
+version: "2.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: prompts/developer.md
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: test
+    system_prompt_path: prompts/reviewer.md
+""")
 
-        loader = PipelineLoader()
-        spec = loader.load(pipeline_path)
+        spec = PipelineLoader().load(pipeline_path)
 
         assert "developer" in spec.agents
         assert "reviewer" in spec.agents
