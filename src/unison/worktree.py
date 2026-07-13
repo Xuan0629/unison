@@ -92,6 +92,12 @@ class WorktreeManager:
         result = self._git("rev-parse", "--git-dir")
         return result.returncode == 0
 
+    @staticmethod
+    def _valid_feature_name(feature_name: str) -> bool:
+        """Return True when a branch/worktree name cannot escape its root."""
+        path = Path(feature_name)
+        return bool(feature_name) and not path.is_absolute() and ".." not in path.parts
+
     # ==================================================================
     # Public API
     # ==================================================================
@@ -114,6 +120,9 @@ class WorktreeManager:
             git repo, worktree already exists, or git error).
         """
         if not self.config.enabled:
+            return None
+
+        if not self._valid_feature_name(feature_name):
             return None
 
         if not self._is_git_repo():
@@ -176,6 +185,9 @@ class WorktreeManager:
             repo, worktree not found, or git error).
         """
         if not self.config.enabled:
+            return False
+
+        if not self._valid_feature_name(feature_name):
             return False
 
         if not self._is_git_repo():

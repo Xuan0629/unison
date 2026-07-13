@@ -243,6 +243,18 @@ class TestWorktreeManagerCreate:
         assert info.path == git_repo / "tmp" / "wt" / "custom-root-feat"
         assert info.path.exists()
 
+    @pytest.mark.parametrize("feature_name", ["..", "../../evil", "/tmp/evil"])
+    def test_create_rejects_unsafe_feature_name(
+        self, enabled_config, git_repo, feature_name, monkeypatch
+    ):
+        mgr = WorktreeManager(config=enabled_config, project_root=git_repo)
+        monkeypatch.setattr(
+            mgr, "_git", lambda *args, **kwargs: pytest.fail("git must not run")
+        )
+
+        assert mgr.create_worktree(feature_name) is None
+        assert not (git_repo.parent / "evil").exists()
+
 
 class TestWorktreeManagerList:
     """Worktree listing tests."""
@@ -299,6 +311,17 @@ class TestWorktreeManagerRemove:
         mgr = WorktreeManager(config=enabled_config, project_root=git_repo)
         result = mgr.remove_worktree("nonexistent")
         assert result is False
+
+    @pytest.mark.parametrize("feature_name", ["..", "../../evil", "/tmp/evil"])
+    def test_remove_rejects_unsafe_feature_name(
+        self, enabled_config, git_repo, feature_name, monkeypatch
+    ):
+        mgr = WorktreeManager(config=enabled_config, project_root=git_repo)
+        monkeypatch.setattr(
+            mgr, "_git", lambda *args, **kwargs: pytest.fail("git must not run")
+        )
+
+        assert mgr.remove_worktree(feature_name) is False
 
     def test_remove_worktree_cleans_list(self, enabled_config, git_repo):
         """After removal, the worktree is no longer listed."""
