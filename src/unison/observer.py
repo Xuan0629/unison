@@ -1120,10 +1120,7 @@ class Observer:
         carries enough context that we don't need to wait for a
         state.json read.
         """
-        try:
-            self._event_queue.put_nowait(event_data)
-        except queue.Full:
-            pass  # drop event if queue is full (shouldn't happen)
+        self._event_queue.put_nowait(event_data)
 
         # ---- P10: Emit structured events from event bus data ----
         event_kind = event_data.get("event", "")
