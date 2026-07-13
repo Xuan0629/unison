@@ -698,7 +698,7 @@ class LockManager(Protocol):
 
 @dataclass
 class FileLockManager:
-    """~/.unison/locks/<project>.lock（PID + timestamp）。"""
+    """~/.unison/locks/<project>.lock（持久 inode + flock；PID 仅用于诊断）。"""
     lock_dir: Path
 
     def acquire(self, project: str) -> bool: ...

@@ -247,7 +247,7 @@ Access `http://localhost:9099` for real-time pipeline status, token usage, phase
 
 | Symptom | Fix |
 |---------|-----|
-| "Could not acquire lock" | `rm -f ~/.unison/locks/<project>.lock` |
+| "Could not acquire lock" | Another process holds the kernel lock. Use `fuser ~/.unison/locks/<project>.lock` to identify it; do not delete the lock file while a process is running. |
 | "ContextBudgetError" | Increase `budget.daily_token_limit` in pipeline YAML |
 | "Could not parse verdict" | Fixed in v1.1 (block scalar support). Update Unison. |
 | Claude Code makes no changes across iterations | Fixed in v1.1. Ensure your developer prompt says "Fix" not "Review". |

@@ -1,4 +1,4 @@
-"""Tests for lock.py — FileLockManager with PID detection + stale lock override."""
+"""Tests for lock.py — FileLockManager with kernel-backed flock locking."""
 import multiprocessing
 import os
 import tempfile
@@ -37,7 +37,7 @@ class TestFileLockManager:
         pid = int(content.strip())
         assert pid == os.getpid()
 
-    def test_write_failure_closes_fd_and_removes_partial_lock(self, tmp_path):
+    def test_write_failure_closes_fd_and_leaves_unlocked_file(self, tmp_path):
         lm = FileLockManager(lock_dir=tmp_path)
         real_open = os.open
         captured = {}
@@ -53,15 +53,16 @@ class TestFileLockManager:
 
         with pytest.raises(OSError):
             os.fstat(captured["fd"])
-        assert not (tmp_path / "test-project.lock").exists()
+        lock_file = tmp_path / "test-project.lock"
+        assert lock_file.exists()
+        assert FileLockManager(lock_dir=tmp_path).acquire("test-project") is True
 
-    def test_zero_byte_write_does_not_leave_permanent_lock(self, tmp_path):
+    def test_zero_byte_write_does_not_leave_lock_held(self, tmp_path):
         lm = FileLockManager(lock_dir=tmp_path)
 
         with patch("unison.lock.os.write", return_value=0):
             assert lm.acquire("test-project") is False
 
-        assert not (tmp_path / "test-project.lock").exists()
         assert lm.acquire("test-project") is True
 
     def test_close_failure_does_not_escape_write_failure_cleanup(self, tmp_path):
@@ -71,13 +72,13 @@ class TestFileLockManager:
              patch("unison.lock.os.close", side_effect=OSError("close failed")):
             assert lm.acquire("test-project") is False
 
-        assert not (tmp_path / "test-project.lock").exists()
+        assert FileLockManager(lock_dir=tmp_path).acquire("test-project") is True
 
-    def test_unlink_failure_does_not_escape_write_failure_cleanup(self, tmp_path):
+    def test_unlock_failure_does_not_escape_write_failure_cleanup(self, tmp_path):
         lm = FileLockManager(lock_dir=tmp_path)
 
         with patch("unison.lock.os.write", side_effect=OSError("disk full")), \
-             patch("unison.lock.Path.unlink", side_effect=OSError("unlink failed")):
+             patch("unison.lock.fcntl.flock", side_effect=[None, OSError("unlock failed")]):
             assert lm.acquire("test-project") is False
 
     def test_acquire_already_locked_same_pid(self, tmp_path):
@@ -89,16 +90,12 @@ class TestFileLockManager:
         result = lm.acquire("test-project")
         assert result is False
 
-    def test_acquire_already_locked_different_pid_alive(self, tmp_path):
-        """Acquire fails if lock exists with different alive PID."""
+    def test_pid_text_alone_does_not_hold_lock(self, tmp_path):
+        """PID content is diagnostic; kernel lock ownership is authoritative."""
         lm = FileLockManager(lock_dir=tmp_path)
-        
-        # Write a lock file with a different PID (use PID 1, which is usually alive)
-        lock_file = tmp_path / "test-project.lock"
-        lock_file.write_text("1\n")  # PID 1 (init/systemd, usually alive)
-        
-        result = lm.acquire("test-project")
-        assert result is False
+        (tmp_path / "test-project.lock").write_text("1\n")
+
+        assert lm.acquire("test-project") is True
 
     def test_acquire_stale_lock_override(self, tmp_path):
         """Acquire succeeds if lock exists with dead PID (stale lock)."""
@@ -117,7 +114,7 @@ class TestFileLockManager:
         assert pid == os.getpid()
 
     def test_release_lock(self, tmp_path):
-        """Release removes lock file."""
+        """Release unlocks but preserves the stable lock inode."""
         lm = FileLockManager(lock_dir=tmp_path)
         lm.acquire("test-project")
         
@@ -125,7 +122,8 @@ class TestFileLockManager:
         assert lock_file.exists()
         
         lm.release("test-project")
-        assert not lock_file.exists()
+        assert lock_file.exists()
+        assert FileLockManager(lock_dir=tmp_path).acquire("test-project") is True
 
     def test_release_nonexistent_lock(self, tmp_path):
         """Release of non-existent lock does not raise."""
@@ -154,15 +152,12 @@ class TestFileLockManager:
         
         assert lm.is_locked("test-project") is False
 
-    def test_is_locked_alive_pid(self, tmp_path):
-        """is_locked returns True for alive PID."""
-        lm = FileLockManager(lock_dir=tmp_path)
-        
-        # Write a lock file with PID 1 (usually alive)
-        lock_file = tmp_path / "test-project.lock"
-        lock_file.write_text("1\n")
-        
-        assert lm.is_locked("test-project") is True
+    def test_is_locked_true_for_another_manager(self, tmp_path):
+        owner = FileLockManager(lock_dir=tmp_path)
+        observer = FileLockManager(lock_dir=tmp_path)
+
+        assert owner.acquire("test-project") is True
+        assert observer.is_locked("test-project") is True
 
     def test_lock_dir_created_automatically(self, tmp_path):
         """Lock directory is created if it doesn't exist."""
@@ -230,9 +225,38 @@ class TestFileLockManager:
         assert r1 != r2, f"Expected one True and one False, got {r1}/{r2}"
         assert r1 is True or r2 is True
 
+    def test_concurrent_stale_pid_takeover_has_single_winner(self, tmp_path):
+        """A stale PID file must not allow two concurrent owners."""
+        lock_dir = tmp_path / "locks"
+        lock_dir.mkdir()
+        (lock_dir / "stale.lock").write_text("999999\n")
 
-class TestFileLockManagerPIDDetection:
-    """PID detection tests."""
+        def try_acquire(path_str, queue, release_event):
+            lm = FileLockManager(lock_dir=Path(path_str))
+            ok = lm.acquire("stale")
+            queue.put(ok)
+            if ok:
+                release_event.wait(timeout=10)
+                lm.release("stale")
+
+        results = multiprocessing.Queue()
+        release = multiprocessing.Event()
+        p1 = multiprocessing.Process(target=try_acquire, args=(str(lock_dir), results, release))
+        p2 = multiprocessing.Process(target=try_acquire, args=(str(lock_dir), results, release))
+        p1.start()
+        p2.start()
+
+        r1 = results.get(timeout=5)
+        r2 = results.get(timeout=5)
+        release.set()
+        p1.join(timeout=10)
+        p2.join(timeout=10)
+
+        assert sorted((r1, r2)) == [False, True]
+
+
+class TestFileLockManagerPIDMetadata:
+    """PID metadata tests."""
 
     def test_pid_file_format(self, tmp_path):
         """Lock file contains only PID as integer."""
@@ -246,16 +270,12 @@ class TestFileLockManagerPIDDetection:
         pid = int(content)
         assert pid > 0
 
-    def test_stale_detection_uses_proc(self, tmp_path):
-        """Stale detection checks /proc/<pid> on Linux."""
+    def test_stale_pid_text_does_not_define_lock_state(self, tmp_path):
         lm = FileLockManager(lock_dir=tmp_path)
-        
-        # Write a lock file with current PID (alive)
         lock_file = tmp_path / "test-project.lock"
         lock_file.write_text(f"{os.getpid()}\n")
-        
-        assert lm.is_locked("test-project") is True
-        
-        # Write a lock file with dead PID
+
+        assert lm.is_locked("test-project") is False
+
         lock_file.write_text("999999\n")
         assert lm.is_locked("test-project") is False

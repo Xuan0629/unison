@@ -462,7 +462,7 @@ Unison provides the collaboration framework. Your agent configuration determines
 
 | Symptom | Fix |
 |---------|-----|
-| "Could not acquire lock" | `rm -f ~/.unison/locks/<project>.lock` |
+| "Could not acquire lock" | Another process holds the kernel lock. Use `fuser ~/.unison/locks/<project>.lock` to identify it; do not delete the lock file while a process is running. |
 | "ContextBudgetError" | Increase `budget.daily_token_limit` in pipeline YAML; or `rm -f .unison/budget.json` to reset daily budget |
 | "Could not parse verdict" | Fixed (v1.1): verdict parser now supports YAML block scalars |
 | Claude Code makes no changes | Fixed (v1.1): dev template no longer hardcodes "Write code", delegates to Developer Instructions |

@@ -466,7 +466,7 @@ Unison 提供协作框架，你的 Agent 配置决定协作质量——Agent 的
 
 | 症状 | 解决 |
 |------|------|
-| "Could not acquire lock" | `rm -f ~/.unison/locks/<project>.lock` |
+| "Could not acquire lock" | 另一个进程持有内核锁。用 `fuser ~/.unison/locks/<project>.lock` 定位进程；进程运行时不要删除锁文件。 |
 | "ContextBudgetError" | 在 pipeline YAML 中增大 `budget.daily_token_limit`；或 `rm -f .unison/budget.json` 重置当日预算 |
 | "Could not parse verdict" | 已修复（v1.1）：verdict 解析器现支持 YAML block scalar |
 | Claude Code 不修改代码 | 已修复（v1.1）：developer 模板不再硬编码 "Write code"，任务意图由 Developer Instructions 控制 |

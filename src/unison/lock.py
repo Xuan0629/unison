@@ -1,26 +1,22 @@
-"""FileLockManager — atomic lock files using O_CREAT|O_EXCL.
+"""FileLockManager — kernel-backed cross-process locking with ``flock``.
 
-Uses os.open(..., O_CREAT|O_EXCL) for kernel-enforced atomic
-cross-process locking.  Stale-lock detection uses /proc/<pid> on
-Linux to check if the locking process is still alive.
+Each project has a stable lock-file inode.  ``fcntl.flock`` provides the
+mutual-exclusion guarantee; the PID stored in the file is diagnostic only.
+The file remains after release so no process can unlink another owner's lock.
 
 Lock file format: ~/.unison/locks/<project>.lock
-Content: PID (integer) on a single line.
+Content: last holder's PID, preserved after release for diagnostics.
 """
 
+import fcntl
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 
-def _pid_alive(pid: int) -> bool:
-    """Return True if the given PID exists on this system (Linux /proc)."""
-    return Path(f"/proc/{pid}").exists()
-
-
 @dataclass
 class FileLockManager:
-    """~/.unison/locks/<project>.lock — PID lock with stale detection."""
+    """Manage ``~/.unison/locks/<project>.lock`` advisory locks."""
 
     lock_dir: Path
 
@@ -30,106 +26,88 @@ class FileLockManager:
     def _lock_path(self, project: str) -> Path:
         return self.lock_dir / f"{project}.lock"
 
-    def _read_pid(self, lock_path: Path) -> int | None:
-        """Read the PID from a lock file. Returns None if unreadable / invalid."""
+    @staticmethod
+    def _close(fd: int) -> None:
         try:
-            content = lock_path.read_text().strip()
-            if not content:
-                return None
-            return int(content)
-        except (FileNotFoundError, ValueError):
-            return None
-
-    def _create_lock(self, project: str, lock_path: Path, pid: int) -> bool:
-        """Atomically create one lock file, then initialize it with the PID."""
-        try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o644)
-        except FileExistsError:
-            return False
-        try:
-            payload = f"{pid}\n".encode()
-            if os.write(fd, payload) != len(payload):
-                raise OSError("short lock write")
+            os.close(fd)
         except OSError:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            try:
-                lock_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            pass
+
+    def _write_pid(self, fd: int, pid: int) -> bool:
+        payload = f"{pid}\n".encode()
+        try:
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            return os.write(fd, payload) == len(payload)
+        except OSError:
             return False
-        self._fds[project] = fd
-        return True
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def acquire(self, project: str) -> bool:
-        """Try to acquire the lock for *project*.
-
-        Returns True on success.  Returns False when the lock is already
-        held by a *live* process (either ourselves or a different PID).
-        Overwrites locks owned by dead PIDs (stale lock).
-
-        Uses os.open(O_CREAT|O_EXCL) for atomic cross-process acquisition.
-        Creates the lock directory on demand.
-        """
+        """Try to acquire the project lock without blocking."""
         self.lock_dir.mkdir(parents=True, exist_ok=True)
-        lock_path = self._lock_path(project)
-
-        # Re-entrant: we already hold this project's lock
         if project in self._fds:
             return False
 
-        current_pid = os.getpid()
-
-        # Attempt 1: atomic file creation — the kernel guarantees that
-        # only one process succeeds at O_CREAT|O_EXCL for the same path.
-        if self._create_lock(project, lock_path, current_pid):
-            return True
-
-        # File already exists — check if we can claim a stale lock.
-        existing_pid = self._read_pid(lock_path)
-        # None means the file is empty (owner mid-write) or disappeared.
-        # Be conservative: treat as locked.
-        if existing_pid is None:
-            return False
-        if existing_pid == current_pid:
-            return False
-        if _pid_alive(existing_pid):
-            return False
-
-        # Stale lock (dead PID) — remove the old file and retry.
+        lock_path = self._lock_path(project)
         try:
-            lock_path.unlink()
-        except FileNotFoundError:
-            return False  # another process already cleaned up
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        except OSError:
+            return False
 
-        return self._create_lock(project, lock_path, current_pid)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            self._close(fd)
+            return False
+
+        if not self._write_pid(fd, os.getpid()):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            self._close(fd)
+            return False
+
+        self._fds[project] = fd
+        return True
 
     def release(self, project: str) -> None:
-        """Release the lock for *project*.  No-op if we never acquired it."""
+        """Release the lock. The stable lock file intentionally remains."""
         fd = self._fds.pop(project, None)
         if fd is None:
-            return  # we never acquired this project — no-op
+            return
         try:
-            self._lock_path(project).unlink(missing_ok=True)
+            fcntl.flock(fd, fcntl.LOCK_UN)
         except OSError:
             pass
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        self._close(fd)
 
     def is_locked(self, project: str) -> bool:
-        """Return True if a live process currently holds the lock."""
+        """Return True if this or another process currently holds the lock."""
+        if project in self._fds:
+            return True
+
         lock_path = self._lock_path(project)
-        if not lock_path.exists():
+        try:
+            fd = os.open(str(lock_path), os.O_RDWR)
+        except FileNotFoundError:
             return False
-        pid = self._read_pid(lock_path)
-        if pid is None:
-            return False
-        return _pid_alive(pid)
+        except OSError:
+            return True
+
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            self._close(fd)
+            return True
+
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        self._close(fd)
+        return False

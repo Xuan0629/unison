@@ -29,8 +29,7 @@ jobs:
 
       - name: Run tests
         run: |
-          PYTHONPATH=src:$PYTHONPATH python -m pytest tests/ -v --timeout=30 \
-            --deselect tests/test_lock.py::TestFileLockManager::test_concurrent_acquire
+          PYTHONPATH=src:$PYTHONPATH python -m pytest tests/ -v --timeout=30
 
       - name: Build packages
         if: startsWith(github.ref, 'refs/tags/v')
