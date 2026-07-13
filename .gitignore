@@ -6,6 +6,8 @@ observer/
 __pycache__/
 *.pyc
 
+# P13: Legacy archives tracked for reference
+
 # Internal dev pipelines and scripts
 pipelines/*.yaml
 pipelines/**/*.yaml
