@@ -14,7 +14,8 @@ from pathlib import Path
 
 import yaml
 
-from unison.interfaces import AgentResult, PipelineSpec, SelfHealConfig, World
+from unison.interfaces import AgentResult, PipelineSpec, SelfHealConfig
+from unison.world import World
 
 # Re-use the consolidated constants from the supervisor module so there is
 # a single source of truth for error-classification keywords.

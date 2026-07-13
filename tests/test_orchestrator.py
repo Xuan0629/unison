@@ -346,6 +346,43 @@ body
         assert "CRITICAL" in prompt
         assert "bug A" in prompt
 
+    def test_developer_prompt_includes_only_tail_of_dev_notes(
+        self, tmp_path, monkeypatch,
+    ):
+        from unison.interfaces import AgentSpec, PipelineSpec
+        from unison.world import World
+
+        world = World(tmp_path)
+        world.ensure_directories()
+        prompt_path = tmp_path / "prompts" / "developer.md"
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text("Developer system prompt")
+        old_marker = "OLD-NOTES-MUST-BE-DROPPED"
+        tail_marker = "LATEST-NOTES-MUST-BE-INCLUDED"
+        world.dev_notes_file.write_text(
+            old_marker + "\n" + ("x" * 2500) + "\n" + tail_marker + "\n"
+        )
+        spec = PipelineSpec(
+            version="2.0",
+            world=world,
+            agents={
+                "developer": AgentSpec(
+                    role="developer", pipeline_role="developer",
+                    runtime="claude", model="test",
+                    system_prompt_path=Path("prompts/developer.md"),
+                ),
+            },
+            mode="code-dev",
+        )
+        orch = Orchestrator(spec)
+        monkeypatch.setattr(orch, "_recent_diff", lambda: "")
+
+        prompt = orch._build_prompt("developer", 1)
+
+        assert tail_marker in prompt
+        assert old_marker not in prompt
+        assert "Developer Notes (from previous iterations)" in prompt
+
     def test_long_diff_is_truncated(self, tmp_path, monkeypatch):
         """Diff of many lines with tight budget gets truncated."""
         world_root = tmp_path / "project"

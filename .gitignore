@@ -15,6 +15,7 @@ mode-system.yaml
 parallel-system.yaml
 
 # Internal docs & roadmap
+/interfaces.py
 ARCHITECTURE.md
 ROADMAP.md
 

@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 import pytest
 
-from unison.world import World
+from unison.world import RunContext, World
 
 
 class TestWorld:
@@ -132,6 +132,20 @@ class TestWorld:
         w = World(root=tmp_path)
         log_path = w.agent_log("developer", 2, "2026-06-18T10:00:00Z")
         assert log_path == tmp_path / "observer" / "logs" / "developer_iter-2_2026-06-18T10:00:00Z.log"
+
+    def test_agent_log_is_scoped_and_creates_directory(self, tmp_path):
+        w = World(root=tmp_path)
+        ctx = RunContext(
+            project_id="project", pipeline_key="pipe-key", run_id="run-id",
+        )
+
+        log_path = w.agent_log("developer", 2, "timestamp", ctx=ctx)
+
+        assert log_path == (
+            tmp_path / "observer" / "logs" / "pipe-key" / "run-id"
+            / "developer_iter-2_timestamp.log"
+        )
+        assert log_path.parent.is_dir()
 
     def test_world_is_frozen(self, tmp_path):
         """World is frozen (immutable)."""

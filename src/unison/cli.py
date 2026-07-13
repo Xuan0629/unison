@@ -200,7 +200,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     spec, _ = _load(args.pipeline)
     if args.project is not None:
         # Override project_root from CLI flag
-        from unison.interfaces import World
+        from unison.world import World
         project_root = Path(args.project).resolve()
         spec = replace(spec, world=World(root=project_root))
 

@@ -133,6 +133,16 @@ class World:
         """Review output directory (legacy global path)."""
         return self.root / "reviews"
 
+    @property
+    def findings_file(self) -> Path:
+        """Cumulative reviewer findings persisted across iterations."""
+        return self.reviews_dir / "findings.md"
+
+    @property
+    def dev_notes_file(self) -> Path:
+        """Developer scratch-pad for cross-iteration context."""
+        return self.reviews_dir / "dev-notes.md"
+
     def reviews_dir_for(self, ctx: RunContext) -> Path:
         """Run-scoped review directory."""
         return self.root / "reviews" / "runs" / ctx.pipeline_key / ctx.run_id

@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from unison.interfaces import AgentSpec, PipelineSpec, World
+from unison.interfaces import AgentSpec, PipelineSpec
+from unison.world import World
 from unison.runners.claude import ClaudeRunner
 from unison.runners.codex import CodexRunner
 from unison.runners.hermes import HermesRunner

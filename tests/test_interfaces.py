@@ -22,6 +22,12 @@ from unison.interfaces import (
 
 
 class TestWorld:
+    def test_interfaces_reexports_canonical_world(self):
+        from unison.interfaces import World as InterfaceWorld
+        from unison.world import World as CanonicalWorld
+
+        assert InterfaceWorld is CanonicalWorld
+
     def test_world_defaults(self, tmp_path):
         """World computes derived paths from root."""
         world = World(root=tmp_path)
