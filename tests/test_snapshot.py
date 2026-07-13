@@ -392,6 +392,32 @@ class TestFileSnapshotManager:
         assert cleaned == 1
         assert sm.list_snapshots("") == []
 
+    def test_cleanup_expired_is_scoped_to_project(self, tmp_path):
+        """Project cleanup must not remove another project's snapshots."""
+        original = tmp_path / "original.txt"
+        original.write_text("content")
+        sm = FileSnapshotManager(base_dir=tmp_path / "snapshots", retention_hours=0)
+        sm.snapshot(
+            path=original,
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1,
+            project_id="project-a",
+        )
+        sm.snapshot(
+            path=original,
+            operation=Operation.MODIFY,
+            agent="developer",
+            iteration=1,
+            project_id="project-b",
+        )
+
+        cleaned = sm.cleanup_expired(project_id="project-a")
+
+        assert cleaned == 1
+        assert sm.list_snapshots("project-a") == []
+        assert len(sm.list_snapshots("project-b")) == 1
+
     def test_snapshot_preserves_permissions(self, tmp_path):
         """Snapshot preserves file permissions."""
         original = tmp_path / "script.sh"

@@ -2388,6 +2388,19 @@ agents:
         assert orch._snapshot_mgr is not None
         assert orch._risk_evaluator is not None
 
+    def test_snapshot_cleanup_is_scoped_to_project(self, tmp_path, monkeypatch):
+        """Startup cleanup passes the active project ID."""
+        cleanup_calls = []
+        monkeypatch.setattr(
+            "unison.orchestrator.FileSnapshotManager.cleanup_expired",
+            lambda self, project_id=None: cleanup_calls.append(project_id) or 0,
+        )
+        spec = self._make_spec(tmp_path)
+
+        Orchestrator(spec=spec)
+
+        assert cleanup_calls == [spec.world.project_id]
+
     def test_snapshot_mgr_none_when_disabled(self, tmp_path):
         """snapshots.enabled=False → _snapshot_mgr is None."""
         spec = self._make_spec(tmp_path, enabled=False)

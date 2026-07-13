@@ -130,7 +130,9 @@ class Orchestrator:
             # Without this, pytest runs accumulate thousands of test
             # snapshots that are never cleaned.
             try:
-                cleaned = self._snapshot_mgr.cleanup_expired()
+                cleaned = self._snapshot_mgr.cleanup_expired(
+                    project_id=self.spec.world.project_id
+                )
                 if cleaned > 0:
                     import logging
                     logging.getLogger(__name__).info(

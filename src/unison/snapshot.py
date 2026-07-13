@@ -411,8 +411,8 @@ class FileSnapshotManager:
             # Type changed (file↔dir) — modification
             return True
 
-    def cleanup_expired(self) -> int:
-        """Remove snapshots whose age exceeds ``retention_hours``.
+    def cleanup_expired(self, project_id: str | None = None) -> int:
+        """Remove expired snapshots, optionally limited to one project.
 
         Returns the number of snapshots cleaned up.
         """
@@ -426,6 +426,8 @@ class FileSnapshotManager:
 
             expired_ids: list[str] = []
             for audit_id, data in manifest.items():
+                if project_id is not None and data.get("project_id") != project_id:
+                    continue
                 try:
                     ts = datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
                     if ts < cutoff:
