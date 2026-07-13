@@ -40,6 +40,29 @@ class FileLockManager:
         except (FileNotFoundError, ValueError):
             return None
 
+    def _create_lock(self, project: str, lock_path: Path, pid: int) -> bool:
+        """Atomically create one lock file, then initialize it with the PID."""
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o644)
+        except FileExistsError:
+            return False
+        try:
+            payload = f"{pid}\n".encode()
+            if os.write(fd, payload) != len(payload):
+                raise OSError("short lock write")
+        except OSError:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                lock_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+        self._fds[project] = fd
+        return True
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -65,13 +88,8 @@ class FileLockManager:
 
         # Attempt 1: atomic file creation — the kernel guarantees that
         # only one process succeeds at O_CREAT|O_EXCL for the same path.
-        try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o644)
-            os.write(fd, f"{current_pid}\n".encode())
-            self._fds[project] = fd
+        if self._create_lock(project, lock_path, current_pid):
             return True
-        except FileExistsError:
-            pass
 
         # File already exists — check if we can claim a stale lock.
         existing_pid = self._read_pid(lock_path)
@@ -90,13 +108,7 @@ class FileLockManager:
         except FileNotFoundError:
             return False  # another process already cleaned up
 
-        try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o644)
-            os.write(fd, f"{current_pid}\n".encode())
-            self._fds[project] = fd
-            return True
-        except FileExistsError:
-            return False  # another process claimed it between unlink and open
+        return self._create_lock(project, lock_path, current_pid)
 
     def release(self, project: str) -> None:
         """Release the lock for *project*.  No-op if we never acquired it."""

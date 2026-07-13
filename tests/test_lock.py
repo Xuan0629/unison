@@ -4,6 +4,7 @@ import os
 import tempfile
 from pathlib import Path
 import pytest
+from unittest.mock import patch
 
 from unison.lock import FileLockManager
 
@@ -35,6 +36,49 @@ class TestFileLockManager:
         content = lock_file.read_text()
         pid = int(content.strip())
         assert pid == os.getpid()
+
+    def test_write_failure_closes_fd_and_removes_partial_lock(self, tmp_path):
+        lm = FileLockManager(lock_dir=tmp_path)
+        real_open = os.open
+        captured = {}
+
+        def capture_open(*args, **kwargs):
+            fd = real_open(*args, **kwargs)
+            captured["fd"] = fd
+            return fd
+
+        with patch("unison.lock.os.open", side_effect=capture_open), \
+             patch("unison.lock.os.write", side_effect=OSError("disk full")):
+            assert lm.acquire("test-project") is False
+
+        with pytest.raises(OSError):
+            os.fstat(captured["fd"])
+        assert not (tmp_path / "test-project.lock").exists()
+
+    def test_zero_byte_write_does_not_leave_permanent_lock(self, tmp_path):
+        lm = FileLockManager(lock_dir=tmp_path)
+
+        with patch("unison.lock.os.write", return_value=0):
+            assert lm.acquire("test-project") is False
+
+        assert not (tmp_path / "test-project.lock").exists()
+        assert lm.acquire("test-project") is True
+
+    def test_close_failure_does_not_escape_write_failure_cleanup(self, tmp_path):
+        lm = FileLockManager(lock_dir=tmp_path)
+
+        with patch("unison.lock.os.write", side_effect=OSError("disk full")), \
+             patch("unison.lock.os.close", side_effect=OSError("close failed")):
+            assert lm.acquire("test-project") is False
+
+        assert not (tmp_path / "test-project.lock").exists()
+
+    def test_unlink_failure_does_not_escape_write_failure_cleanup(self, tmp_path):
+        lm = FileLockManager(lock_dir=tmp_path)
+
+        with patch("unison.lock.os.write", side_effect=OSError("disk full")), \
+             patch("unison.lock.Path.unlink", side_effect=OSError("unlink failed")):
+            assert lm.acquire("test-project") is False
 
     def test_acquire_already_locked_same_pid(self, tmp_path):
         """Acquire fails if lock exists with same PID (re-entrant check)."""
