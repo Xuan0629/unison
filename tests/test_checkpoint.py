@@ -31,14 +31,14 @@ class TestFileCheckpointManager:
         def fail_replace(source, destination):
             raise OSError("simulated checkpoint replace failure")
 
-        monkeypatch.setattr(atomic_io.os, "rename", fail_replace)
+        monkeypatch.setattr(atomic_io.os, "replace", fail_replace)
         updated = State(phase="done", iteration=2)
         with pytest.raises(OSError, match="simulated checkpoint replace failure"):
             cm.save("project", updated, iter_n=1, commit="new")
 
         assert path.read_text() == previous
         failed_path = tmp_path / "project" / "ckpt-1-done-1234.json"
-        assert not failed_path.with_suffix(failed_path.suffix + ".tmp").exists()
+        assert not list(failed_path.parent.glob(f".{failed_path.name}.*.tmp"))
 
     def test_save_checkpoint(self, tmp_path):
         """Save a checkpoint creates a file."""

@@ -1,5 +1,6 @@
 """Tests for checklist.py — ChecklistItem, ChecklistStatus, atomic I/O."""
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -261,6 +262,36 @@ class TestAtomicIO:
         atomic_write_json(filepath, {"version": 2})
         result = atomic_read_json(filepath)
         assert result == {"version": 2}
+
+    def test_parent_directory_fsync_is_skipped_on_windows(self, tmp_path, monkeypatch):
+        import unison.io as atomic_io
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(atomic_io.os, "name", "nt")
+            atomic_io._fsync_parent_directory(tmp_path)
+
+    def test_fdopen_failure_closes_mkstemp_descriptor(self, tmp_path, monkeypatch):
+        import unison.io as atomic_io
+
+        filepath = tmp_path / "test.json"
+        captured = []
+
+        def fake_mkstemp(**kwargs):
+            fd = os.open(str(tmp_path / "atomic.tmp"), os.O_CREAT | os.O_RDWR)
+            captured.append(fd)
+            return fd, str(tmp_path / "atomic.tmp")
+
+        monkeypatch.setattr(atomic_io.tempfile, "mkstemp", fake_mkstemp)
+        monkeypatch.setattr(
+            atomic_io.os,
+            "fdopen",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("fdopen failed")),
+        )
+
+        with pytest.raises(OSError, match="fdopen failed"):
+            atomic_write_json(filepath, {"value": 1})
+        with pytest.raises(OSError):
+            os.fstat(captured[0])
 
     def test_checklist_status_file_roundtrip(self, tmp_path):
         """ChecklistStatus can be persisted and restored via atomic I/O."""

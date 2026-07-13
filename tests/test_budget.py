@@ -380,7 +380,7 @@ class TestPersistence:
         def fail_replace(source, destination):
             raise OSError("simulated replace failure")
 
-        monkeypatch.setattr(atomic_io.os, "rename", fail_replace)
+        monkeypatch.setattr(atomic_io.os, "replace", fail_replace)
 
         with pytest.raises(OSError, match="simulated replace failure"):
             tracker.add_usage(100, phase="planning", iter_n=1)

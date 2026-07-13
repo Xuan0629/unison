@@ -1,5 +1,7 @@
 """Tests for snapshot.py — FileSnapshotManager (pre-snapshot + restore)."""
+import json
 import tempfile
+import threading
 from pathlib import Path
 import pytest
 
@@ -170,6 +172,74 @@ class TestFileSnapshotManager:
             sm.discard(record.audit_id)
 
         assert record.snapshot_path.exists()
+
+    def test_read_corrupt_manifest_quarantines_and_recovers(self, tmp_path):
+        snapshots = tmp_path / "snapshots"
+        snapshots.mkdir()
+        manifest = snapshots / "manifest.json"
+        manifest.write_text('{"broken": true}\n{"extra": true}', encoding="utf-8")
+        sm = FileSnapshotManager(base_dir=snapshots)
+
+        assert sm.list_snapshots("project") == []
+        quarantined = list(snapshots.glob("manifest.corrupt-*.json"))
+        assert len(quarantined) == 1
+        assert quarantined[0].read_text(encoding="utf-8") == (
+            '{"broken": true}\n{"extra": true}'
+        )
+        assert not manifest.exists()
+
+    def test_concurrent_snapshot_writes_preserve_all_manifest_records(self, tmp_path):
+        snapshots = tmp_path / "snapshots"
+        first = tmp_path / "first.txt"
+        second = tmp_path / "second.txt"
+        first.write_text("first")
+        second.write_text("second")
+        managers = [
+            FileSnapshotManager(base_dir=snapshots),
+            FileSnapshotManager(base_dir=snapshots),
+        ]
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def take_snapshot(manager, path, iteration):
+            try:
+                barrier.wait()
+                manager.snapshot(
+                    path,
+                    Operation.MODIFY,
+                    "developer",
+                    iteration,
+                    project_id="project",
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=take_snapshot, args=(managers[0], first, 1)),
+            threading.Thread(target=take_snapshot, args=(managers[1], second, 2)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=2)
+
+        assert errors == []
+        assert all(thread.is_alive() is False for thread in threads)
+        records = managers[0].list_snapshots("project")
+        assert {record.iteration for record in records} == {1, 2}
+        json.loads((snapshots / "manifest.json").read_text(encoding="utf-8"))
+
+    def test_manifest_lock_degrades_to_noop_without_fcntl(self, tmp_path, monkeypatch):
+        import unison.snapshot as snapshot_module
+
+        monkeypatch.setattr(snapshot_module, "fcntl", None)
+        manager = FileSnapshotManager(base_dir=tmp_path / "snapshots")
+        source = tmp_path / "source.txt"
+        source.write_text("source")
+
+        record = manager.snapshot(source, Operation.MODIFY, "developer", 1)
+
+        assert manager.restore(record.audit_id) == source
 
     def test_restore_nonexistent_audit_id(self, tmp_path):
         """Restore with non-existent audit_id raises error."""

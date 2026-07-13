@@ -6,10 +6,16 @@ at ``base_dir/manifest.json`` mapping audit_ids to their SnapshotRecord.
 
 from __future__ import annotations
 
+try:
+    import fcntl
+except ImportError:  # Native Windows is not a supported runtime; keep imports usable.
+    fcntl = None
 import fnmatch
 import json
+import os
 import shutil
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -152,11 +158,45 @@ class FileSnapshotManager:
     def _manifest_path(self) -> Path:
         return self.base_dir / self._MANIFEST_NAME
 
-    def _read_manifest(self) -> dict[str, dict[str, Any]]:
-        """Read the manifest file, returning {} when it doesn't exist."""
+    @property
+    def _manifest_lock_path(self) -> Path:
+        return self.base_dir / f"{self._MANIFEST_NAME}.lock"
+
+    @contextmanager
+    def _manifest_lock(self):
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        if fcntl is None:
+            yield
+            return
+        with open(self._manifest_lock_path, "a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _read_manifest_unlocked(self) -> dict[str, dict[str, Any]]:
+        """Read manifest while the caller holds ``_manifest_lock``."""
         if not self._manifest_path.exists():
             return {}
-        return json.loads(self._manifest_path.read_text())
+        try:
+            data = json.loads(self._manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            quarantine = self.base_dir / (
+                f"manifest.corrupt-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+                f"-{uuid.uuid4().hex[:8]}.json"
+            )
+            try:
+                os.replace(self._manifest_path, quarantine)
+            except OSError:
+                pass
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _read_manifest(self) -> dict[str, dict[str, Any]]:
+        """Read manifest, quarantining corrupt JSON under its file lock."""
+        with self._manifest_lock():
+            return self._read_manifest_unlocked()
 
     def _write_manifest(self, data: dict[str, dict[str, Any]]) -> None:
         """Atomically write the manifest file (P9: uses atomic_write_json)."""
@@ -256,10 +296,11 @@ class FileSnapshotManager:
             run_id=run_id,
         )
 
-        # Persist to manifest
-        manifest = self._read_manifest()
-        manifest[audit_id] = self._record_to_dict(record)
-        self._write_manifest(manifest)
+        # Persist to manifest under a process-safe read/modify/write lock.
+        with self._manifest_lock():
+            manifest = self._read_manifest_unlocked()
+            manifest[audit_id] = self._record_to_dict(record)
+            self._write_manifest(manifest)
 
         return record
 
@@ -321,12 +362,13 @@ class FileSnapshotManager:
 
     def discard(self, audit_id: str) -> bool:
         """Delete snapshot data and its manifest entry without restoring it."""
-        manifest = self._read_manifest()
-        data = manifest.pop(audit_id, None)
-        if data is None:
-            return False
-        snapshot_dir = self.base_dir / audit_id
-        self._write_manifest(manifest)
+        with self._manifest_lock():
+            manifest = self._read_manifest_unlocked()
+            data = manifest.pop(audit_id, None)
+            if data is None:
+                return False
+            snapshot_dir = self.base_dir / audit_id
+            self._write_manifest(manifest)
         if snapshot_dir.exists():
             shutil.rmtree(snapshot_dir)
         return True
@@ -374,36 +416,34 @@ class FileSnapshotManager:
 
         Returns the number of snapshots cleaned up.
         """
-        manifest = self._read_manifest()
-        if not manifest:
-            return 0
+        with self._manifest_lock():
+            manifest = self._read_manifest_unlocked()
+            if not manifest:
+                return 0
 
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(hours=self.retention_hours)
+            now = datetime.now(timezone.utc)
+            cutoff = now - timedelta(hours=self.retention_hours)
 
-        expired_ids: list[str] = []
-        for audit_id, data in manifest.items():
-            try:
-                ts = datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
-                if ts < cutoff:
-                    expired_ids.append(audit_id)
-            except (ValueError, KeyError):
-                continue
+            expired_ids: list[str] = []
+            for audit_id, data in manifest.items():
+                try:
+                    ts = datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
+                    if ts < cutoff:
+                        expired_ids.append(audit_id)
+                except (ValueError, KeyError):
+                    continue
 
-        cleaned = 0
-        for audit_id in expired_ids:
-            record = self._dict_to_record(manifest[audit_id])
-            snapshot = record.snapshot_path
+            cleaned = 0
+            snapshot_dirs: list[Path] = []
+            for audit_id in expired_ids:
+                snapshot_dirs.append(self.base_dir / audit_id)
+                del manifest[audit_id]
+                cleaned += 1
 
-            # Remove snapshot data from disk
-            snapshot_dir = self.base_dir / audit_id
+            if cleaned:
+                self._write_manifest(manifest)
+
+        for snapshot_dir in snapshot_dirs:
             if snapshot_dir.exists():
                 shutil.rmtree(snapshot_dir)
-
-            del manifest[audit_id]
-            cleaned += 1
-
-        if cleaned:
-            self._write_manifest(manifest)
-
         return cleaned

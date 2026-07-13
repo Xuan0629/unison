@@ -9,8 +9,20 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
+
+
+def _fsync_parent_directory(filepath: Path) -> None:
+    """Persist a completed rename on platforms with directory fsync support."""
+    if os.name == "nt":
+        return
+    dir_fd = os.open(filepath.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def atomic_write_json(
@@ -20,7 +32,7 @@ def atomic_write_json(
 ) -> None:
     """Write *data* as JSON to *filepath* atomically.
 
-    Uses the ``.tmp → os.rename`` pattern so readers never see a
+    Uses the ``.tmp → os.replace`` pattern so readers never see a
     partially-written file.  The parent directory is created if it
     does not exist.
 
@@ -30,12 +42,23 @@ def atomic_write_json(
         indent: JSON indentation level (default 2).
     """
     filepath = Path(filepath)
-    tmp_path = filepath.with_suffix(filepath.suffix + ".tmp")
     filepath.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{filepath.name}.", suffix=".tmp", dir=filepath.parent,
+    )
+    tmp_path = Path(tmp_name)
     try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        try:
+            file_obj = os.fdopen(fd, "w", encoding="utf-8")
+        except Exception:
+            os.close(fd)
+            raise
+        with file_obj as f:
             json.dump(data, f, indent=indent, ensure_ascii=False)
-        os.rename(tmp_path, filepath)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, filepath)
+        _fsync_parent_directory(filepath)
     except Exception:
         try:
             tmp_path.unlink(missing_ok=True)
