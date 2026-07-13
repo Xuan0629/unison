@@ -32,9 +32,16 @@ def atomic_write_json(
     filepath = Path(filepath)
     tmp_path = filepath.with_suffix(filepath.suffix + ".tmp")
     filepath.parent.mkdir(parents=True, exist_ok=True)
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=indent, ensure_ascii=False)
-    os.rename(tmp_path, filepath)
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=indent, ensure_ascii=False)
+        os.rename(tmp_path, filepath)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def atomic_read_json(filepath: Path | str) -> dict[str, Any] | None:

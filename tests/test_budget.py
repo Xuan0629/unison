@@ -1,5 +1,6 @@
 """Tests for budget.py — BudgetTracker."""
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -195,6 +196,28 @@ class TestPhaseTracking:
 class TestGetUsageSummary:
     """Tests for get_usage_summary()."""
 
+    @pytest.mark.parametrize("reader_name", ["should_downgrade", "get_usage_summary"])
+    def test_readers_wait_for_inflight_mutation(self, reader_name):
+        import threading
+
+        tracker = BudgetTracker(daily_limit=1000, per_task_limit=500)
+        started = threading.Event()
+        completed = threading.Event()
+
+        def read_value():
+            started.set()
+            getattr(tracker, reader_name)()
+            completed.set()
+
+        with tracker._lock:
+            thread = threading.Thread(target=read_value)
+            thread.start()
+            assert started.wait(timeout=1) is True
+            assert completed.is_set() is False
+
+        thread.join(timeout=1)
+        assert completed.is_set() is True
+
     def test_initial_summary(self):
         """Fresh tracker has zero usage."""
         tracker = BudgetTracker(daily_limit=10000, per_task_limit=5000)
@@ -303,6 +326,72 @@ class TestPersistence:
         # Should start with zero usage despite corrupted file
         assert tracker.current_usage == 0
 
+    def test_corrupt_run_file_does_not_erase_separate_daily_usage(
+        self, tmp_path: Path,
+    ):
+        daily_file = tmp_path / "daily.json"
+        run_file = tmp_path / "run.json"
+        daily_file.write_text(json.dumps({
+            "date": date.today().isoformat(), "daily_used": 321,
+        }))
+        run_file.write_text("not valid json")
+
+        tracker = BudgetTracker(
+            daily_limit=1000,
+            per_task_limit=200,
+            persist_path=run_file,
+            daily_persist_path=daily_file,
+        )
+
+        summary = tracker.get_usage_summary()
+        assert summary.daily_used == 321
+        assert summary.per_task_used == 0
+        assert summary.phase_breakdown == {}
+
+    def test_same_run_and_daily_path_is_rejected(self, tmp_path: Path):
+        path = tmp_path / "budget.json"
+        with pytest.raises(ValueError, match="must be different"):
+            BudgetTracker(
+                daily_limit=1000,
+                per_task_limit=200,
+                persist_path=path,
+                daily_persist_path=path,
+            )
+
+    @pytest.mark.parametrize("daily_only", [False, True])
+    def test_persist_failure_preserves_previous_json(
+        self, tmp_path: Path, monkeypatch, daily_only: bool,
+    ):
+        """A failed atomic replace must not truncate the previous budget."""
+        from unison import io as atomic_io
+
+        target = tmp_path / ("daily.json" if daily_only else "run.json")
+        previous = {"date": date.today().isoformat(), "daily_used": 7}
+        if not daily_only:
+            previous.update({"task_used": 3, "phases": []})
+        target.write_text(json.dumps(previous), encoding="utf-8")
+        tracker = BudgetTracker(
+            daily_limit=1000,
+            per_task_limit=200,
+            persist_path=None if daily_only else target,
+            daily_persist_path=target if daily_only else None,
+        )
+
+        def fail_replace(source, destination):
+            raise OSError("simulated replace failure")
+
+        monkeypatch.setattr(atomic_io.os, "rename", fail_replace)
+
+        with pytest.raises(OSError, match="simulated replace failure"):
+            tracker.add_usage(100, phase="planning", iter_n=1)
+
+        assert json.loads(target.read_text(encoding="utf-8")) == previous
+        summary = tracker.get_usage_summary()
+        assert summary.daily_used == 7
+        assert summary.per_task_used == (0 if daily_only else 3)
+        assert summary.phase_breakdown == {}
+        assert not target.with_suffix(target.suffix + ".tmp").exists()
+
     def test_atomic_write(self, tmp_path: Path):
         """Persist uses atomic write (.tmp → rename)."""
         persist_file = tmp_path / "budget.json"
@@ -343,26 +432,28 @@ class TestDateChangeDetection:
         # Load tracker — it should detect the date mismatch and reset daily
         tracker = BudgetTracker(daily_limit=100000, per_task_limit=50000, persist_path=persist_file)
 
-        # daily_used should be reset to 0 (date changed)
-        # But per_task_used also gets loaded... hmm, should _reset_daily clear per_task_used?
-        # Per design: _reset_daily only resets daily_used. per_task_used is task-scoped.
-        # However, _load loads both values, then _check_date_change is called on add_usage.
-        # Wait — _check_date_change isn't called in __init__, only in add_usage.
-        # So on init, we load the old values. Only on the first add_usage do we check date.
+        assert tracker.current_usage == 0
+        assert tracker.get_usage_summary().per_task_used == 10000
 
-        # After loading from old date file, daily_used should still show old value
-        # until the first add_usage triggers the date check
-        # Actually, let me re-check _check_date_change logic...
-        # _check_date_change checks if stored date != today, calls _reset_daily
-        # But _load happens before _check_date_change in __init__
-        # _check_date_change is only called in add_usage
-
-        # So initial state has old daily_used. First add_usage triggers reset.
-        assert tracker.current_usage == 50000  # loaded old value
-
-        # Now add_usage should detect date change and reset
         tracker.add_usage(100)
-        assert tracker.current_usage == 100  # reset to 0 then +100
+        assert tracker.current_usage == 100
+
+    def test_daily_only_path_resets_stale_usage_on_init(self, tmp_path: Path):
+        daily_file = tmp_path / "daily.json"
+        daily_file.write_text(json.dumps({
+            "date": "2020-01-01", "daily_used": 50000,
+        }))
+
+        tracker = BudgetTracker(
+            daily_limit=100000,
+            per_task_limit=50000,
+            daily_persist_path=daily_file,
+        )
+
+        assert tracker.current_usage == 0
+        tracker.add_usage(100)
+        assert tracker.current_usage == 100
+        assert json.loads(daily_file.read_text())["daily_used"] == 100
 
     def test_same_date_no_reset(self, tmp_path: Path):
         """When date matches today, daily counter is preserved."""
@@ -392,7 +483,7 @@ class TestDateChangeDetection:
         persist_file = tmp_path / "nonexistent" / "budget.json"
         tracker = BudgetTracker(daily_limit=1000, per_task_limit=200, persist_path=persist_file)
         assert tracker.current_usage == 0
-        # add_usage should not crash either (file write will fail silently)
+        # add_usage creates the parent directory and persists normally.
         tracker.add_usage(50)
         assert tracker.current_usage == 50
 

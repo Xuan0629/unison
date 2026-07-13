@@ -7,11 +7,12 @@ to decide whether to continue, pause, or downgrade work.
 
 from __future__ import annotations
 
-import json
 import threading
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+
+from unison.io import atomic_read_json, atomic_write_json
 
 
 # ============================================================================
@@ -76,6 +77,14 @@ class BudgetTracker:
             persist_path: Optional path to a JSON file for persistence.
                 When ``None`` the tracker is in-memory only (V1 behaviour).
         """
+        if (
+            persist_path is not None
+            and daily_persist_path is not None
+            and persist_path.resolve() == daily_persist_path.resolve()
+        ):
+            raise ValueError(
+                "persist_path and daily_persist_path must be different"
+            )
         self.daily_limit = daily_limit
         self.per_task_limit = per_task_limit
         self._persist_path = persist_path
@@ -84,6 +93,7 @@ class BudgetTracker:
         self._daily_used: int = 0
         self._per_task_used: int = 0
         self._phases: list[PhaseUsage] = []
+        self._usage_date = date.today().isoformat()
 
         # P8 S13: Lock for thread-safe budget mutations in MoA context
         self._lock = threading.Lock()
@@ -148,25 +158,39 @@ class BudgetTracker:
             iter_n: Optional iteration number for the phase.
         """
         with self._lock:
-            # Day-boundary detection
-            self._check_date_change()
+            previous_daily = self._daily_used
+            previous_task = self._per_task_used
+            previous_usage_date = self._usage_date
+            previous_phase_count = len(self._phases)
+            try:
+                # Day-boundary detection
+                today = date.today().isoformat()
+                if self._usage_date != today:
+                    self._daily_used = 0
+                    self._usage_date = today
 
-            self._daily_used += tokens
-            self._per_task_used += tokens
+                self._daily_used += tokens
+                self._per_task_used += tokens
 
-            if phase:
-                from datetime import datetime, timezone
+                if phase:
+                    from datetime import datetime, timezone
 
-                self._phases.append(
-                    PhaseUsage(
-                        phase=phase,
-                        iter_n=iter_n,
-                        tokens_used=tokens,
-                        timestamp=datetime.now(timezone.utc).isoformat(),
+                    self._phases.append(
+                        PhaseUsage(
+                            phase=phase,
+                            iter_n=iter_n,
+                            tokens_used=tokens,
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                        )
                     )
-                )
 
-            self._save()
+                self._save()
+            except Exception:
+                self._daily_used = previous_daily
+                self._per_task_used = previous_task
+                self._usage_date = previous_usage_date
+                del self._phases[previous_phase_count:]
+                raise
 
     def check_budget(self) -> bool:
         """Return True if usage is within both the daily and per-task limits.
@@ -198,7 +222,8 @@ class BudgetTracker:
         """
         if self.daily_limit <= 0:
             return False
-        return (self._daily_used / self.daily_limit) >= 0.8
+        with self._lock:
+            return (self._daily_used / self.daily_limit) >= 0.8
 
     def get_usage_summary(self) -> UsageSummary:
         """Return a snapshot of current usage.
@@ -207,15 +232,16 @@ class BudgetTracker:
             :class:`UsageSummary` with *daily_used*, *per_task_used*,
             and a *phase_breakdown* mapping phase labels to total tokens.
         """
-        breakdown: dict[str, int] = {}
-        for pu in self._phases:
-            breakdown[pu.phase] = breakdown.get(pu.phase, 0) + pu.tokens_used
+        with self._lock:
+            breakdown: dict[str, int] = {}
+            for pu in self._phases:
+                breakdown[pu.phase] = breakdown.get(pu.phase, 0) + pu.tokens_used
 
-        return UsageSummary(
-            daily_used=self._daily_used,
-            per_task_used=self._per_task_used,
-            phase_breakdown=breakdown,
-        )
+            return UsageSummary(
+                daily_used=self._daily_used,
+                per_task_used=self._per_task_used,
+                phase_breakdown=breakdown,
+            )
 
     def reset_task(self) -> None:
         """Reset the per-task counter (but not the daily counter).
@@ -223,40 +249,17 @@ class BudgetTracker:
         Thread-safe via ``threading.Lock`` (P8 S13).
         """
         with self._lock:
+            previous_task = self._per_task_used
             self._per_task_used = 0
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self._per_task_used = previous_task
+                raise
 
     # ------------------------------------------------------------------
     # Persistence internals
     # ------------------------------------------------------------------
-
-    def _reset_daily(self) -> None:
-        """Reset daily usage counter (called on day-boundary change)."""
-        self._daily_used = 0
-        # Note: per_task_used is NOT reset — it's task-scoped, not day-scoped
-        self._save()
-
-    def _check_date_change(self) -> None:
-        """Check whether the persisted date differs from today.
-
-        If the persisted date is different (or no persistence file exists),
-        reset the daily counter.  This is called automatically inside
-        :meth:`add_usage`.
-        """
-        if self._persist_path is None:
-            return
-
-        today = date.today().isoformat()
-        if self._persist_path.exists():
-            try:
-                data = json.loads(self._persist_path.read_text(encoding="utf-8"))
-                stored_date = data.get("date", "")
-                if stored_date and stored_date != today:
-                    self._reset_daily()
-            except (json.JSONDecodeError, OSError):
-                # Corrupted or unreadable — start fresh
-                self._reset_daily()
-        # If file doesn't exist yet, that's fine — first save will set the date
 
     def _load(self) -> None:
         """Load persisted state from the JSON file.
@@ -271,10 +274,20 @@ class BudgetTracker:
         if self._persist_path is None:
             return
 
-        try:
-            data = json.loads(self._persist_path.read_text(encoding="utf-8"))
-            # P1-1: Only load daily_used when there's no separate daily path.
+        data = atomic_read_json(self._persist_path)
+        if data is None:
             if self._daily_persist_path is None:
+                self._daily_used = 0
+            self._per_task_used = 0
+            self._phases = []
+            return
+        try:
+            # P1-1: Only load today's daily usage when there is no separate
+            # daily path. Per-task state remains run-scoped across dates.
+            if (
+                self._daily_persist_path is None
+                and data.get("date") == self._usage_date
+            ):
                 self._daily_used = int(data.get("daily_used", 0))
             self._per_task_used = int(data.get("task_used", 0))
 
@@ -290,9 +303,10 @@ class BudgetTracker:
                     for p in phases_raw
                     if isinstance(p, dict)
                 ]
-        except (json.JSONDecodeError, OSError, ValueError):
-            # Corrupted file — start with empty state
-            self._daily_used = 0
+        except (TypeError, ValueError):
+            # Invalid run values — preserve separately loaded daily usage.
+            if self._daily_persist_path is None:
+                self._daily_used = 0
             self._per_task_used = 0
             self._phases = []
 
@@ -321,23 +335,23 @@ class BudgetTracker:
                     for p in self._phases
                 ],
             }
-            self._persist_path.parent.mkdir(parents=True, exist_ok=True)
-            self._persist_path.write_text(json.dumps(data, indent=2))
+            atomic_write_json(self._persist_path, data)
 
         # P1-2: Persist daily usage to project-scoped file
         if self._daily_persist_path is not None:
             daily_data = {"date": today, "daily_used": self._daily_used}
-            self._daily_persist_path.parent.mkdir(parents=True, exist_ok=True)
-            self._daily_persist_path.write_text(json.dumps(daily_data))
+            atomic_write_json(self._daily_persist_path, daily_data)
 
     def _load_daily(self, path: Path) -> None:
         """Load daily usage from a project-scoped file."""
+        data = atomic_read_json(path)
+        if data is None:
+            return
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if data.get("date") == date.today().isoformat():
+            if data.get("date") == self._usage_date:
                 self._daily_used = int(data.get("daily_used", 0))
-        except (json.JSONDecodeError, OSError, ValueError):
-            pass  # Start fresh on corrupt file
+        except (TypeError, ValueError):
+            pass  # Start fresh on invalid values
 
 
 # ============================================================================
