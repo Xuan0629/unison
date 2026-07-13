@@ -1,11 +1,12 @@
 """Tests for cli.py — CLI entry point."""
+import argparse
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from unison.cli import main, _cmd_run
+from unison.cli import main, _cmd_run, _cmd_webui
 from unison.interfaces import PipelineSpec, ProjectConfig, World
 
 
@@ -107,3 +108,31 @@ class TestCliAuthorization:
         assert records[0]["reason"] == "principal_not_listed"
         assert records[1]["reason"] == "principal_source_untrusted"
         assert records[2]["reason"] == "principal_source_untrusted"
+
+
+class TestWebUiTokenTransport:
+    def test_webui_reads_token_from_environment(self, tmp_path, monkeypatch):
+        import unison.webui as webui
+
+        serve = MagicMock()
+        monkeypatch.setattr(webui, "serve", serve)
+        monkeypatch.setenv("UNISON_WEBUI_TOKEN", "environment-token")
+        args = argparse.Namespace(project=tmp_path, port=9099, token="")
+
+        assert _cmd_webui(args) == 0
+        serve.assert_called_once_with(
+            str(tmp_path), port=9099, token="environment-token"
+        )
+
+    def test_explicit_token_remains_backward_compatible(self, tmp_path, monkeypatch):
+        import unison.webui as webui
+
+        serve = MagicMock()
+        monkeypatch.setattr(webui, "serve", serve)
+        monkeypatch.setenv("UNISON_WEBUI_TOKEN", "environment-token")
+        args = argparse.Namespace(
+            project=tmp_path, port=9099, token="explicit-token"
+        )
+
+        assert _cmd_webui(args) == 0
+        serve.assert_called_once_with(str(tmp_path), port=9099, token="explicit-token")

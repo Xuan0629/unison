@@ -4260,8 +4260,8 @@ class Orchestrator:
         background ``unison webui`` process pointing at the current
         project root.
 
-        F8: Generates a session token (sha256 of PID+timestamp) and passes
-        it to both the subprocess (via --token) and register_project().
+        The session token is passed to the subprocess via its environment so
+        it is not exposed in the process command line.
 
         Does NOT halt on failure — the dashboard is best-effort.
         """
@@ -4313,18 +4313,20 @@ class Orchestrator:
         finally:
             s.close()
 
-        # Not running — spawn background process with token
+        # Not running — spawn background process with token outside argv.
         try:
+            env = os.environ.copy()
+            env["UNISON_WEBUI_TOKEN"] = webui_token
             subprocess.Popen(
                 [
                     sys.executable, "-m", "unison.cli", "webui",
                     "--project", str(self.spec.world.root),
                     "--port", str(cfg.port),
-                    "--token", webui_token,
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                env=env,
             )
         except Exception:
             import logging

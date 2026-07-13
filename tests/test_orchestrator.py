@@ -2401,6 +2401,46 @@ agents:
 
         assert cleanup_calls == [spec.world.project_id]
 
+    def test_auto_start_webui_does_not_expose_token_in_argv(
+        self, tmp_path, monkeypatch
+    ):
+        """The spawned WebUI receives its token via environment, not argv."""
+        from dataclasses import replace
+        from unittest.mock import MagicMock
+
+        spec = self._make_spec(tmp_path)
+        spec = replace(spec, webui=replace(spec.webui, auto_start=True, port=19099))
+        orch = Orchestrator(spec=spec)
+        popen = MagicMock()
+        monkeypatch.setattr("unison.orchestrator.subprocess.Popen", popen)
+
+        class RefusedSocket:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def settimeout(self, timeout):
+                pass
+
+            def connect(self, address):
+                raise ConnectionRefusedError
+
+            def close(self):
+                pass
+
+        import socket
+        monkeypatch.setattr(socket, "socket", RefusedSocket)
+        token = "visible-in-process-list"
+        token_file = tmp_path / ".unison" / "webui-token"
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(token)
+
+        orch._auto_start_webui()
+
+        argv = popen.call_args.args[0]
+        assert token not in argv
+        assert "--token" not in argv
+        assert popen.call_args.kwargs["env"]["UNISON_WEBUI_TOKEN"] == token
+
     def test_snapshot_mgr_none_when_disabled(self, tmp_path):
         """snapshots.enabled=False → _snapshot_mgr is None."""
         spec = self._make_spec(tmp_path, enabled=False)

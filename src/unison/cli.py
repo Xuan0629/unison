@@ -306,8 +306,10 @@ def _cmd_new(args: argparse.Namespace) -> int:
 
 def _cmd_webui(args: argparse.Namespace) -> int:
     """Start the web dashboard."""
+    import os
     from unison.webui import serve
-    serve(str(args.project), port=args.port, token=args.token)
+    token = args.token or os.environ.get("UNISON_WEBUI_TOKEN", "")
+    serve(str(args.project), port=args.port, token=token)
     return 0
 
 
