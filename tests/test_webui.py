@@ -1183,6 +1183,22 @@ class TestRunHistoryStore:
         assert runs[0]["verdict"] == "PASS"
         assert runs[0]["legacy"] is False
 
+    def test_failed_replace_cleans_temporary_run_file(self, tmp_path, monkeypatch):
+        import unison.run_history as run_history_module
+        from unison.run_history import RunHistoryStore
+
+        store = RunHistoryStore(tmp_path)
+        monkeypatch.setattr(
+            run_history_module.os,
+            "replace",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("replace failed")),
+        )
+
+        with pytest.raises(OSError, match="replace failed"):
+            store.start("run-1", pipeline_name="alpha", mode="code-dev")
+
+        assert list(store.runs_dir.iterdir()) == []
+
     def test_dynamic_migration_uses_actual_pipeline_names(self, tmp_path):
         import json
         from unison.run_history import RunHistoryStore

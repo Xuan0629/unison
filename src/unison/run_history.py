@@ -49,7 +49,14 @@ class RunHistoryStore:
         ) as tmp:
             tmp.write(payload)
             tmp_path = Path(tmp.name)
-        os.replace(tmp_path, target)
+        try:
+            os.replace(tmp_path, target)
+        except Exception:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     def _read(self) -> list[dict]:
         if not self.runs_dir.exists():
