@@ -360,11 +360,6 @@ body
         prompt_path = tmp_path / "prompts" / "developer.md"
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
         prompt_path.write_text("Developer system prompt")
-        old_marker = "OLD-NOTES-MUST-BE-DROPPED"
-        tail_marker = "LATEST-NOTES-MUST-BE-INCLUDED"
-        world.dev_notes_file.write_text(
-            old_marker + "\n" + ("x" * 2500) + "\n" + tail_marker + "\n"
-        )
         spec = PipelineSpec(
             version="2.0",
             world=world,
@@ -378,12 +373,22 @@ body
             mode="code-dev",
         )
         orch = Orchestrator(spec)
+        old_marker = "OLD-NOTES-MUST-BE-DROPPED"
+        tail_marker = "LATEST-NOTES-MUST-BE-INCLUDED"
+        scoped_notes = world.reviews_dir_for(orch._run_ctx) / "dev-notes.md"
+        scoped_notes.write_text(
+            old_marker + "\n" + ("x" * 2500) + "\n" + tail_marker + "\n"
+        )
+        legacy_marker = "LEGACY-NOTES-MUST-NOT-BE-INCLUDED"
+        world.dev_notes_file.write_text(legacy_marker)
         monkeypatch.setattr(orch, "_recent_diff", lambda: "")
 
         prompt = orch._build_prompt("developer", 1)
 
         assert tail_marker in prompt
         assert old_marker not in prompt
+        assert legacy_marker not in prompt
+        assert str(scoped_notes) in prompt
         assert "Developer Notes (from previous iterations)" in prompt
 
     def test_long_diff_is_truncated(self, tmp_path, monkeypatch):
@@ -2083,6 +2088,61 @@ class TestP10023ExhaustionAndSkipRedirect:
         )
 
         return Orchestrator(spec=spec)
+
+    def test_discussion_initializes_only_run_scoped_findings(self, tmp_path, monkeypatch):
+        orch = self._make_orchestrator(tmp_path)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_run_loop", lambda *a, **kw: None)
+
+        orch._run_discussion_loop()
+
+        scoped = orch.spec.world.reviews_dir_for(orch._run_ctx) / "findings.md"
+        assert scoped.exists()
+        assert "Reviewer Findings" in scoped.read_text(encoding="utf-8")
+        assert not (tmp_path / "reviews" / "findings.md").exists()
+
+    def test_discussion_prompt_names_only_current_run_artifacts(self, tmp_path):
+        orch = self._make_orchestrator(tmp_path)
+
+        prompt = orch._build_prompt("developer", 1, "discuss_review")
+
+        reviews_dir = orch.spec.world.reviews_dir_for(orch._run_ctx)
+        assert str(reviews_dir / "dev-proposal.md") in prompt
+        prd_dir = orch.spec.world.prd_for(orch._run_ctx.pipeline_key).parent
+        rel_prd_dir = str(prd_dir.relative_to(tmp_path)).rstrip("/") + "/"
+        assert rel_prd_dir + "PRD.md" in prompt
+        assert rel_prd_dir + "tech-design.md" in prompt
+        assert "reviews/dev-proposal.md" not in prompt
+        assert "reviews/findings.md" not in prompt
+
+    def test_multi_reviewer_discussion_receives_scoped_artifact_paths(
+        self, tmp_path, monkeypatch,
+    ):
+        orch = self._make_orchestrator(tmp_path)
+        from unison.interfaces import AgentSpec
+
+        reviewer = AgentSpec(
+            role="reviewer", runtime="claude", model="test",
+            system_prompt_path=Path("prompts/reviewer.md"),
+        )
+        runner = MagicMock()
+        orch._runners["claude"] = runner
+        monkeypatch.setattr(
+            orch._registry, "task_for", MagicMock(return_value="review task")
+        )
+        monkeypatch.setattr(
+            "unison.reviewer_pool.ReviewerPool.execute_parallel",
+            lambda self, path, review_fn: [review_fn(path)],
+        )
+
+        orch._invoke_multi_reviewer(
+            1, "discuss_review", agent_specs=[reviewer, reviewer]
+        )
+
+        reviews_dir = orch.spec.world.reviews_dir_for(orch._run_ctx)
+        kwargs = orch._registry.task_for.call_args.kwargs
+        assert kwargs["proposal_file"] == str(reviews_dir / "dev-proposal.md")
+        assert kwargs["findings_file"] == str(reviews_dir / "findings.md")
 
     # ---- phase_done on planning exhaustion ----------------------------------
 

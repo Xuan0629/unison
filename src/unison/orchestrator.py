@@ -1456,10 +1456,10 @@ class Orchestrator:
     def _run_discussion_loop(self) -> None:
         """Pre-implementation discussion: Developer proposes approach, Reviewer critiques.
 
-        Developer writes ``reviews/dev-proposal.md`` describing scope, files,
-        tech approach, boundaries, and test plan.  Reviewer critiques against
-        PRD + tech-design, writing findings to ``reviews/findings.md``
-        (cumulative).  Loop continues until Reviewer PASS.
+        Developer writes the current run's ``dev-proposal.md`` describing scope,
+        files, tech approach, boundaries, and test plan. Reviewer critiques
+        against the pipeline-scoped PRD + tech-design, writing findings to the
+        current run's ``findings.md``. Loop continues until Reviewer PASS.
 
         This prevents the common failure mode where the Developer rushes into
         coding with a misaligned plan — the discussion phase catches direction
@@ -1469,8 +1469,8 @@ class Orchestrator:
             return
         world = self.spec.world
 
-        # Ensure findings.md starts fresh for this pipeline
-        findings = world.findings_file
+        # Initialize cumulative findings for this run only.
+        findings = world.reviews_dir_for(self._run_ctx) / "findings.md"
         findings.parent.mkdir(parents=True, exist_ok=True)
         if not findings.exists():
             findings.write_text(
@@ -3094,6 +3094,8 @@ class Orchestrator:
                 review_phase=review_phase,
                 mode=self.spec.mode,
                 prd_dir=self._scoped_prd_dir(),
+                proposal_file=str(reviews_dir / "dev-proposal.md"),
+                findings_file=str(reviews_dir / "findings.md"),
             )
             if review_phase != "discuss_review":
                 prd_dir = self._scoped_prd_dir()
@@ -3336,6 +3338,14 @@ class Orchestrator:
                 carry_forward=carry_forward,
                 mode=self.spec.mode,
                 prd_dir=self._scoped_prd_dir(),
+                proposal_file=str(
+                    self.spec.world.reviews_dir_for(self._run_ctx)
+                    / "dev-proposal.md"
+                ),
+                findings_file=str(
+                    self.spec.world.reviews_dir_for(self._run_ctx)
+                    / "findings.md"
+                ),
             )
             # carry_forward already embedded in task via registry — clear
             # so it isn't appended again after assemble_context
@@ -3362,10 +3372,10 @@ class Orchestrator:
                 "Do NOT run git commands. Read the bundle instead.\n"
             )
 
-        # DEV-3: Inject dev-notes.md for cross-iteration context
+        # DEV-3: Inject run-scoped dev-notes.md for cross-iteration context
         dev_notes = ""
         if role == "developer":
-            notes_path = world.dev_notes_file
+            notes_path = world.reviews_dir_for(self._run_ctx) / "dev-notes.md"
             if notes_path.exists():
                 raw_notes = notes_path.read_text(encoding="utf-8")
                 # Keep only the last 2KB to avoid bloat
@@ -3375,7 +3385,7 @@ class Orchestrator:
                 dev_notes = (
                     "\n\n## Developer Notes (from previous iterations)\n"
                     f"{raw_notes}\n"
-                    "After this iteration, append 1-2 lines to reviews/dev-notes.md "
+                    f"After this iteration, append 1-2 lines to {notes_path} "
                     "summarizing what you learned or what blocked you.\n"
                 )
 

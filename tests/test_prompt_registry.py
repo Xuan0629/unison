@@ -117,12 +117,30 @@ class TestPromptRegistry:
         registry = PromptRegistry()
         task = registry.task_for(
             "reviewer", iteration=1, review_phase="discuss_review",
-            review_file="reviews/discuss-1.md",
+            review_file="reviews/runs/key/run/iter-1.md",
             prd_dir="prd/runs/pipeline-a/",
+            proposal_file="reviews/runs/key/run/dev-proposal.md",
+            findings_file="reviews/runs/key/run/findings.md",
         )
         assert "prd/runs/pipeline-a/PRD.md" in task
         assert "prd/runs/pipeline-a/tech-design.md" in task
-        assert "Read prd/PRD.md" not in task
+        assert "reviews/runs/key/run/dev-proposal.md" in task
+        assert "reviews/runs/key/run/findings.md" in task
+        assert "reviews/dev-proposal.md" not in task
+        assert "reviews/findings.md" not in task
+
+    def test_discussion_developer_uses_scoped_artifacts(self):
+        registry = PromptRegistry()
+        task = registry.task_for(
+            "developer", iteration=1, review_phase="discuss_review",
+            prd_dir="prd/runs/pipeline-a/",
+            proposal_file="reviews/runs/key/run/dev-proposal.md",
+            findings_file="reviews/runs/key/run/findings.md",
+        )
+        assert "prd/runs/pipeline-a/PRD.md" in task
+        assert "prd/runs/pipeline-a/tech-design.md" in task
+        assert "reviews/runs/key/run/dev-proposal.md" in task
+        assert "reviews/dev-proposal.md" not in task
 
     def test_task_for_reviewer_includes_anti_sycophancy(self):
         """task_for() appends anti-sycophancy note when provided."""
@@ -187,6 +205,8 @@ class TestPromptRegistry:
         "test_command": "pytest tests/ -v",
         "review_file": "reviews/iter-42.md",
         "prd_dir": "prd/",
+        "proposal_file": "reviews/dev-proposal.md",
+        "findings_file": "reviews/findings.md",
     }
 
     @pytest.mark.parametrize("role", ["planner", "developer", "reviewer"])

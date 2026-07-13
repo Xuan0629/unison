@@ -223,14 +223,14 @@ class PromptRegistry:
         "developer::discuss": (
             "Iteration {iteration} — Discussion Phase: Proposal\n"
             "You are in the PRE-IMPLEMENTATION discussion phase. Do NOT write code yet.\n"
-            "- Read prd/PRD.md and prd/tech-design.md\n"
-            "- Write your implementation proposal to reviews/dev-proposal.md\n"
+            "- Read {prd_dir}PRD.md and {prd_dir}tech-design.md\n"
+            "- Write your implementation proposal to {proposal_file}\n"
             "  covering: scope + files to modify + tech approach + boundaries + test plan\n"
             "- Do NOT modify src/ or tests/ — this is a proposal review, not implementation"
         ),
         "developer::discuss-revise": (
             "Iteration {iteration} — Discussion Phase: Revise Proposal\n"
-            "Review the findings in reviews/findings.md. Revise reviews/dev-proposal.md\n"
+            "Review the findings in {findings_file}. Revise {proposal_file}\n"
             "to address each finding. Do NOT write code — this is still the proposal phase."
         ),
         "reviewer": (
@@ -244,12 +244,12 @@ class PromptRegistry:
         "reviewer::discuss": (
             "Discussion Review Iteration {iteration}: "
             "1. Read {prd_dir}PRD.md and {prd_dir}tech-design.md for context\n"
-            "2. Read reviews/dev-proposal.md — the Developer's implementation plan\n"
+            "2. Read {proposal_file} — the Developer's implementation plan\n"
             "3. Critique: scope correct? files right? tech approach reasonable? "
             "boundaries clear? test plan adequate?\n"
             "4. Write review to {review_file} with YAML frontmatter\n"
-            "5. Append findings to reviews/findings.md for cross-iteration tracking\n"
-            "6. Do NOT modify src/ or dev-proposal.md"
+            "5. Append findings to {findings_file} for cross-iteration tracking\n"
+            "6. Do NOT modify src/ or {proposal_file}"
         ),
         "moa-analyzer": (
             "Iteration {iteration} — MoA Analyzer Operational Constraints:\n"
@@ -315,6 +315,8 @@ class PromptRegistry:
         carry_forward: str = "",
         mode: str | None = None,
         prd_dir: str = "",
+        proposal_file: str = "reviews/dev-proposal.md",
+        findings_file: str = "reviews/findings.md",
     ) -> str:
         """Return a role-specific task instruction with variables substituted.
 
@@ -369,6 +371,8 @@ class PromptRegistry:
             test_command=test_command,
             review_file=review_file,
             prd_dir=prd_dir,
+            proposal_file=proposal_file,
+            findings_file=findings_file,
         )
 
         if anti_sycophancy_note:
