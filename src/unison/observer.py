@@ -1458,6 +1458,7 @@ class Observer:
                     )
             else:
                 self._reset_stall_state()
+            self._check_skip_intervention(state)
 
         # 检查 notifications.jsonl
         if self.world.notifications_file.exists():

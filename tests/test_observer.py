@@ -720,6 +720,12 @@ class TestObserver:
             lambda state: seen_states.append(state) or True,
         )
         monkeypatch.setattr(observer, "_reset_stall_state", lambda: resets.append(True))
+        skip_checks = []
+        monkeypatch.setattr(
+            observer,
+            "_check_skip_intervention",
+            lambda state: skip_checks.append(state),
+        )
         monkeypatch.setattr(
             observer,
             "_process_new_notifications",
@@ -732,6 +738,8 @@ class TestObserver:
         assert seen_states[0].phase == "dev_active"
         assert seen_states[0].iteration == 2
         assert resets == [True]
+        assert len(skip_checks) == 1
+        assert skip_checks[0].phase == "dev_active"
         assert notification_scans == [True]
 
     def test_full_rescan_emits_stall_for_inactive_state(self, tmp_path, monkeypatch):
@@ -741,9 +749,15 @@ class TestObserver:
         State(phase="dev_active", iteration=4).atomic_write(world.state_file)
         observer = Observer(world=world)
         emitted = []
+        skip_checks = []
         monkeypatch.setattr(observer, "check_liveness", lambda state: False)
         monkeypatch.setattr(observer, "_should_emit_stall", lambda: (True, "warn"))
         monkeypatch.setattr(observer, "_emit_event", lambda **kwargs: emitted.append(kwargs))
+        monkeypatch.setattr(
+            observer,
+            "_check_skip_intervention",
+            lambda state: skip_checks.append(state),
+        )
 
         observer._full_rescan()
 
@@ -752,6 +766,8 @@ class TestObserver:
         assert emitted[0]["phase"] == "dev_active"
         assert emitted[0]["severity"] == "warn"
         assert emitted[0]["title"] == emitted[0]["body"] == emitted[0]["summary"]
+        assert len(skip_checks) == 1
+        assert skip_checks[0].iteration == 4
 
 
 # ============================================================================
