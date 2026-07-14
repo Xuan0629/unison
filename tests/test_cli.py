@@ -1,13 +1,14 @@
 """Tests for cli.py — CLI entry point."""
 import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from unison.cli import main, _cmd_run, _cmd_webui
-from unison.interfaces import PipelineSpec, ProjectConfig, World
+from unison.interfaces import AgentSpec, PipelineSpec, ProjectConfig, World
 
 
 
@@ -62,7 +63,7 @@ class TestCliAuthorization:
 
         spec = self._spec(tmp_path, ["cli", "discord:123"])
         monkeypatch.setattr(cli, "_load", lambda path: (spec, MagicMock()))
-        monkeypatch.setattr(cli, "_check_tools", lambda spec, switches: True)
+        monkeypatch.setattr(cli, "_check_tools", lambda spec: True)
         state = State(phase="done")
         runner = MagicMock()
         runner.run.return_value = state
@@ -108,6 +109,287 @@ class TestCliAuthorization:
         assert records[0]["reason"] == "principal_not_listed"
         assert records[1]["reason"] == "principal_source_untrusted"
         assert records[2]["reason"] == "principal_source_untrusted"
+
+
+class TestAgentOverrides:
+    @staticmethod
+    def _args(tmp_path, *, switch=None, model=None, save_pref=False):
+        return SimpleNamespace(
+            pipeline=tmp_path / "pipeline.yaml",
+            project=None,
+            dry_run=False,
+            json=False,
+            switch=switch,
+            model=model,
+            save_pref=save_pref,
+        )
+
+    @staticmethod
+    def _spec(tmp_path):
+        return PipelineSpec(
+            version="2.0",
+            world=World(root=tmp_path),
+            agents={
+                "reviewer": AgentSpec(
+                    role="reviewer",
+                    pipeline_role="reviewer",
+                    runtime="codex",
+                    model="old-model",
+                    system_prompt_path=Path("prompts/reviewer.md"),
+                ),
+            },
+            project=ProjectConfig(),
+            mode="inspect-only",
+        )
+
+    def test_switch_and_model_reach_orchestrator_spec(self, tmp_path, monkeypatch):
+        import unison.cli as cli
+        from unison.state import State
+
+        spec = self._spec(tmp_path)
+        monkeypatch.setattr(cli, "_load", lambda path: (spec, MagicMock()))
+        monkeypatch.setattr(cli, "_check_tools", lambda spec: True)
+        captured = {}
+
+        class FakeOrchestrator:
+            def __init__(self, *, spec, dry_run):
+                captured["spec"] = spec
+
+            def run(self):
+                return State(phase="done")
+
+        monkeypatch.setattr(cli, "Orchestrator", FakeOrchestrator)
+
+        result = _cmd_run(self._args(
+            tmp_path,
+            switch="reviewer:claude",
+            model="reviewer:new-model",
+        ))
+
+        assert result == 0
+        assert captured["spec"].agents["reviewer"].runtime == "claude"
+        assert captured["spec"].agents["reviewer"].model == "new-model"
+
+    def test_unknown_agent_override_fails_before_orchestrator(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        import unison.cli as cli
+
+        spec = self._spec(tmp_path)
+        monkeypatch.setattr(cli, "_load", lambda path: (spec, MagicMock()))
+        orchestrator = MagicMock()
+        monkeypatch.setattr(cli, "Orchestrator", orchestrator)
+
+        result = _cmd_run(self._args(tmp_path, switch="missing:claude"))
+
+        assert result == 1
+        assert "unknown agent key" in capsys.readouterr().err
+        orchestrator.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("field", "value", "message"),
+        [
+            ("switch", "badformat", "SWITCH ERROR"),
+            ("model", "badformat", "MODEL ERROR"),
+        ],
+    )
+    def test_malformed_override_is_rejected(
+        self, tmp_path, monkeypatch, capsys, field, value, message,
+    ):
+        import unison.cli as cli
+
+        spec = self._spec(tmp_path)
+        monkeypatch.setattr(cli, "_load", lambda path: (spec, MagicMock()))
+        orchestrator = MagicMock()
+        monkeypatch.setattr(cli, "Orchestrator", orchestrator)
+        kwargs = {field: value}
+
+        result = _cmd_run(self._args(tmp_path, **kwargs))
+
+        assert result == 1
+        assert message in capsys.readouterr().err
+        orchestrator.assert_not_called()
+
+    def test_unknown_model_agent_fails_before_orchestrator(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        import unison.cli as cli
+
+        spec = self._spec(tmp_path)
+        monkeypatch.setattr(cli, "_load", lambda path: (spec, MagicMock()))
+        orchestrator = MagicMock()
+        monkeypatch.setattr(cli, "Orchestrator", orchestrator)
+
+        result = _cmd_run(self._args(tmp_path, model="missing:new-model"))
+
+        assert result == 1
+        assert "unknown agent key" in capsys.readouterr().err
+        orchestrator.assert_not_called()
+
+    def test_model_only_override_reaches_tool_check_and_orchestrator(
+        self, tmp_path, monkeypatch,
+    ):
+        import unison.cli as cli
+        from unison.state import State
+
+        spec = self._spec(tmp_path)
+        monkeypatch.setattr(cli, "_load", lambda path: (spec, MagicMock()))
+        checked = {}
+
+        def check_tools(effective_spec):
+            checked["model"] = effective_spec.agents["reviewer"].model
+            return True
+
+        monkeypatch.setattr(cli, "_check_tools", check_tools)
+        captured = {}
+
+        class FakeOrchestrator:
+            def __init__(self, *, spec, dry_run):
+                captured["model"] = spec.agents["reviewer"].model
+
+            def run(self):
+                return State(phase="done")
+
+        monkeypatch.setattr(cli, "Orchestrator", FakeOrchestrator)
+
+        result = _cmd_run(self._args(tmp_path, model="reviewer:new-model"))
+
+        assert result == 0
+        assert checked["model"] == "new-model"
+        assert captured["model"] == "new-model"
+
+    def test_save_pref_atomically_persists_effective_agent_values(
+        self, tmp_path, monkeypatch,
+    ):
+        import yaml
+        import unison.cli as cli
+        from unison.state import State
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(yaml.safe_dump({
+            "version": "2.0",
+            "project_root": ".",
+            "mode": "inspect-only",
+            "agents": {
+                "reviewer": {
+                    "role": "reviewer",
+                    "pipeline_role": "reviewer",
+                    "runtime": "codex",
+                    "model": "old-model",
+                    "system_prompt_path": "prompts/reviewer.md",
+                },
+            },
+        }), encoding="utf-8")
+        spec = self._spec(tmp_path)
+        monkeypatch.setattr(cli, "_load", lambda path: (spec, MagicMock()))
+        monkeypatch.setattr(cli, "_check_tools", lambda spec: True)
+        runner = MagicMock()
+        runner.run.return_value = State(phase="done")
+        monkeypatch.setattr(cli, "Orchestrator", lambda **kwargs: runner)
+
+        result = _cmd_run(SimpleNamespace(
+            pipeline=pipeline,
+            project=None,
+            dry_run=False,
+            json=False,
+            switch="reviewer:claude",
+            model="reviewer:new-model",
+            save_pref=True,
+        ))
+
+        assert result == 0
+        saved = yaml.safe_load(pipeline.read_text(encoding="utf-8"))
+        assert saved["agents"]["reviewer"]["runtime"] == "claude"
+        assert saved["agents"]["reviewer"]["model"] == "new-model"
+        assert list(tmp_path.glob(".pipeline.yaml.*.tmp")) == []
+
+    def test_denied_run_does_not_persist_preferences(self, tmp_path, monkeypatch):
+        import yaml
+        import unison.cli as cli
+
+        pipeline = tmp_path / "pipeline.yaml"
+        original = yaml.safe_dump({
+            "version": "2.0",
+            "agents": {
+                "reviewer": {
+                    "role": "reviewer",
+                    "runtime": "codex",
+                    "model": "old-model",
+                },
+            },
+        }, sort_keys=False)
+        pipeline.write_text(original, encoding="utf-8")
+        spec = replace(self._spec(tmp_path), who_can_run=["discord:123"])
+        monkeypatch.setattr(cli, "_load", lambda path: (spec, MagicMock()))
+        orchestrator = MagicMock()
+        monkeypatch.setattr(cli, "Orchestrator", orchestrator)
+
+        result = _cmd_run(SimpleNamespace(
+            pipeline=pipeline,
+            project=None,
+            dry_run=False,
+            json=False,
+            switch="reviewer:claude",
+            model=None,
+            save_pref=True,
+        ))
+
+        assert result == 3
+        assert pipeline.read_text(encoding="utf-8") == original
+        orchestrator.assert_not_called()
+
+    def test_invalid_runtime_override_fails_closed(self, tmp_path, monkeypatch, capsys):
+        import unison.cli as cli
+
+        spec = self._spec(tmp_path)
+        monkeypatch.setattr(cli, "_load", lambda path: (spec, MagicMock()))
+        orchestrator = MagicMock()
+        monkeypatch.setattr(cli, "Orchestrator", orchestrator)
+
+        result = _cmd_run(self._args(tmp_path, switch="reviewer:custom"))
+
+        assert result == 1
+        assert "invalid runtime" in capsys.readouterr().err
+        orchestrator.assert_not_called()
+
+    def test_save_pref_write_failure_does_not_start_or_replace_pipeline(
+        self, tmp_path, monkeypatch,
+    ):
+        import yaml
+        import unison.cli as cli
+
+        pipeline = tmp_path / "pipeline.yaml"
+        original = yaml.safe_dump({
+            "version": "2.0",
+            "agents": {
+                "reviewer": {
+                    "role": "reviewer",
+                    "runtime": "codex",
+                    "model": "old-model",
+                },
+            },
+        }, sort_keys=False)
+        pipeline.write_text(original, encoding="utf-8")
+        spec = self._spec(tmp_path)
+        monkeypatch.setattr(cli, "_load", lambda path: (spec, MagicMock()))
+        monkeypatch.setattr(cli.os, "replace", MagicMock(side_effect=OSError("disk failure")))
+        orchestrator = MagicMock()
+        monkeypatch.setattr(cli, "Orchestrator", orchestrator)
+
+        result = _cmd_run(SimpleNamespace(
+            pipeline=pipeline,
+            project=None,
+            dry_run=False,
+            json=False,
+            switch="reviewer:claude",
+            model=None,
+            save_pref=True,
+        ))
+
+        assert result == 1
+        assert pipeline.read_text(encoding="utf-8") == original
+        assert list(tmp_path.glob(".pipeline.yaml.*.tmp")) == []
+        orchestrator.assert_not_called()
 
 
 class TestWebUiTokenTransport:

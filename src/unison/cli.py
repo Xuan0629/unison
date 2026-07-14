@@ -16,7 +16,9 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import replace
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 from unison.auth import RunAuthorizationError, authorize_run
@@ -71,15 +73,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "--switch", type=str, default=None,
-        help="Replace missing runtimes: --switch codex:claude,hermes:claude",
+        help="Override agent runtime: --switch reviewer:claude",
     )
     run.add_argument(
         "--save-pref", action="store_true",
-        help="Save switch/model preferences to pipeline.yaml",
+        help="Persist --switch/--model overrides to pipeline.yaml",
     )
     run.add_argument(
         "--model", type=str, default=None,
-        help="Override agent model: --model developer:deepseek-v4-pro",
+        help="Override agent model: --model reviewer:YOUR_MODEL",
     )
 
     # --- dry-run -----------------------------------------------------
@@ -137,35 +139,115 @@ def _load(spec_path: Path) -> tuple:
 
 
 def _parse_kv(flag_arg: str | None) -> dict[str, str]:
-    """Parse key:value pairs from --switch or --model flags.
-
-    'developer:claude,reviewer:hermes' -> {'developer': 'claude', 'reviewer': 'hermes'}
-    """
+    """Parse ``agent-key:value`` pairs from override flags."""
     if not flag_arg:
         return {}
-    result = {}
-    for pair in flag_arg.split(','):
-        parts = pair.strip().split(':', 1)
-        if len(parts) == 2:
-            result[parts[0].strip()] = parts[1].strip()
+    result: dict[str, str] = {}
+    for pair in flag_arg.split(","):
+        key, sep, value = pair.strip().partition(":")
+        key = key.strip()
+        value = value.strip()
+        if not sep or not key or not value:
+            raise ValueError(f"invalid override {pair!r}; expected <agent-key>:<value>")
+        result[key] = value
     return result
 
 
-def _check_tools(spec, switches: dict[str,str] | None = None) -> bool:
+def _apply_agent_overrides(
+    spec,
+    switches: dict[str, str],
+    model_overrides: dict[str, str],
+):
+    """Return a PipelineSpec with validated agent-key overrides applied."""
+    unknown = (set(switches) | set(model_overrides)) - set(spec.agents)
+    if unknown:
+        raise ValueError(f"unknown agent key(s): {', '.join(sorted(unknown))}")
+
+    invalid_runtimes = {
+        runtime for runtime in switches.values()
+        if runtime not in PipelineLoader.VALID_RUNTIMES
+    }
+    if invalid_runtimes:
+        raise ValueError(
+            "invalid runtime(s): " + ", ".join(sorted(invalid_runtimes))
+        )
+
+    agents = {}
+    for key, agent in spec.agents.items():
+        agents[key] = replace(
+            agent,
+            runtime=switches.get(key, agent.runtime),
+            model=model_overrides.get(key, agent.model),
+        )
+    return replace(spec, agents=agents)
+
+
+def _save_agent_preferences(
+    pipeline_path: Path,
+    switches: dict[str, str],
+    model_overrides: dict[str, str],
+) -> None:
+    """Atomically persist validated runtime/model overrides to pipeline YAML.
+
+    PyYAML preserves data and key order but discards comments and custom
+    formatting. Use this explicit opt-in only when that trade-off is acceptable.
+    """
+    import yaml
+    from unison.io import _fsync_parent_directory
+
+    path = pipeline_path.resolve()
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or not isinstance(raw.get("agents"), dict):
+        raise ValueError("pipeline YAML has no agents mapping")
+
+    agents = raw["agents"]
+    missing = (set(switches) | set(model_overrides)) - set(agents)
+    if missing:
+        raise ValueError(
+            "pipeline YAML missing agent key(s): " + ", ".join(sorted(missing))
+        )
+
+    for key, runtime in switches.items():
+        if not isinstance(agents[key], dict):
+            raise ValueError(f"pipeline YAML agent {key!r} is not a mapping")
+        agents[key]["runtime"] = runtime
+    for key, model in model_overrides.items():
+        if not isinstance(agents[key], dict):
+            raise ValueError(f"pipeline YAML agent {key!r} is not a mapping")
+        agents[key]["model"] = model
+
+    payload = yaml.safe_dump(raw, sort_keys=False, allow_unicode=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent,
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+        _fsync_parent_directory(path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _check_tools(spec) -> bool:
     """Pre-flight: check all required tools. Returns True if all OK.
 
     If tools are missing, prints actionable error messages and returns False.
     The caller should halt the pipeline.
     """
     import shutil
-    # Collect (runtime, agent_key) pairs, applying --switch if configured
     needed: dict[str, list[str]] = {}
     for agent_key, agent in spec.agents.items():
-        runtime = getattr(agent, 'runtime', '')
-        if runtime and runtime not in ('openclaw',):
-            # --switch overrides the runtime for this agent
-            effective = (switches or {}).get(agent_key, runtime)
-            needed.setdefault(effective, []).append(agent_key)
+        runtime = getattr(agent, "runtime", "")
+        if runtime and runtime != "openclaw":
+            needed.setdefault(runtime, []).append(agent_key)
 
     # Also check git
     missing: list[str] = []
@@ -204,6 +286,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
         project_root = Path(args.project).resolve()
         spec = replace(spec, world=World(root=project_root))
 
+    try:
+        switches = _parse_kv(args.switch)
+    except ValueError as error:
+        print(f"SWITCH ERROR: {error}", file=sys.stderr)
+        return 1
+    try:
+        model_overrides = _parse_kv(args.model)
+    except ValueError as error:
+        print(f"MODEL ERROR: {error}", file=sys.stderr)
+        return 1
+    try:
+        spec = _apply_agent_overrides(spec, switches, model_overrides)
+    except ValueError as error:
+        print(f"OVERRIDE ERROR: {error}", file=sys.stderr)
+        return 1
+
     if not authorize_run(spec, TRUSTED_LOCAL_PRINCIPAL):
         print(
             "AUTHORIZATION ERROR: local CLI is not allowed by who_can_run",
@@ -211,15 +309,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
         return 3
 
-    orchestrator = Orchestrator(spec=spec, dry_run=args.dry_run)
+    if args.save_pref:
+        try:
+            _save_agent_preferences(args.pipeline, switches, model_overrides)
+        except (OSError, ValueError) as error:
+            print(f"SAVE PREF ERROR: {error}", file=sys.stderr)
+            return 1
 
-    # Pre-flight: check required tools (halt if missing)
-    switches = _parse_kv(args.switch)
-    model_overrides = _parse_kv(args.model) if hasattr(args, 'model') else {}
-    if not _check_tools(spec, switches):
-        print("\nTip: use --switch <agent>:<runtime> to remap, --model <agent>:<model> to change model, --save-pref to persist")
+    if not _check_tools(spec):
+        print(
+            "\nTip: edit the agent runtime/model in pipeline YAML or use "
+            "--switch <agent-key>:<runtime> / --model <agent-key>:<model>"
+        )
         return 1
 
+    orchestrator = Orchestrator(spec=spec, dry_run=args.dry_run)
     final_state: State = orchestrator.run()
 
     if args.json:
