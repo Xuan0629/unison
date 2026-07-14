@@ -3,490 +3,268 @@
 [English](README.md) | **中文**
 
 <p align="center">
-  <a href="https://github.com/Xuan0629/unison/stargazers"><img src="https://img.shields.io/github/stars/Xuan0629/unison?style=social" alt="stars"></a>
-  <a href="https://github.com/Xuan0629/unison/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Apache 2.0"></a>
+  <a href="https://github.com/Xuan0629/unison/stargazers"><img src="https://img.shields.io/github/stars/Xuan0629/unison?style=social" alt="GitHub stars"></a>
+  <a href="https://github.com/Xuan0629/unison/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Apache 2.0"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+"></a>
-  <a href="https://github.com/Xuan0629/unison/actions/workflows/ci.yml"><img src="https://github.com/Xuan0629/unison/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Xuan0629/unison/actions/workflows/ci.yml"><img src="https://github.com/Xuan0629/unison/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI"></a>
 </p>
 
-> **停止写提示词。设计循环。剩下的交给 Unison。**
+> **不要只给一个 Agent 写提示词。设计一个循环，让不同 Agent 相互规划、实现、质疑与验证。**
 
-Unison 是一个 **Loop Engineering 管道**——不是提示词库，不是 agent 框架。你定义要构建什么，Unison 运行 Plan → Discuss → Dev → Review 循环直到通过。零依赖 LangChain / CrewAI / AutoGen。
+Unison 是一个协调命令行 AI Agent 的**本地优先、文件驱动 Loop Engineering 管道**。你描述任务、分配角色、定义验收规则，Unison 在有界的 Planner → Discuss → Developer → Reviewer 循环中持续推进，直到工作通过、被安全终止，或达到配置上限。
 
-<p align="center"><b>
-  Linux ✅ &nbsp; macOS ✅ &nbsp; Windows (WSL) ⚠️ &nbsp; | &nbsp; Apache 2.0 &nbsp; | &nbsp; 首次提交 2026-06-18 &nbsp; | &nbsp; v0.6.0 (pre-1.0, 活跃开发中)
-</b></p>
+它不是 LLM provider，不是聊天界面，也不替代 Claude Code、Codex、Hermes 或 OpenClaw。它是围绕这些 Agent 构建的编排与可靠性层。
 
-> ⚠️ **v0.6.0 为 pre-1.0 软件。** Unison agent 使用绕过沙箱保护的 CLI 参数运行（`--dangerously-skip-permissions`、`--yolo`）。风险矩阵、快照安全网和 diff 审计提供纵深防御，但**请务必在隔离环境中运行**——不要直接指向生产代码库，除非有人工审查。详见[安全](#safety)。
+- **版本：** 1.0.0
+- **平台：** Linux、macOS；Windows 通过 WSL。核心锁使用 `fcntl.flock`，因此不支持原生 Windows。
+- **运行方式：** 本地子进程 + 文件；不依赖 LangChain、CrewAI 或 AutoGen。
+- **许可证：** Apache License 2.0
 
----
+> [!WARNING]
+> 自主运行时可能使用 `--dangerously-skip-permissions`、`--dangerously-bypass-approvals-and-sandbox`、`--yolo` 等绕过权限确认的参数。Unison 增加了锁、快照、风险检查、预算、审计日志、超时和有界审查循环，但这些措施不能把不可信工作区变安全。请在隔离的 Git 仓库中运行、审查 diff、保护凭据；没有人工监督时，不要让 Unison 直接操作生产系统。
 
-Unison 同样如此：轻量、无状态，将多个 AI Agent 编排为协作流水线，
-以最小资源消耗打出最大效果。
+## 名字为什么叫“万物一心”
 
----
+“万物一心”是电子游戏《杀戮尖塔》中故障机器人（Defect）的一张金卡，对应英文 **All for One**。游戏要求玩家在每局都不同的牌组中寻找通关组合；“万物一心”会把弃牌堆中的 0 费牌重新拿回手牌，让一个个轻量、专门的小动作再次组合，形成新的打法与获胜路径。
 
-## 为什么选择 Unison
+这正是 Unison 的设计隐喻：
 
-> *"我已经不直接给 Claude 写提示词了。我有循环在运行，它们给 Claude 写提示词并判断该做什么。"*
-> — **Boris Cherny**，Anthropic Claude Code 负责人
+- 不同模型、Agent、工具、prompt、测试和审查，是各有所长的牌，而不是万能答案；
+- 有价值的工作以文件、finding、checkpoint 和 commit 留存，不会随一次对话结束而消失；
+- Orchestrator 把当前循环需要的能力重新组织回来；
+- 质量来自重新组合、独立质疑和反复验证。
 
-这正是 Unison 做的事。不是一次性提示词——而是一个**生产级循环**：规划 → 讨论 → 开发 → 审查 → 重复直到通过。
+Unison 不追求造出一个无所不能的 Agent，而是让多个有限能力围绕同一目标协作——**万物，一心。**
 
-**自举验证：Unison 用 Unison 开发了自己。** 项目拥有者（@Xuan0629）开发了最初的 14 个核心模块（6月18日）。此后，循环接管了一切：每次都是提出需求 → Planner 设计 → Developer 编码 → Reviewer 把关。20+ 次自我修改循环后，1,056 个测试守护每一次提交。
+*本名称仅为独立创作中的灵感引用；本项目与 Mega Crit 或《杀戮尖塔》没有官方关联。*
 
-| 自举里程碑 | Unison 在 Unison 中构建了什么 |
+## 设计理念
+
+### 1. 设计循环，而不是寻找完美提示词
+
+一次性 prompt 很脆弱。Unison 把流程显式化：角色、产物、验收标准、迭代次数、超时和终止条件都可检查。Agent 可以变化，工程契约保持可见。
+
+### 2. 文件就是共享世界
+
+Agent 通过普通文件协作：pipeline YAML、prompt、PRD、review、日志、checkpoint、state 和 Git commit。状态机持久、可观察、可恢复，不要求所有 Agent 共享一个隐藏对话。
+
+### 3. 不同角色应当进行有价值的分歧
+
+Planner、Developer、Reviewer 是不同职责。让生产者和审查者使用不同模型或 provider，可以减少相关性盲区；高风险任务可增加并行 Reviewer。
+
+### 4. 安全失败必须 fail closed
+
+Reviewer 缺失、预算账本损坏、入口未授权、pipeline 无效或额度耗尽，都不能静默变成“通过”。Unison 宁可明确 halt 并留下可审计原因，也不乐观继续。
+
+### 5. 隔离是正确性的一部分
+
+每次执行都有 project identity、pipeline identity 和 run ID。Review、预算、control、日志和 state 按作用域存放，避免多项目并行和重复运行互相串线。
+
+### 6. 人类负责目标
+
+Unison 可以自动化实现和验证循环，但不能替你决定该构建什么。范围、风险容忍度、验收标准、凭据和最终发布决定仍由人负责。
+
+## Unison 的优势
+
+| 优势 | 实际含义 |
 |---|---|
-| 核心升级（6月19日） | SQLite 通道、DAG 调度器、4-agent 模式、并行开发、多 reviewer |
-| 生产加固（6月20日） | 原子锁、优雅终止、密钥脱敏、流式日志 |
-| 管道系统（6月21日） | 6 种命名模式、多 agent 并行编排 |
-| 自省能力（6月27日–7月5日） | 自愈修复、Web UI 仪表盘、supervisor、retry engine |
-| 自我进化（7月6日） | PromptRegistry、SDD 模式、PhaseRouter、MoA、讨论阶段 |
+| **Agent 无关的编排** | 在同一 pipeline 中协调 Claude Code、Codex CLI、Hermes 和 OpenClaw。 |
+| **独立审查循环** | Reviewer verdict 和 finding 进入下一轮，直到 `PASS` 或达到配置上限。 |
+| **本地优先、透明可查** | 项目、prompt、state、review 和日志都是可检查、可版本化的普通文件。 |
+| **运行隔离** | 产物按项目、pipeline 和 run 作用域存放，不共用一个全局桶。 |
+| **有界自治** | Per-agent timeout、pipeline 限制、token 预算、锁和 halt signal 控制失控风险。 |
+| **崩溃恢复** | 原子 state 写入、checkpoint、持久 run history 和 snapshot restore 保留证据。 |
+| **多项目 WebUI** | 一个本地面板注册多个项目，切换时 state 与历史运行互不串线。 |
+| **工作流可组合** | 支持开发循环、MoA 分析、纯审查、自定义角色、DAG 和 chain。 |
+| **自举证据** | Unison 通过自己的计划/开发/审查循环持续开发，并由完整测试套件守护。 |
+
+## 基础能力
+
+- **开发循环：** 快速开发、完整的规划/讨论/开发流程，以及更深的综合审查。
+- **MoA 工作流：** 多个 Analyzer 并行，再由更强 Synthesizer 汇总，可用于分析、规划和审查。
+- **自定义角色：** 用 `pipeline_role` 把 `architect`、`security_auditor` 等领域角色映射到 planner/developer/reviewer 行为。
+- **多 Agent 并行：** 相同有效角色的多个 Agent 可并发执行。
+- **Pipeline chain：** 顺序运行多个 pipeline YAML，并将声明的输出映射到下游输入。
+- **DAG 与 worktree：** 描述 Stage 依赖，并用 Git worktree 隔离并行开发。
+- **可观察性：** 实时 state、持久 run history、SSE、Agent 日志、notifications JSONL 和中英文 WebUI。
+- **可靠性：** 内核级项目锁、原子 JSON、checkpoint、snapshot、有界 retry、崩溃分类和结构化 halt manifest。
+- **预算控制：** 项目级当日用量 + run 级任务用量，统一存入权威、fail-closed 的 ledger。
+- **受控 Self-heal：** 可选修复 Unison 或 consumer project；默认关闭，并受审查轮数限制。
 
 ## 快速开始
 
+### 1. 安装
+
 ```bash
-# pip 安装
 pip install unison-wanwuyixin
 
-# 或克隆源码
-git clone https://github.com/Xuan0629/unison.git
-cd unison
-pip install -e .
-
-# 2-agent 模式：Developer ↔ Reviewer（PRD 预先写好）
-unison run --pipeline my-pipeline.yaml
-
-# 4-agent 模式：Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer
-unison run --pipeline full-dev.yaml
-
-# 查看 pipeline 模式
-unison mode --pipeline my-pipeline.yaml
-
-# Web 状态面板
-unison webui --port 9099
+# 或从源码安装
+# git clone https://github.com/Xuan0629/unison.git
+# cd unison
+# pip install -e .
 ```
 
-### 最小 pipeline.yaml
+要求：
+
+- Python 3.12+
+- Git
+- pipeline 使用的至少一个 CLI runtime 已配置（`claude`、`codex`、`hermes` 或 `openclaw`）
+- 建议 Developer 与 Reviewer 至少使用两个独立 runtime 或 provider
+
+### 2. 生成起始 Pipeline
+
+```bash
+# 交互式向导
+unison init "新增一个有测试的 API endpoint" --output ./my-project
+
+# 或从自然语言检测默认配置
+unison new "先规划再实现插件系统" --output ./my-project --yes
+```
+
+当前 generator 使用 `code-dev`、`full-dev` 等向后兼容 preset。它们仍受支持；手写新配置时，建议优先使用 `dev:quick`、`dev:standard` 等 canonical mode。
+
+### 3. 或手工创建最小配置
 
 ```yaml
 version: "2.0"
 project_root: "."
+mode: "dev:quick"
+
 agents:
   developer:
     role: developer
+    pipeline_role: developer
     runtime: claude
-    model: deepseek-v4-pro
+    model: YOUR_DEVELOPER_MODEL
     system_prompt_path: "prompts/developer.md"
+
   reviewer:
     role: reviewer
-    runtime: codex
-    model: gpt-5.5
-    system_prompt_path: "prompts/reviewer.md"
-project:
-  test_command: "pytest tests/ -q"
-  max_iterations: 5
-```
-
-### Pipeline 配置
-
-Unison 不随仓库发布 SEAN 的内部 pipeline YAML 或运行产物。请使用上面的最小示例、`unison init` 或 `unison new` 创建项目本地配置；私有 pipeline 文件必须保持在 Git 索引之外。
-
----
-
-## 命令
-
-```bash
-# 运行 pipeline
-unison run --pipeline my-pipeline.yaml
-
-# 仅验证配置，不运行
-unison dry-run --pipeline my-pipeline.yaml
-
-# 查看 pipeline 模式
-unison mode --pipeline my-pipeline.yaml
-
-# 启动 Web 状态面板
-unison webui --project . --port 9099
-
-# 运行时切换 agent
-unison run --pipeline my.yaml --switch developer:claude
-
-# 运行时切换模型
-unison run --pipeline my.yaml --model reviewer:gpt-5.5
-
-# 持久化切换/模型变更
-unison run --pipeline my.yaml --switch reviewer:claude --save-pref
-```
-
-| 参数 | 说明 |
-|------|------|
-| `--pipeline <路径>` | pipeline.yaml 文件路径 |
-| `--dry-run` | 仅验证配置，不执行 agent |
-| `--json` | 以 JSON 格式输出最终状态 |
-| `--switch <agent>:<runtime>` | 切换指定 agent 的运行时（如 `developer:claude`） |
-| `--model <agent>:<model>` | 覆盖指定 agent 的模型（如 `reviewer:gpt-5.5`） |
-| `--save-pref` | 将 `--switch`/`--model` 变更写入 pipeline.yaml |
-| `--project <目录>` | 覆盖项目根目录（默认：pipeline.yaml 所在目录） |
-
----
-
-## Web 面板
-
-启动后访问 `http://127.0.0.1:9099`，实时查看：
-
-- 当前 pipeline 阶段和迭代
-- Pipeline 进度流程图（Init → Planning → Dev → Done）
-- Agent 任务清单和状态
-- Phase 时间线
-- 运行历史记录
-- 暗色/亮色主题切换，中英文切换
-- 一键导出 state.json
-
-```bash
-unison webui --project . --port 9099
-```
-
----
-
----
-
-## 快速导航
-
-| 从这里开始 | |
-|---|---|
-| [快速开始](#快速开始) | 克隆 → 安装 → 运行第一条管道 |
-| [Pipeline 模式](#pipeline-模式自动检测) | Canonical 模式族 + 向后兼容别名 |
-| [Web 面板](#web-面板) | `http://127.0.0.1:9099` 实时查看 |
-| [模型降级](#模型降级) | Claude Code / Hermes / Codex / OpenClaw 降级配置 |
-| [故障排除](#故障排除) | 常见问题：锁、预算、verdict 解析 |
-| [docs/MANUAL.md](docs/MANUAL.md) | 完整使用手册 |
-| [shared-skills](https://github.com/Xuan0629/shared-skills) | 配套项目：跨 runtime 同步 agent skill |
-
-## 功能
-
-### Pipeline 模式（自动检测）
-
-| 模式 | 流程 | 场景 |
-|------|------|------|
-| `code-dev` | Developer ↔ Reviewer | 代码开发（PRD 预写） |
-| `full-dev` | Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer | 全流程开发 |
-| `design-debate` | Multi-Planner ↔ Multi-Reviewer | 设计讨论会 |
-| `inspect-only` | Reviewer(s) → 报告 | 审计/审查 |
-| `agent-fix` | Multi-Developer → Multi-Reviewer | Agent 修复/优化 |
-| `migrate` | Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer | 跨项目迁移 |
-| `a2a-debate` | 多 Agent 异步文件系统辩论 | Agent 间设计审查 |
-| `greenfield` | Developer ↔ Reviewer（隔离新模块） | 从零构建新功能，不碰已有代码 |
-| `spec-driven` | Planner → Spec Gate → Discuss → Developer ↔ Reviewer | 规范驱动开发，强制 GIVEN-WHEN-THEN 规范 |
-| `moa:analyze` | 多视角 Analyzer 并行 → 强 Synthesizer | 通用综合分析报告 |
-| `moa:plan` | 产品/架构/技术/spec 多视角 → 强 Synthesizer | auto/compact/standard/deep 规划文档 |
-| `moa:review` | 正确性/安全/架构/测试多视角 → 强 Synthesizer | `must_fix` + `strengthen` 审查报告 |
-| `moa` | `moa:analyze` 的弃用兼容别名 | 向后兼容 |
-
-### 自定义角色
-
-任意角色名，通过 `pipeline_role` 映射到内建行为：
-
-```yaml
-agents:
-  architect:
-    role: architect
-    pipeline_role: planner
-    task_instruction: "设计插件系统的技术方案..."
-  critic:
-    role: critic
     pipeline_role: reviewer
+    runtime: codex
+    model: YOUR_REVIEWER_MODEL
+    system_prompt_path: "prompts/reviewer.md"
+
+project:
+  test_command: "python3 -m pytest tests/ -q"
+
+max_dev_iterations: 5
+per_agent_timeout: 600
+webui:
+  auto_start: true
+  port: 9099
 ```
 
-关键字段：
-- **`pipeline_role`** — 告诉 Orchestrator 这个角色扮演 `planner` / `developer` / `reviewer`
-- **`task_instruction`** — 覆盖默认任务指令，精确控制 Agent 行为
+创建上面两个 prompt 文件。Developer prompt 应明确任务、范围和验证命令；Reviewer prompt 应说明什么证据才允许给出 `PASS`。
 
-### 多 Agent 并行
+请把 `YOUR_DEVELOPER_MODEL` 和 `YOUR_REVIEWER_MODEL` 替换为你的 runtime/provider 配置中真实可用的 model ID。Unison 只转发该字符串，不维护通用模型目录。
 
-同一 `pipeline_role` 的多个 agent 自动并行：
-
-```yaml
-agents:
-  tech_reviewer: {pipeline_role: reviewer, runtime: codex}
-  arch_reviewer: {pipeline_role: reviewer, runtime: claude}
-```
-
-两种并行模式（自动检测）：
-- **同质** — 相同 runtime，N 份副本，Reviewer 用 majority 投票
-- **异质** — 不同 runtime，各自从不同角度独立审查
-
-适用于所有角色（Planner、Developer、Reviewer），不限于 Reviewer。
-
-### 安全
-
-| 功能 | 说明 |
-|------|------|
-| `O_CREAT\|O_EXCL` | 内核级原子锁，无 TOCTOU 竞态 |
-| 风险矩阵 | operation × path × command 三元组规则引擎（L0–L3） |
-| 快照安全网 | Agent 修改文件前自动备份 |
-| API Key 脱敏 | 日志自动替换 `sk-...`、`Bearer`、`_API_KEY=***` 为 `***` |
-| 流式日志 | 子进程输出直接写磁盘（OOM 安全） |
-| Stdin 模式 | 大 prompt 经 stdin 传入非命令行参数——避免 OS `ARG_MAX` 限制 |
-
-### 可观测性
-
-| 功能 | 说明 |
-|------|------|
-| Observer 轮询 | 每 60s 读取 state.json |
-| Phase 检测 | 自动识别 `init→planning→dev→done` 迁移 |
-| Discord / 通知 | Phase 变化 + halt 原因推送到配置的通知频道（Discord 等） |
-| Liveness Probe | 5min 无活动 → 紧急告警 |
-| Web 面板 | `unison webui --port 9099` — 实时状态、转换历史、agent 日志 |
-| Agent 日志 | 完整 prompt + 输出，保留 7 天 |
-
-> **关于通知**：通知功能使用用户自己配置的通知频道（webhook URL / bot token 等）。
-> 支持 Discord、Slack、Telegram、ntfy 等。每个用户需提供自己的通知集成——不共享，
-> 也不硬编码为特定频道。
-
-### 高级
-
-| 功能 | 说明 |
-|------|------|
-| Token 预算 | Per-agent 限制，溢出自动 downgrade 或 halt |
-| Context 截断 | 智能 prompt 压缩，只注入最近 findings |
-| Timeout 恢复 | Claude Code 超时？未提交的有效产出自动检测并 commit |
-| Checkpoint 续跑 | 每次 phase transition 保存状态 |
-| DAG 调度 | Stage 依赖图，并行执行，deadline 超时处理 |
-| Git Worktree | 并行 Developer 隔离分支开发 |
-| Schema 迁移 | V1 pipeline.yaml 自动升级到 V2 |
-| **Self-Heal** | **pipeline 运行中自动诊断并修复 Unison 自身 bug（→ §Self-Heal）** |
-| Supervisor | 崩溃检测（安全/不安全分类）、环境快照、自动恢复 |
-| Manifest | 结构化 halt 清单（JSON）、Discord 嵌入、依赖树 |
-| Observatory | 偏差检测：约束引擎、范围外审计、需求追溯 |
-| RetryEngine | 错误分类、策略链、健康记忆、多代理切换 |
-| DAG 部分推进 | `continue_on_failure` 模式——失败节点不终止整体 pipeline |
-
-可配置的超时与保留策略（YAML 顶层）：
-
-```yaml
-per_agent_timeout: 600          # 单个 agent 调用最长秒数
-context_deflation_limit: 5      # 每次迭代最多注入 findings 数
-observer_poll_interval: 60      # Observer 轮询间隔（秒）
-agent_log_retention_hours: 168  # Agent 日志保留时长（7 天）
-```
-
-### Self-Heal — Bug 自动恢复
-
-当 Unison 自身在 pipeline 运行中遇到 bug 时，可自动诊断并修复——
-让 pipeline 继续运行而不是 halt：
-
-```yaml
-# pipeline.yaml（顶层）
-self_heal:
-  auto_fix_unison: true      # 自动修复 Unison 框架 bug（默认开启）
-  auto_fix_consumer: false   # 自动修复 consumer 项目 bug（手动开启）
-  max_fix_rounds: 2          # 最多修复-修改轮次
-  fix_timeout: 300           # Fixer 诊断超时（秒）
-```
-
-**工作原理**：检测到错误 → 分类器判定为框架 bug → fixer agent 诊断并出补丁 →
-Codex + Claude 并行审查 → 迭代修改（≤2 轮）→ 提交修复 → 创建 PR 到 Unison 仓库。
-
-异常 reviewer 不会导致错误修复自动通过。
-
-
-### 绿场模式（Greenfield）— 隔离式新模块开发
-
-防止 agent 被已有 bug 分散注意力。绿场模式将 developer 限制在指定文件内：
-
-```yaml
-mode: "greenfield"
-greenfield:
-  files: ["src/unison/new_module.py", "tests/test_new_module.py"]
-  task: "构建一个 X 功能"
-  skeleton: "src/unison/new_module.py"
-```
-
-使用可复用的 `prompts/greenfield.md` 模板。
-
-### 验收标准冻结
-
-受 architect-loop 启发：验收标准在开发开始**之前**冻结到 `reviews/acceptance-criteria.md`。
-reviewer 对照冻结文件审查——不可中途移动目标。
-
-### A2A 辩论模式
-
-多 Agent 异步文件系统辩论。Agent 在 inbox/outbox 中交换立场文件和批判意见，
-自动检测收敛。模式：`a2a-debate`。详见 `src/unison/a2a_debate.py`。
-
-### `unison init` — 交互式 Pipeline 生成器
+### 4. 校验、查看模式并运行
 
 ```bash
-unison init                           # 交互式问答 → pipeline.yaml + prompts/
-unison init --preset code-dev         # 非交互：跳过向导
+unison dry-run --pipeline pipeline.yaml
+unison mode --pipeline pipeline.yaml
+unison run --pipeline pipeline.yaml
 ```
 
+运行成功退出码为 `0`；受控 halt 为 `2`；配置校验或运行环境错误返回其他非零值。
 
-## 架构
+## Pipeline 模式
 
-```
-Unison Orchestrator（状态机）
-├── PromptRegistry      （统一 prompt 模板管理）
-├── PhaseRouter         （数据驱动 pipeline 模式路由）
-├── Planner Agent    ⇄  Reviewer Agent   ← 规划循环
-├── Discuss 阶段         （编码前提案审查）
-├── Developer Agent  ⇄  Reviewer Agent   ← 开发循环
-├── MoA Modes           （多视角 fan-out → 强 Synthesizer）
-├── Spec-Driven Mode    （GIVEN-WHEN-THEN 规范门禁）
-├── A2A Debate Mode  （多 agent 文件系统辩论）
-├── FileLockManager     （O_CREAT|O_EXCL）
-├── SnapshotManager     （~/.unison/snapshots/）
-├── RiskEvaluator       （三元组规则）
-├── BudgetTracker       （token 限制）
+### 新配置推荐模式
 
-Observer（独立进程，60s 轮询）
-├── state.json + notifications.jsonl
-├── Discord / 通知 webhook
-└── Web dashboard（:9099）
+| 模式 | 流程 | 适用场景 |
+|---|---|---|
+| `dev:quick` | Developer ↔ Reviewer | 已有设计的明确实现任务。 |
+| `dev:standard` | Planner ↔ Reviewer → Discuss ↔ Reviewer → Developer ↔ Reviewer | 先规划再开发的功能。 |
+| `dev:deep` | Standard 流程 + 综合终审 | 高风险或发布关键任务。 |
+| `moa:analyze` | 多 Analyzer 并行 → Synthesizer | 调研、比较或宽范围分析。 |
+| `moa:plan` | 产品/架构/技术/spec 多视角 → Synthesizer | 规划和设计文档。 |
+| `moa:review` | 正确性/安全/架构/测试多视角 → Synthesizer | 独立审查报告。 |
+| `chain` | 带输出映射的顺序 pipeline stages | 多步骤工作流。 |
+| `custom` | 参数化角色流程 | 领域定制编排。 |
 
-World（共享文件系统）
-├── prd/PRD.md、tech-design.md
-├── reviews/iter-N.md、dev-proposal.md、findings.md、dev-notes.md、acceptance-criteria.md
-├── run-scoped reviews/moa-*-roundN.md + moa-analysis.md/moa-review.md
-├── run-scoped prd/moa-plan.md
-├── inbox/ outbox/（A2A 辩论消息）
-├── observer/ logs/ reports/
-└── .unison/ state、lock、checkpoints、budget
-```
+仍接受以下兼容模式：`code-dev`、`full-dev`、`agent-fix`、`migrate`、`greenfield`、`design-debate`、`inspect-only`、`spec-driven` 和裸 `moa`。除非需要 legacy mode 的独立契约，新 YAML 应优先采用 canonical 名称。
 
+精确阶段行为、兼容说明和配置示例见[深度使用手册](docs/MANUAL.md)。
 
----
+## 支持的 Runtime
 
-## 支持的 Agent
+| Runtime | Key | 调用方式 |
+|---|---|---|
+| Claude Code | `claude` | 本地 `claude` 子进程，转发 model/effort。 |
+| Codex CLI | `codex` | 本地 `codex exec` 子进程。 |
+| Hermes | `hermes` | 本地 `hermes chat` 子进程。 |
+| OpenClaw | `openclaw` | 本地 `openclaw agent` CLI，每次调用使用唯一 session key。 |
 
-| Agent | 运行时标识 | 调用方式 |
-|-------|-----------|---------|
-| Claude Code | `claude` | `claude -p --dangerously-skip-permissions` |
-| Codex CLI | `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox` |
-| Hermes | `hermes` | `hermes chat -q --yolo`（自动加载 model + 工程技能） |
-| OpenClaw | `openclaw` | `openclaw agent --agent <id> --session-key ... --json` |
+Unison v1.0 只校验这四个 runtime key。当前 `PipelineLoader` 不支持任意 `runtime: custom` 配置。
 
-> ⚠️ **为什么用这些高危参数？** Claude Code 的 `--dangerously-skip-permissions`、Codex 的 `--dangerously-bypass-approvals-and-sandbox`、Hermes 的 `--yolo` 是 agent 自主循环的前提——没有它们，每次文件写入和命令执行都会弹出人工确认框，管道无法自动化。这是有意为之的权衡：**绕过 agent 层的确认提示，换取 Unison 自身的纵深防御**（风险矩阵 L0–L3、快照安全网、事后 diff 审计、密钥脱敏）。请在隔离环境中运行——详见[安全](#safety)。
+## Web 状态面板
 
-
-### 自定义 Agent
-
-任何可通过 CLI 接收文本 prompt 并输出文本响应的 AI Agent 均可接入：
-
-```yaml
-agents:
-  my_agent:
-    role: developer
-    runtime: custom          # 或任意预配置 runtime
-    binary: my-agent-cli     # CLI 可执行文件
-    cli_flags: ["-p", "--auto"]
-    model: gpt-4o
+```bash
+unison webui --project /path/to/project --port 9099
 ```
 
-Runner 以子进程方式调用并将 stdout 作为 Agent 输出。
+访问 `http://127.0.0.1:9099`。
 
----
+一个 WebUI 进程可以服务多个项目。同一端口已经启动时，新 pipeline 会把自己的项目注册到现有 server。项目切换会同时限定 state、config、agents、预算显示、controls 和 run history。History 来自每个项目 `.unison/runs/` 下的持久运行记录，不是当前 transition 列表。
 
-## 依赖
+Control endpoint 使用生成的 session token，token 文件只允许 owner 读写。Server 默认只绑定 `127.0.0.1`；除非另加经过设计的认证 reverse proxy 并完成 threat review，不要公开暴露。
 
-- **Python** ≥ 3.12
-- **Git**
-- **PyYAML** — `pip install pyyaml`
-- **任意有 CLI 的 AI Agent** — 至少 2 个（Claude Code、Codex、Hermes、OpenClaw 已预配置）
+## 安全与可靠性模型
 
----
+| 控制 | 当前行为 |
+|---|---|
+| 项目锁 | 稳定的 `~/.unison/locks/<project>.lock` inode + 非阻塞 `fcntl.flock`；release 后锁文件保留。 |
+| State 写入 | 原子 JSON replace；用于观察的损坏项目 state 会回退到安全默认值。 |
+| Snapshot | 可选的调用前快照，位于 `~/.unison/snapshots/`，按 project/run 隔离，只能恢复到授权 root。 |
+| 风险矩阵 | 对 operation × path scope × command 分类；`sudo` 和配置的关键路径会 halt。 |
+| Budget ledger | 单一项目权威 ledger + 进程锁；状态损坏或不可写时关闭 tracker，不会静默清零。 |
+| 入口授权 | v1.0 只有本地 CLI 是可信 principal；其他 principal 字符串在有可信 bridge 提供身份前保持 fail-closed。 |
+| WebUI control | 按项目和 run 隔离，需要 session token，并拒绝 inactive/unknown run。 |
+| 内建通知投递 | 生命周期事件写入 `observer/notifications.jsonl`；内建 Discord webhook 投递已禁用，外部投递需单独集成。 |
+| Self-heal | `auto_fix_unison`、`auto_fix_consumer` 默认均为 `false`；只应在显式审查和隔离下开启。 |
 
 ## 最佳实践
 
-### 模型选择
+1. **先运行 `dry-run`。** 在消耗 Agent 调用前检查路径、prompt、角色和 mode。
+2. **显式写 `pipeline_role`。** `role` 表示人类可读专业身份，`pipeline_role` 表示编排契约。
+3. **生产者和 Reviewer 分离。** 优先使用不同模型或 provider；只有风险值得时才增加 Reviewer 数量。
+4. **冻结验收标准。** 开发前明确完成条件，不要在 review 中移动目标。
+5. **一次实验只改一个变量。** Prompt、model、policy 分开变更，结果才可归因。
+6. **使用有界自治。** 设置迭代上限、per-agent timeout；无人值守时再设置 pipeline timeout 和保守预算。
+7. **生成状态不进 Git。** 默认忽略 `.unison/`、`observer/logs/`、run-scoped review、secret 和私有 pipeline 文件，除非它们是经过整理的公开产物。
+8. **凭据不进入 prompt 和仓库。** Runtime 会继承环境变量；日志脱敏是启发式措施，不是密码学保证。
+9. **发布前审查 Git diff 和测试证据。** Pipeline `PASS` 是证据，不代表它拥有最终发布决定权。
+10. **WebUI 用于观察，不作为真相源。** 权威输入仍是磁盘上的 pipeline YAML 和 run state。
 
-为不同角色配置不同模型，充分发挥各模型优势：
+## CLI 速查
 
-```yaml
-agents:
-  developer:
-    runtime: claude
-    model: claude-sonnet-4-6    # Claude 擅长编码
-  reviewer:
-    runtime: codex
-    model: gpt-5.5              # 不同模型独立审查，避免「回音室」
+```text
+unison run       运行 pipeline
+unison dry-run   校验 pipeline，不调用 Agent
+unison mode      输出选中的模式
+unison init      交互式起始配置生成器
+unison new       从描述生成 pipeline 和 prompt
+unison webui     启动本地多项目状态面板
+unison observe   启动项目 Observer
 ```
 
-**建议**（非强制）：
-- Developer 和 Reviewer 使用不同模型（至少不同 provider）——避免审查变成「回音室」
-- Planner 角色使用推理能力强的模型（如 deepseek-v4-pro、gpt-5.5）
-- 多 Reviewer 并行审查显著提高质量
+常用运行参数：
 
-### 角色分配
-
-- 避免同一 Agent 实例在同一 pipeline 中同时扮演上游和下游角色
-- 多 Reviewer 模式能发现单个 Reviewer 会遗漏的问题
-
-### 模型降级
-
-所有支持的 runtime 均提供原生模型降级，配置好备用模型避免单模型挂掉导致流程停滞：
-
-| Runtime | 降级机制 | 示例 |
-|---------|---------|------|
-| Claude Code | `--fallback-model <model>` | `deepseek-v4-pro` → `MiniMax-M3` |
-| Hermes | `hermes fallback` 配置 | `deepseek-v4-pro` → `qwen3.7-plus` |
-| Codex | CLI `-m` 每次调用指定 | `gpt-5.5` → `gpt-5.4` |
-| OpenClaw | `model_fallback` in AGENTS.md | 原生支持 |
-
-```yaml
-# pipeline.yaml — 每个 agent 的模型降级
-agents:
-  developer:
-    runtime: claude
-    model: deepseek-v4-pro
-    # Claude Code 在模型不可达时自动降级
-  reviewer:
-    runtime: hermes
-    model: deepseek-v4-pro
-    # Hermes fallback provider 处理模型切换
+```bash
+unison run --pipeline pipeline.yaml --project /path/to/worktree
+unison run --pipeline pipeline.yaml --json
 ```
 
-如需 runtime 级别降级（所有模型都挂时切换整个 agent 到另一个 runtime），使用 Unison 的 `budget.downgrade_map`。
+1.0 已知 CLI 限制：parser 虽接受 `--switch`、`--model` 和 `--save-pref`，但 runtime/model 变更并未应用到传给 Orchestrator 的 `PipelineSpec`。请直接修改 YAML；后续版本修复前不要依赖这三个参数。
 
-### Agent 质量决定协作质量
+## 文档
 
-Unison 提供协作框架，你的 Agent 配置决定协作质量——Agent 的 system prompt、skill、模型越好，Unison 产出越好。
-
-> **以上均为建议，非限制。Unison 适用于任何 CLI Agent 配置——自由实验。**
-
-> ⚠️ **关于 Token 用量**：多 Agent 协作天然比单 Agent 消耗更多 token——每个审查者都是独立的 LLM 调用。这是质量的代价：多个独立视角能发现单个 Agent 会遗漏的问题。项目贡献者不对您的 token 账单负责。😄
-
----
-
-
----
-
-## 故障排除
-
-| 症状 | 解决 |
-|------|------|
-| "Could not acquire lock" | 另一个进程持有内核锁。用 `fuser ~/.unison/locks/<project>.lock` 定位进程；进程运行时不要删除锁文件。 |
-| "ContextBudgetError" | 在 pipeline YAML 中增大 `budget.daily_token_limit`；或 `rm -f .unison/budget.json` 重置当日预算 |
-| "Could not parse verdict" | 已修复（v1.1）：verdict 解析器现支持 YAML block scalar |
-| Claude Code 不修改代码 | 已修复（v1.1）：developer 模板不再硬编码 "Write code"，任务意图由 Developer Instructions 控制 |
-| Codex "Missing OPENAI_API_KEY" | 设置 `OPENAI_API_KEY` 环境变量，或确认 Codex CLI 配置正确 |
-| Self-heal fixer 修复失败 | 查看 `fixes/*.yaml` 诊断日志；reviewer 可能拒绝了修复方案 |
-
----
-
-## 延伸阅读
-
-- **[docs/MANUAL.md](docs/MANUAL.md)** — 完整使用手册：pipeline 模式、Agent 配置、高级功能、故障排除。
-
-### 对 Unison 用户：共享 Skill 系统
-
-多 Agent 高效协作需要一致的 skill 配置（编码规范、设计系统、调试流程等）。**[shared-skills](https://github.com/Xuan0629/shared-skills)** 是配套项目——在 Claude Code、Codex、Hermes、OpenClaw 之间同步 Agent skill，单一数据源、自动格式转换。
-
-推荐所有使用 2+ Agent 的 Unison 用户安装。
-
----
+- **[深度使用手册 / Deep usage manual](docs/MANUAL.md)** — 中英双语说明安装、schema、mode、运行、产物、安全、WebUI、恢复和故障排除。
+- **[贡献指南](CONTRIBUTING.md)** — 贡献流程。
+- **[`CLAUDE.md`](CLAUDE.md)** — Claude Code 在本仓库工作时自动加载的项目级指令，用于约束贡献行为；Unison 不会把它当作 pipeline 配置读取。
 
 ## 许可证
 
-[Apache License 2.0](LICENSE) — 宽松许可，专利保护，商业友好。
+[Apache License 2.0](LICENSE) — 宽松许可、包含专利保护、适合商业使用。

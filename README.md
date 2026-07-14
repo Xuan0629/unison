@@ -1,488 +1,270 @@
 # Unison · 万物一心
 
-[中文](README_CN.md) | **English**
+**English** | [中文](README_CN.md)
 
 <p align="center">
-  <a href="https://github.com/Xuan0629/unison/stargazers"><img src="https://img.shields.io/github/stars/Xuan0629/unison?style=social" alt="stars"></a>
-  <a href="https://github.com/Xuan0629/unison/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Apache 2.0"></a>
+  <a href="https://github.com/Xuan0629/unison/stargazers"><img src="https://img.shields.io/github/stars/Xuan0629/unison?style=social" alt="GitHub stars"></a>
+  <a href="https://github.com/Xuan0629/unison/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Apache 2.0"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+"></a>
-  <a href="https://github.com/Xuan0629/unison/actions/workflows/ci.yml"><img src="https://github.com/Xuan0629/unison/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Xuan0629/unison/actions/workflows/ci.yml"><img src="https://github.com/Xuan0629/unison/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI"></a>
 </p>
 
-> **Stop prompting. Design the loop. Unison does the rest.**
+> **Stop prompting one agent. Design a loop that lets different agents plan, build, challenge, and verify one another.**
 
-Unison is a **Loop Engineering pipeline** — not a prompt library, not an agent framework. You define what to build. Unison runs the Planner → Discuss → Developer → Reviewer loop until it passes. Zero dependencies on LangChain / CrewAI / AutoGen.
+Unison is a **local-first, file-driven Loop Engineering pipeline** for coordinating CLI-based AI agents. You describe the work, assign roles and verification rules, and Unison runs bounded Planner → Discuss → Developer → Reviewer loops until the work passes, halts safely, or exhausts its configured limits.
 
-<p align="center"><b>
-  Linux ✅ &nbsp; macOS ✅ &nbsp; Windows (WSL) ⚠️ &nbsp; | &nbsp; Apache 2.0 &nbsp; | &nbsp; First commit 2026-06-18 &nbsp; | &nbsp; v0.6.0 (pre-1.0, actively developed)
-</b></p>
+It is not an LLM provider, a chat UI, or a replacement for Claude Code, Codex, Hermes, or OpenClaw. It is the orchestration and reliability layer around them.
 
-> ⚠️ **v0.6.0 is pre-1.0 software.** Unison agents run with CLI flags that bypass sandbox protections (`--dangerously-skip-permissions`, `--yolo`). The risk matrix, snapshot safety net, and diff audit provide defense-in-depth, but **always run in an isolated environment** — never point it at production codebases without human review. See [Safety](#safety) for details.
+- **Version:** 1.0.0
+- **Platforms:** Linux and macOS; Windows through WSL. Native Windows is not supported because core locking uses `fcntl.flock`.
+- **Runtime model:** local subprocesses and files; no LangChain, CrewAI, or AutoGen dependency.
+- **License:** Apache License 2.0
 
----
+> [!WARNING]
+> Autonomous runtimes may be launched with permission-bypass flags such as `--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`, or `--yolo`. Unison adds locks, snapshots, risk checks, budgets, audit logs, timeouts, and bounded review loops, but these controls do not make an untrusted workspace safe. Use an isolated Git repository, review diffs, protect credentials, and do not point Unison at production systems without human oversight.
+
+## The name: “万物一心”
+
+“万物一心” is the Chinese name of **All for One**, a rare Defect card in *Slay the Spire*. The game asks you to win with a deck that changes every run. All for One returns discarded zero-cost cards to your hand, turning small, specialized actions into new combinations and new lines of play.
+
+That is the design metaphor behind Unison:
+
+- each model, agent, tool, prompt, test, and review is a specialized card rather than a universal answer;
+- useful work is preserved as files, findings, checkpoints, and commits instead of disappearing after one chat turn;
+- the orchestrator brings the right capabilities back into the current loop;
+- quality comes from recombination, independent challenge, and repeated verification.
+
+Unison does not try to create one omnipotent agent. It helps many limited capabilities act with one purpose — **all things, one intent**.
+
+*The name is an independent creative reference; this project is not affiliated with Mega Crit or Slay the Spire.*
+
+## Design philosophy
+
+### 1. Design the loop, not the perfect prompt
+
+A single prompt is fragile. Unison makes the process explicit: define roles, artifacts, acceptance criteria, iteration limits, timeouts, and halt conditions. Agents may vary; the engineering contract remains inspectable.
+
+### 2. Files are the shared world
+
+Agents collaborate through ordinary files: pipeline YAML, prompts, PRDs, reviews, logs, checkpoints, state, and Git commits. The state machine is durable, observable, and recoverable without requiring every agent to share a hidden conversation.
+
+### 3. Different roles should disagree productively
+
+Planner, Developer, and Reviewer are separate responsibilities. Using different models or providers for production and review reduces correlated blind spots. Multiple reviewers can run in parallel when the task justifies the cost.
+
+### 4. Safety must fail closed
+
+A missing reviewer, corrupt budget ledger, unauthorized entry point, invalid pipeline, or exhausted limit must not silently become approval. Unison prefers an explicit halt and an auditable reason over optimistic continuation.
+
+### 5. Isolation is part of correctness
+
+Every execution receives a project identity, pipeline identity, and run ID. Reviews, budgets, controls, logs, and state are scoped so concurrent projects and repeated runs do not silently contaminate one another.
+
+### 6. Humans own the objective
+
+Unison can automate implementation and verification loops; it cannot decide what should be built. Humans still define scope, risk tolerance, acceptance criteria, credentials, and the final release decision.
 
 ## Why Unison
 
-> *"I don't prompt Claude anymore. I have loops running that prompt Claude and figuring out what to do."*
-> — **Boris Cherny**, Head of Claude Code at Anthropic
-
-That's exactly what Unison does. Not a one-shot prompt — a **production loop**: Plan → Discuss → Develop → Review → Repeat until PASS.
-
-**Proof: Unison built Unison.** The project owner (@Xuan0629) developed the initial 14 core modules (Jun 18). From there, the loop took over: every feature since has started with a requirement → Planner designed it → Developer coded it → Reviewer gated it. 20+ self-modification cycles later, 1,056 tests guard every commit.
-
-| Self-hosting milestone | What Unison built in Unison |
+| Advantage | What it means in practice |
 |---|---|
-| Core Upgrade (Jun 19) | SQLite channel, DAG scheduler, 4-agent mode, parallel dev, multi-reviewer |
-| Production Hardening (Jun 20) | Atomic O_CREAT\|O_EXCL locking, graceful shutdown, secret masking, streaming logs |
-| Pipeline System (Jun 21) | 6 named modes, multi-agent parallel orchestration |
-| Introspection (Jun 27–Jul 5) | Self-heal auto-fix, Web UI dashboard, supervisor, retry engine |
-| Self-Improvement (Jul 6) | PromptRegistry, SDD mode, PhaseRouter, MoA, discuss phase |
+| **Agent-agnostic orchestration** | Coordinate Claude Code, Codex CLI, Hermes, and OpenClaw in one pipeline. |
+| **Independent review loops** | Reviewer verdicts and findings feed the next iteration until `PASS` or a configured bound is reached. |
+| **Local-first transparency** | The project, prompts, state, reviews, and logs remain ordinary files you can inspect and version. |
+| **Run isolation** | Artifacts are scoped by project, pipeline, and run rather than stored in one shared bucket. |
+| **Bounded autonomy** | Per-agent timeouts, pipeline limits, token budgets, locks, and halt signals cap runaway work. |
+| **Crash recovery** | Atomic state writes, checkpoints, persistent run history, and snapshot restore paths preserve evidence. |
+| **Multi-project WebUI** | One local dashboard can register multiple projects and switch between isolated state and run histories. |
+| **Composable workflows** | Use development loops, MoA analysis, review-only flows, custom roles, DAGs, or chained pipelines. |
+| **Self-hosting evidence** | Unison has been developed through its own plan/develop/review loops and is guarded by its test suite. |
 
-## Quick Start
+## Core capabilities
+
+- **Development loops:** quick development, full plan/discuss/develop flow, and deeper multi-pass review.
+- **MoA workflows:** parallel analyzers followed by a stronger synthesizer for analysis, planning, or review.
+- **Custom roles:** map domain-specific names such as `architect` or `security_auditor` to planner/developer/reviewer behavior with `pipeline_role`.
+- **Parallel agents:** agents sharing an effective role can run concurrently.
+- **Pipeline chaining:** run several pipeline YAML files in sequence and map declared outputs into downstream inputs.
+- **DAG and worktree support:** describe stage dependencies and isolate parallel development in Git worktrees.
+- **Observability:** live state, persistent run history, SSE updates, agent logs, notifications JSONL, and bilingual WebUI labels.
+- **Reliability:** kernel-backed project locks, atomic JSON writes, checkpoints, snapshots, bounded retries, crash classification, and structured halt manifests.
+- **Budget control:** project-wide daily usage plus run-scoped task usage in one authoritative, fail-closed ledger.
+- **Controlled self-heal:** optional framework or consumer-project repair; disabled by default and bounded by review rounds.
+
+## Quick start
+
+### 1. Install
 
 ```bash
-# Install via pip
 pip install unison-wanwuyixin
 
-# Or clone from source
-git clone https://github.com/Xuan0629/unison.git
-cd unison
-pip install -e .
-
-# 2-agent mode: Developer ↔ Reviewer (PRD pre-written)
-unison run --pipeline my-project.yaml
-
-# 4-agent mode: Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer
-unison run --pipeline full-dev.yaml
-
-# Check pipeline mode
-unison mode --pipeline my-project.yaml
-
-# Web dashboard
-unison webui --port 9099
+# Or install from source
+# git clone https://github.com/Xuan0629/unison.git
+# cd unison
+# pip install -e .
 ```
 
-### Minimal pipeline.yaml
+Requirements:
+
+- Python 3.12+
+- Git
+- at least one configured CLI runtime used by your pipeline (`claude`, `codex`, `hermes`, or `openclaw`)
+- two independent runtimes or providers are recommended for developer/reviewer separation
+
+### 2. Generate a starter pipeline
+
+```bash
+# Interactive wizard
+unison init "add a tested API endpoint" --output ./my-project
+
+# Or natural-language generation with detected defaults
+unison new "plan and implement a plugin system" --output ./my-project --yes
+```
+
+The current generators use backward-compatible preset names such as `code-dev` and `full-dev`. They remain supported; for hand-written new configurations, prefer canonical modes such as `dev:quick` and `dev:standard`.
+
+### 3. Or create a minimal pipeline manually
 
 ```yaml
 version: "2.0"
 project_root: "."
+mode: "dev:quick"
+
 agents:
   developer:
     role: developer
+    pipeline_role: developer
     runtime: claude
-    model: deepseek-v4-pro
+    model: YOUR_DEVELOPER_MODEL
     system_prompt_path: "prompts/developer.md"
+
   reviewer:
     role: reviewer
-    runtime: codex
-    model: gpt-5.5
-    system_prompt_path: "prompts/reviewer.md"
-project:
-  test_command: "pytest tests/ -q"
-  max_iterations: 5
-```
-
-### Pipeline configuration
-
-Unison does not ship SEAN's internal pipeline YAML or run artifacts. Create project-local configuration from the minimal example above, `unison init`, or `unison new`; private pipeline files must remain outside the Git index.
-
----
-
-## Commands
-
-```bash
-# Run a pipeline
-unison run --pipeline my-pipeline.yaml
-
-# Validate config without running
-unison dry-run --pipeline my-pipeline.yaml
-
-# Show detected pipeline mode
-unison mode --pipeline my-pipeline.yaml
-
-# Start web dashboard
-unison webui --project . --port 9099
-
-# Switch agent runtime on the fly
-unison run --pipeline my.yaml --switch developer:claude
-
-# Change agent model on the fly  
-unison run --pipeline my.yaml --model reviewer:gpt-5.5
-
-# Persist switch/model changes to pipeline.yaml
-unison run --pipeline my.yaml --switch reviewer:claude --save-pref
-```
-
-| Flag | Description |
-|------|-------------|
-| `--pipeline <path>` | Path to pipeline.yaml |
-| `--dry-run` | Validate spec without executing agents |
-| `--json` | Print final state as JSON |
-| `--switch <agent>:<runtime>` | Replace runtime for a specific agent (ex: `developer:claude`) |
-| `--model <agent>:<model>` | Override model for a specific agent (ex: `reviewer:gpt-5.5`) |
-| `--save-pref` | Persist `--switch`/`--model` changes to pipeline.yaml |
-| `--project <dir>` | Override project root (default: pipeline.yaml dir) |
-
----
-
-## Web Dashboard
-
-Start the server and open `http://127.0.0.1:9099` for a live view of:
-
-- Current pipeline phase and iteration
-- Pipeline progress flow diagram (Init → Planning → Dev → Done)
-- Task list with status indicators
-- Phase timeline
-- Run history
-- Dark/light theme + EN/CN language toggles
-- One-click state.json export
-
-```bash
-unison webui --project . --port 9099
-```
-
----
-
----
-
-## Quick Links
-
-| Start here | |
-|---|---|
-| [Quick Start](#quick-start) | Clone → install → run your first pipeline |
-| [Pipeline Modes](#pipeline-modes-auto-detected) | Canonical mode families plus backward-compatible aliases |
-| [Web Dashboard](#web-dashboard) | Live view at `http://127.0.0.1:9099` |
-| [Model Fallback](#model-fallback) | Claude Code / Hermes / Codex / OpenClaw fallback config |
-| [Troubleshooting](#troubleshooting) | Common fixes for lock, budget, verdict issues |
-| [docs/MANUAL.md](docs/MANUAL.md) | Full usage manual |
-| [shared-skills](https://github.com/Xuan0629/shared-skills) | Companion: sync agent skills across runtimes |
-
-## Features
-
-### Pipeline Modes (auto-detected)
-
-| Mode | Flow | Use Case |
-|------|------|----------|
-| `code-dev` | Developer ↔ Reviewer | Code development (PRD pre-written) |
-| `full-dev` | Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer | Full workflow |
-| `design-debate` | Multi-Planner ↔ Multi-Reviewer | Design discussions |
-| `a2a-debate` | Multi-Agent asynchronous debate via filesystem | Agent-to-agent design reviews |
-| `inspect-only` | Reviewer(s) → report | Audits / inspections |
-| `agent-fix` | Multi-Developer → Multi-Reviewer | Agent repair / optimization |
-| `migrate` | Planner ↔ Reviewer → Discuss → Developer ↔ Reviewer | Cross-project migration |
-| `greenfield` | Developer ↔ Reviewer (isolated new module) | New feature from scratch, no existing code access |
-| `spec-driven` | Planner → Spec Gate → Discuss → Developer ↔ Reviewer | Spec-driven development with mandatory GIVEN-WHEN-THEN specs |
-| `moa:analyze` | Multi-perspective analyzers → stronger synthesizer | General analysis report |
-| `moa:plan` | Product/architecture/technology/spec analyzers → stronger synthesizer | Auto/compact/standard/deep planning document |
-| `moa:review` | Correctness/security/architecture/testing analyzers → stronger synthesizer | `must_fix` + `strengthen` review report |
-| `moa` | Deprecated alias for `moa:analyze` | Backward compatibility |
-
-### Custom Roles
-
-Arbitrary role names mapped to built-in behaviors via `pipeline_role`:
-
-```yaml
-agents:
-  architect:
-    role: architect
-    pipeline_role: planner
-    task_instruction: "Write plugin system design proposal..."
-  critic:
-    role: critic
     pipeline_role: reviewer
+    runtime: codex
+    model: YOUR_REVIEWER_MODEL
+    system_prompt_path: "prompts/reviewer.md"
+
+project:
+  test_command: "python3 -m pytest tests/ -q"
+
+max_dev_iterations: 5
+per_agent_timeout: 600
+webui:
+  auto_start: true
+  port: 9099
 ```
 
-Key fields:
-- **`pipeline_role`** — tells the Orchestrator which slot this role fills (`planner`/`developer`/`reviewer`)
-- **`task_instruction`** — overrides the default task prompt for precise control
+Create the two prompt files named above. The developer prompt should state the task, scope, and verification command. The reviewer prompt should define the evidence required for `PASS`.
 
-### Multi-Agent Parallel
+Replace `YOUR_DEVELOPER_MODEL` and `YOUR_REVIEWER_MODEL` with model IDs that are actually available in your runtime/provider configuration. Unison forwards these strings; it does not maintain a universal model catalog.
 
-Multiple agents sharing the same `pipeline_role` automatically run in parallel:
-
-```yaml
-agents:
-  tech_reviewer: {pipeline_role: reviewer, runtime: codex}
-  arch_reviewer: {pipeline_role: reviewer, runtime: claude}
-```
-
-Two parallel modes (auto-detected):
-- **Homogeneous** — same runtime, N copies, majority vote for reviewers
-- **Heterogeneous** — different runtimes, each agent reviews from its own perspective
-
-Works for all roles (Planner, Developer, Reviewer), not just Reviewer.
-
-### Safety
-
-| Feature | Description |
-|---------|-------------|
-| `O_CREAT\|O_EXCL` | Kernel-enforced atomic lock — no TOCTOU races |
-| Risk Matrix | operation × path × command rule engine (L0–L3) |
-| Snapshot Safety Net | Auto-backup before agent modifications |
-| API Key Masking | Logs auto-redact `sk-...`, `Bearer`, `_API_KEY=` |
-| Streaming Logs | Subprocess output written directly to disk (OOM-safe) |
-| Stdin Mode | Large prompts piped via stdin instead of CLI args — avoids OS `ARG_MAX` limit |
-
-### Observability
-
-| Feature | Description |
-|---------|-------------|
-| Observer Cron | Polls `state.json` every 60s |
-| Phase Detection | Auto-detects `init→planning→dev→done` transitions |
-| Discord / Notifications | Phase transitions + halt reasons pushed to configured channel (Discord, etc.) |
-| Liveness Probe | 5min inactivity → urgent alert |
-| Web Dashboard | `unison webui --port 9099` — real-time status, transitions, agent logs |
-| Agent Logs | Full prompt + output, 7-day retention |
-
-> **Note on Notifications**: The notification feature uses a user-configured channel (webhook URL / bot token).
-> Supports Discord, Slack, Telegram, ntfy, and others. Each user must provide their own integration —
-> it is not shared or hardcoded for any specific channel.
-
-### Advanced
-
-| Feature | Description |
-|---------|-------------|
-| Token Budget | Per-agent limits, overflow → auto-downgrade or halt |
-| Context Deflation | Smart prompt truncation, only recent findings injected |
-| Timeout Recovery | Claude Code timeout? Uncommitted valid output auto-detected and committed |
-| Checkpoint / Resume | State saved after each phase transition |
-| DAG Scheduler | Stage dependency graph, parallel execution with deadlines |
-| Git Worktrees | Isolated parallel development branches |
-| Schema Migration | V1 pipeline.yaml auto-upgraded to V2 |
-| **Self-Heal** | **Auto-diagnose and fix Unison bugs while pipeline runs (→ §Self-Heal)** |
-| Supervisor | Crash detection (safe/unsafe), env snapshot, auto-resume |
-| Manifest | Structured halt manifest (JSON), Discord embed, dependency tree |
-| Observatory | Drift detection: constraints, out-of-scope audit, traceability |
-| RetryEngine | Error classification, strategy chain, health memory, multi-proxy |
-| DAG Partial Advance | `continue_on_failure` mode — failed nodes don't halt the pipeline |
-
-Configurable timeouts and retention (YAML top-level):
-
-```yaml
-per_agent_timeout: 600          # Max seconds per agent invocation
-context_deflation_limit: 5      # Max findings injected per iteration
-observer_poll_interval: 60      # Observer poll interval (seconds)
-agent_log_retention_hours: 168  # Agent log retention (7 days)
-```
-
-### Self-Heal — Automatic Bug Recovery
-
-When Unison itself hits a bug during a pipeline run, it can auto-diagnose and fix
-the issue — so your pipeline keeps running instead of halting:
-
-```yaml
-# pipeline.yaml (top-level)
-self_heal:
-  auto_fix_unison: true      # Auto-fix Unison framework bugs (default: true)
-  auto_fix_consumer: false   # Auto-fix consumer project bugs (default: false, opt-in)
-  max_fix_rounds: 2          # Max fix-revise rounds
-  fix_timeout: 300           # Fixer diagnosis timeout (seconds)
-```
-
-**How it works**: Error detected → classifier determines it's a framework bug → a
-fixer agent diagnoses and patches → Codex + Claude review the fix in parallel →
-revision loop (≤2 rounds) → commits the fix → creates a PR to the Unison repo.
-
-Fix attempts are logged to `fixes/` for auditability. Reviewers use strict verdict
-parsing — a broken reviewer cannot auto-pass a bad fix.
-
-
-### Greenfield Mode — Isolated New Module Development
-
-Prevent agents from getting distracted by existing bugs. Greenfield mode restricts
-the developer agent to only specified files — no reading existing source code:
-
-```yaml
-mode: "greenfield"
-greenfield:
-  files: ["src/unison/new_module.py", "tests/test_new_module.py"]
-  task: "Build a feature that does X"
-  skeleton: "src/unison/new_module.py"
-```
-
-Uses the reusable `prompts/greenfield.md` template.
-
-### Acceptance Criteria Freezing
-
-Inspired by Dan McInerney's architect-loop: acceptance criteria are frozen to
-`reviews/acceptance-criteria.md` **before** development starts. The reviewer
-judges against the frozen file — no moving goalposts mid-review.
-
-### A2A Debate Mode
-
-Multi-agent asynchronous debate via filesystem communication. Agents write
-position papers and critiques to inbox/outbox, with automatic convergence
-detection. Mode: `a2a-debate`. See `src/unison/a2a_debate.py`.
-
-### `unison init` — Interactive Pipeline Generator
+### 4. Validate, inspect, and run
 
 ```bash
-unison init                           # interactive Q&A → pipeline.yaml + prompts/
-unison init --preset code-dev         # non-interactive: skip wizard
+unison dry-run --pipeline pipeline.yaml
+unison mode --pipeline pipeline.yaml
+unison run --pipeline pipeline.yaml
 ```
 
+A successful run exits `0`; a controlled halt exits `2`; validation or runtime setup failures exit nonzero.
 
-## Architecture
+## Pipeline modes
 
-```
-Unison Orchestrator (state machine)
-├── PromptRegistry      (unified prompt templates)
-├── PhaseRouter         (data-driven pipeline modes)
-├── Planner Agent    ⇄  Reviewer Agent   ← planning loop
-├── Discuss Phase       (pre-implementation proposal review)
-├── Developer Agent  ⇄  Reviewer Agent   ← dev loop
-├── MoA Modes           (multi-perspective fan-out → stronger synthesizer)
-├── Spec-Driven Mode    (GIVEN-WHEN-THEN spec gate)
-├── A2A Debate Mode  (multi-agent filesystem debate)
-├── FileLockManager     (O_CREAT|O_EXCL)
-├── SnapshotManager     (~/.unison/snapshots/)
-├── RiskEvaluator       (3-tuple rules)
-├── BudgetTracker       (token limits)
+### Preferred modes for new configurations
 
-Observer (independent process, 60s poll)
-├── state.json + notifications.jsonl
-├── Discord / notification webhook
-└── Web dashboard (:9099)
+| Mode | Flow | Best for |
+|---|---|---|
+| `dev:quick` | Developer ↔ Reviewer | A scoped implementation with an existing design. |
+| `dev:standard` | Planner ↔ Reviewer → Discuss ↔ Reviewer → Developer ↔ Reviewer | Plan-first feature work. |
+| `dev:deep` | Standard flow plus comprehensive final review | High-risk or release-critical work. |
+| `moa:analyze` | Parallel analyzers → synthesizer | Research, comparison, or broad analysis. |
+| `moa:plan` | Product/architecture/technology/spec perspectives → synthesizer | Planning and design documents. |
+| `moa:review` | Correctness/security/architecture/testing perspectives → synthesizer | Independent review reports. |
+| `chain` | Ordered pipeline stages with declared output mapping | Multi-step workflows. |
+| `custom` | Parameterized role-based flow | Domain-specific orchestration. |
 
-World (shared filesystem)
-├── prd/PRD.md, tech-design.md
-├── reviews/iter-N.md, dev-proposal.md, findings.md, dev-notes.md, acceptance-criteria.md
-├── run-scoped reviews/moa-*-roundN.md + moa-analysis.md/moa-review.md
-├── run-scoped prd/moa-plan.md
-├── inbox/ outbox/ (A2A debate messages)
-├── observer/ logs/ reports/
-└── .unison/ state, lock, checkpoints, budget
-```
+Backward-compatible modes remain accepted: `code-dev`, `full-dev`, `agent-fix`, `migrate`, `greenfield`, `design-debate`, `inspect-only`, `spec-driven`, and bare `moa`. New YAML should use canonical names unless it needs one of the legacy modes’ distinct contracts.
 
+See the [manual](docs/MANUAL.md) for exact phase behavior, compatibility notes, and configuration examples.
 
----
+## Supported runtimes
 
-## Supported Agents
+| Runtime | Key | Invocation model |
+|---|---|---|
+| Claude Code | `claude` | Local `claude` subprocess with explicit model/effort forwarding. |
+| Codex CLI | `codex` | Local `codex exec` subprocess. |
+| Hermes | `hermes` | Local `hermes chat` subprocess. |
+| OpenClaw | `openclaw` | Local `openclaw agent` CLI with a unique session key per invocation. |
 
-| Agent | Runtime Key | Invocation |
-|-------|-------------|------------|
-| Claude Code | `claude` | `claude -p --dangerously-skip-permissions` |
-| Codex CLI | `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox` |
-| Hermes | `hermes` | `hermes chat -q --yolo` (model + engineering skills auto-loaded) |
-| OpenClaw | `openclaw` | `openclaw agent --agent <id> --session-key ... --json` |
+Unison v1.0 validates these four runtime keys. The implementation is intentionally narrow: adding an arbitrary `runtime: custom` entry is not currently supported by `PipelineLoader`.
 
-> ⚠️ **Why the scary flags?** Claude Code's `--dangerously-skip-permissions`, Codex's `--dangerously-bypass-approvals-and-sandbox`, and Hermes' `--yolo` are required for autonomous agent loops — without them, every file write and command execution would prompt for manual approval, blocking the pipeline. This is an intentional tradeoff: **bypass agent-level prompts in exchange for Unison's own defense-in-depth** (risk matrix L0–L3, snapshot safety net, post-audit diff scanning, secret masking). Run in an isolated environment — see [Safety](#safety).
+## Web dashboard
 
-### Custom Agents
-
-Any AI agent with a CLI that reads a text prompt and writes a text response can be used:
-
-```yaml
-agents:
-  my_agent:
-    role: developer
-    runtime: custom          # or any of the pre-configured runtimes
-    binary: my-agent-cli     # CLI executable
-    cli_flags: ["-p", "--auto"]
-    model: gpt-4o
+```bash
+unison webui --project /path/to/project --port 9099
 ```
 
-The runner invokes it as a subprocess and captures stdout as the agent's output.
+Open `http://127.0.0.1:9099`.
 
----
+One WebUI process can serve multiple projects. Starting another pipeline on the same port registers that project with the existing server. Project selection scopes state, configuration, agents, budget display, controls, and run history. History is backed by persistent run records under each project’s `.unison/runs/`, not by the current transition list.
 
-## Dependencies
+Control endpoints use a generated session token stored with owner-only permissions. The server binds to `127.0.0.1` by default; do not expose it publicly without a separate authenticated reverse proxy and a deliberate threat review.
 
-- **Python** ≥ 3.12
-- **Git**
-- **PyYAML** — `pip install pyyaml`
-- **Any AI Agent with a CLI** — at least 2 (Claude Code, Codex, Hermes, and OpenClaw are pre-configured)
+## Safety and reliability model
 
----
+| Control | Current behavior |
+|---|---|
+| Project lock | Stable `~/.unison/locks/<project>.lock` inode protected by nonblocking `fcntl.flock`; the file remains after release. |
+| State writes | Atomic JSON replacement; invalid project state falls back to a safe default for observation. |
+| Snapshots | Optional pre-invocation snapshots under `~/.unison/snapshots/`, scoped by project/run and restored only within authorized roots. |
+| Risk matrix | Classifies operation × path scope × command; `sudo` and configured critical paths halt. |
+| Budget ledger | One authoritative project ledger with process locking; malformed or unwritable state closes the tracker instead of resetting usage. |
+| Authorization | Local CLI is the only trusted execution principal in v1.0. Other configured principal strings remain fail-closed until a trusted bridge supplies identity. |
+| WebUI controls | Project- and run-scoped; require the session token and reject inactive or unknown runs. |
+| Built-in delivery | Lifecycle events are written to `observer/notifications.jsonl`; built-in Discord webhook delivery is disabled. External delivery is a separate integration. |
+| Self-heal | `auto_fix_unison` and `auto_fix_consumer` default to `false`. Enable only with explicit review and isolation. |
 
-## Best Practices
+## Best practices
 
-### Model Selection
+1. **Start with `dry-run`.** Validate paths, prompts, roles, and mode before paying for agent calls.
+2. **Use explicit `pipeline_role`.** Treat `role` as a human-facing specialty and `pipeline_role` as the orchestration contract.
+3. **Separate producer and reviewer.** Prefer different models or providers; use more reviewers only when the risk justifies the token cost.
+4. **Freeze acceptance criteria.** State what counts as done before development starts; do not let the review target move mid-loop.
+5. **Keep one variable per experiment.** Change a prompt, model, or policy independently so outcomes remain attributable.
+6. **Use bounded autonomy.** Set iteration limits, per-agent timeouts, a pipeline timeout for unattended runs, and conservative budgets.
+7. **Keep generated state out of Git.** Ignore `.unison/`, `observer/logs/`, run-scoped reviews, secrets, and private pipeline files unless they are intentionally curated artifacts.
+8. **Protect credentials outside prompts and repositories.** Runtimes inherit environment variables; logs are redacted heuristically, not cryptographically guaranteed to be secret-free.
+9. **Review the Git diff and test evidence before release.** A pipeline `PASS` is evidence, not ownership of the final decision.
+10. **Use the WebUI as an observer, not the source of truth.** The authoritative inputs remain pipeline YAML and run state on disk.
 
-Match models to roles — different models for different tasks:
+## CLI reference
 
-```yaml
-agents:
-  developer:
-    runtime: claude
-    model: claude-sonnet-4-6    # Claude excels at coding
-  reviewer:
-    runtime: codex
-    model: gpt-5.5              # Different model provides independent review
+```text
+unison run       Run a pipeline
+unison dry-run   Validate a pipeline without invoking agents
+unison mode      Print the selected mode
+unison init      Interactive starter generator
+unison new       Generate a pipeline and prompts from a description
+unison webui     Start the local multi-project dashboard
+unison observe   Start the project observer
 ```
 
-**Suggestions** (not requirements):
-- Use different models (or at minimum, different providers) for Developer and Reviewer — avoids "echo chamber" reviews
-- Use strong reasoning models for Planner roles (deepseek-v4-pro, gpt-5.5)
-- Multiple parallel reviewers improve quality significantly
+Common run options:
 
-### Role Assignment
-
-- Avoid using the same agent instance for upstream and downstream roles in the same pipeline
-- Multi-reviewer mode catches issues a single reviewer would miss
-
-### Model Fallback
-
-Configure model-level downgrade paths so a single model outage doesn't stall your pipeline. All supported runtimes offer native model fallback:
-
-| Runtime | Fallback mechanism | Example |
-|---------|-------------------|---------|
-| Claude Code | `--fallback-model <model>` | `deepseek-v4-pro` → `MiniMax-M3` |
-| Hermes | `hermes fallback` config | `deepseek-v4-pro` → `qwen3.7-plus` |
-| Codex | CLI `-m` per-invocation | `gpt-5.5` → `gpt-5.4` |
-| OpenClaw | `model_fallback` in AGENTS.md | native support |
-
-```yaml
-# pipeline.yaml — model fallback per agent
-agents:
-  developer:
-    runtime: claude
-    model: deepseek-v4-pro
-    # Claude Code auto-falls back when model is unreachable
-  reviewer:
-    runtime: hermes
-    model: deepseek-v4-pro
-    # Hermes fallback provider handles model switching
+```bash
+unison run --pipeline pipeline.yaml --project /path/to/worktree
+unison run --pipeline pipeline.yaml --json
 ```
 
-For runtime-level downgrade (switching the entire agent to a different runtime when all its models fail), use Unison's `budget.downgrade_map`.
+Known CLI limitation in 1.0: `--switch`, `--model`, and `--save-pref` are accepted by the parser, but the selected runtime/model changes are not applied to the `PipelineSpec`. Edit the YAML directly; do not rely on these three flags until a later release fixes them.
 
-### Agent Quality Matters
+## Documentation
 
-Unison provides the collaboration framework. Your agent configuration determines the collaboration quality — the better your agents' system prompts, skills, and models, the better Unison performs.
-
-> **These are suggestions, not limitations. Unison works with any CLI agent configuration — experiment freely.**
-
-> ⚠️ **A note on token usage**: Multi-agent collaboration inherently consumes more tokens than single-agent workflows — every reviewer is an independent LLM call. This is the price of quality: multiple independent perspectives catch issues a single agent would miss. Project contributors are not responsible for your token bill. 😄
-
----
-
-## Troubleshooting
-
-| Symptom | Fix |
-|---------|-----|
-| "Could not acquire lock" | Another process holds the kernel lock. Use `fuser ~/.unison/locks/<project>.lock` to identify it; do not delete the lock file while a process is running. |
-| "ContextBudgetError" | Increase `budget.daily_token_limit` in pipeline YAML; or `rm -f .unison/budget.json` to reset daily budget |
-| "Could not parse verdict" | Fixed (v1.1): verdict parser now supports YAML block scalars |
-| Claude Code makes no changes | Fixed (v1.1): dev template no longer hardcodes "Write code", delegates to Developer Instructions |
-| Codex "Missing OPENAI_API_KEY" | Set `OPENAI_API_KEY` env var, or verify Codex CLI configuration |
-| Self-heal fixer fails | Check `fixes/*.yaml` diagnostics; reviewer may have rejected the fix |
-
----
-
-## Further Reading
-
-- **[docs/MANUAL.md](docs/MANUAL.md)** — Full usage manual: pipeline modes, agent configuration, advanced features, troubleshooting.
-
-### For Unison Users: Shared Skills
-
-Multiple agents collaborating effectively need consistent skills (coding conventions, design systems, debugging workflows). **[shared-skills](https://github.com/Xuan0629/shared-skills)** is a companion project that keeps agent skills in sync across Claude Code, Codex, Hermes, and OpenClaw — single source of truth, automatic format conversion.
-
-Recommended for any Unison user running pipelines with 2+ agents.
-
----
+- **[Deep usage manual / 深度使用手册](docs/MANUAL.md)** — installation, schema, modes, operations, artifacts, safety, WebUI, recovery, and troubleshooting in English and Chinese.
+- **[Contributing](CONTRIBUTING.md)** — contribution workflow.
+- **[`CLAUDE.md`](CLAUDE.md)** — repository-local instructions automatically loaded by Claude Code when it works in this repository. It guides contributors; Unison does not read it as pipeline configuration.
 
 ## License
 
-[Apache License 2.0](LICENSE) — permissive, patent-protected, commercial-friendly.
+[Apache License 2.0](LICENSE) — permissive, patent-protected, and commercial-friendly.
