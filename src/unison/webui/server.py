@@ -402,11 +402,18 @@ class UnisonHandler(BaseHTTPRequestHandler):
         per_task_used = 0
         world = World(self.project_root)
         daily_path = world.daily_budget_file()
+        daily_data: dict = {}
         if daily_path.exists():
             try:
                 with open(daily_path, "r", encoding="utf-8") as f:
-                    bd = json.load(f)
-                daily_used = bd.get("daily_used", 0)
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    daily_data = loaded
+                    if (
+                        loaded.get("version") != 2
+                        or loaded.get("date") == time.strftime("%Y-%m-%d")
+                    ):
+                        daily_used = loaded.get("daily_used", 0)
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -418,11 +425,22 @@ class UnisonHandler(BaseHTTPRequestHandler):
                 pipeline_name=pipeline_name,
             )
             budget_path = world.run_budget_file(ctx)
-            if budget_path.exists():
+            if daily_data.get("version") == 2:
+                runs = daily_data.get("runs")
+                if isinstance(runs, dict):
+                    run_key = hashlib.sha256(
+                        str(budget_path.resolve()).encode()
+                    ).hexdigest()[:24]
+                    run_data = runs.get(run_key)
+                    if isinstance(run_data, dict):
+                        per_task_used = run_data.get("task_used", 0)
+            elif budget_path.exists():
+                # Legacy split-file compatibility during migration.
                 try:
                     with open(budget_path, "r", encoding="utf-8") as f:
-                        bd = json.load(f)
-                    per_task_used = bd.get("task_used", 0)
+                        legacy_data = json.load(f)
+                    if isinstance(legacy_data, dict):
+                        per_task_used = legacy_data.get("task_used", 0)
                 except (json.JSONDecodeError, OSError):
                     pass
 

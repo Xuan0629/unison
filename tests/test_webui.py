@@ -1,5 +1,6 @@
 """Tests for webui.py — module-level helpers (derived from PRD/tech-design spec)."""
 
+import hashlib
 import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
@@ -580,16 +581,21 @@ class TestLoadBudget:
 
         world = World(tmp_path)
         world.unison_dir.mkdir()
-        world.daily_budget_file().write_text(json.dumps({
-            "date": date.today().isoformat(),
-            "daily_used": 50000,
-        }))
         run_budget = (
             world.unison_dir / "runs" / World.pipeline_key("alpha")
             / "run-current" / "budget.json"
         )
-        run_budget.parent.mkdir(parents=True)
-        run_budget.write_text(json.dumps({"task_used": 12000}))
+        run_key = hashlib.sha256(
+            str(run_budget.resolve()).encode()
+        ).hexdigest()[:24]
+        world.daily_budget_file().write_text(json.dumps({
+            "version": 2,
+            "date": date.today().isoformat(),
+            "daily_used": 50000,
+            "runs": {
+                run_key: {"task_used": 12000, "phases": []},
+            },
+        }))
         # A stale legacy file must never override canonical usage.
         world.unison_dir.joinpath("budget.json").write_text(json.dumps({
             "daily_used": 999999,
@@ -602,6 +608,39 @@ class TestLoadBudget:
         with patch.object(handler, "_load_pipeline_config", return_value=None):
             budget = handler._load_budget(run_id="run-current", pipeline_name="alpha")
         assert budget["daily_used"] == 50000
+        assert budget["per_task_used"] == 12000
+
+    def test_v2_ledger_resets_stale_daily_display_but_preserves_run_usage(
+        self, tmp_path,
+    ):
+        import json
+        from unison.webui import UnisonHandler
+        from unison.world import World
+
+        world = World(tmp_path)
+        world.unison_dir.mkdir()
+        run_budget = (
+            world.unison_dir / "runs" / World.pipeline_key("alpha")
+            / "run-current" / "budget.json"
+        )
+        run_key = hashlib.sha256(
+            str(run_budget.resolve()).encode()
+        ).hexdigest()[:24]
+        world.daily_budget_file().write_text(json.dumps({
+            "version": 2,
+            "date": "2000-01-01",
+            "daily_used": 50000,
+            "runs": {run_key: {"task_used": 12000, "phases": []}},
+        }))
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+        with patch.object(handler, "_load_pipeline_config", return_value=None):
+            budget = handler._load_budget(
+                run_id="run-current", pipeline_name="alpha"
+            )
+
+        assert budget["daily_used"] == 0
         assert budget["per_task_used"] == 12000
 
     def test_reads_limits_from_pipeline_config(self, tmp_path):
