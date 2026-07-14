@@ -13,7 +13,6 @@ import struct
 import subprocess
 import sys
 import time
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1373,39 +1372,6 @@ class Observer:
 
         with open(self.world.notifications_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-        # === Discord webhook push (if configured) ===
-        webhook_url = os.environ.get("UNISON_DISCORD_WEBHOOK", "")
-        if webhook_url and notif.severity in ("error", "warn", "info"):
-            try:
-                self._push_discord(webhook_url, notif)
-            except Exception as exc:
-                logger.warning("Discord push failed: %s", exc)
-
-    def _push_discord(self, webhook_url: str, notif: Notification) -> None:
-        """Send a compact Discord notification via webhook. Non-blocking."""
-        color_map = {"error": 0xFF0000, "warn": 0xFFA500, "info": 0x3498DB}
-        color = color_map.get(notif.severity, 0x808080)
-
-        embed = {
-            "title": notif.title[:256],
-            "description": notif.body[:1024],
-            "color": color,
-            "timestamp": notif.timestamp,
-            "fields": [
-                {"name": "Phase", "value": notif.phase, "inline": True},
-                {"name": "Severity", "value": notif.severity, "inline": True},
-            ],
-        }
-
-        payload = json.dumps({"embeds": [embed]}).encode("utf-8")
-        req = urllib.request.Request(
-            webhook_url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=5)
 
     def _create_default_watcher(self):
         """根据平台选择 watcher。

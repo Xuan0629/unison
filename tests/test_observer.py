@@ -638,6 +638,23 @@ class TestObserverWithWatcher:
 class TestObserver:
     """Observer tests."""
 
+    def test_write_notification_never_calls_discord_webhook(
+        self, tmp_path, monkeypatch,
+    ):
+        world = World(root=tmp_path)
+        observer = Observer(world=world)
+        monkeypatch.setenv("UNISON_DISCORD_WEBHOOK", "https://example.invalid/hook")
+
+        observer._write_notification(Notification(
+            timestamp="2026-07-14T00:00:00+00:00",
+            phase="dev_active",
+            severity="warn",
+            title="test",
+            body="test",
+        ))
+
+        assert world.notifications_file.exists()
+
     def test_create_observer(self, tmp_path):
         """Create an Observer."""
         world = World(root=tmp_path)
