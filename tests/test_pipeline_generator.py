@@ -169,6 +169,19 @@ class TestGenerateCodeDev:
         assert spec.max_iterations == 5
         assert spec.per_agent_timeout == 600
 
+        import yaml
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert raw["max_iterations"] == 5
+        assert raw["per_agent_timeout"] == 600
+        assert "max_iterations" not in raw["project"]
+        assert "per_agent_timeout" not in raw["project"]
+        assert raw["self_heal"] == {
+            "auto_fix_unison": False,
+            "auto_fix_consumer": False,
+            "max_fix_rounds": 2,
+            "fix_timeout": 300,
+        }
+
     def test_generate_correct_agent_pipeline_roles(self, tmp_path):
         """Each agent has correct pipeline_role for mapping."""
         output = tmp_path / "output"

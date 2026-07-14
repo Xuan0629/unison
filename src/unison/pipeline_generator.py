@@ -163,8 +163,14 @@ def _build_pipeline_yaml(
         "agents": agents,
         "project": {
             "test_command": test_command,
-            "max_iterations": max_iterations,
-            "per_agent_timeout": per_agent_timeout,
+        },
+        "max_iterations": max_iterations,
+        "per_agent_timeout": per_agent_timeout,
+        "self_heal": {
+            "auto_fix_unison": False,
+            "auto_fix_consumer": False,
+            "max_fix_rounds": 2,
+            "fix_timeout": 300,
         },
     }
     if mode in {"moa:analyze", "moa:plan", "moa:review"}:
