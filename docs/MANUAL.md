@@ -317,10 +317,10 @@ Relative `project_root` is resolved relative to the pipeline YAML directory, not
 | `dag` | none | Stage dependency descriptions. |
 | `reviewer_config` | none | Homogeneous reviewer count/reconciliation. |
 | `parallel_dev` | none | Git worktree parallel-development settings. |
-| `max_iterations` | `5` | General compatibility limit. |
-| `max_planning_iterations` | `3` | Planning-review rounds; `0` skips planning. |
-| `max_discuss_iterations` | `3` | Discuss-review rounds. |
-| `max_dev_iterations` | `5` | Development-review rounds. |
+| `max_iterations` | `5` | General/legacy loop fallback. A positive phase-specific planning, discussion, or development limit overrides it for that phase. |
+| `max_planning_iterations` | `3` | Positive planning-review cap; zero/empty uses the compatibility fallback rather than removing the phase. |
+| `max_discuss_iterations` | `3` | Positive discussion cap; zero/empty uses the compatibility fallback. |
+| `max_dev_iterations` | `5` | Positive development-review cap; zero/empty uses the compatibility fallback. |
 | `checklist_strict_mode` | `false` | Unchecked structured checklist items can block completion. |
 | `per_agent_timeout` | `600` | Seconds per invocation. |
 | `pipeline_timeout` | `0` | Global seconds; `0` disables global timeout. |
@@ -399,6 +399,14 @@ pipeline_timeout: 7200
 Choose limits from observed runtime behavior. A timeout that is shorter than model startup and repository analysis time creates false failures; an unlimited global pipeline hides hangs.
 
 应根据真实运行耗时设置上限。过短会造成假失败；无人值守时完全不设 global timeout 会掩盖卡死。
+
+Iteration caps are not phase-disable switches. To omit planning, discussion, development, or final review, select a mode or constrained `custom phases:` sequence that does not contain that phase.
+
+迭代上限不是阶段开关。若要省略 planning、discussion、development 或 final review，应选择不包含该阶段的 mode 或受约束 `custom phases:` 序列。
+
+The hand-written minimal example uses phase-specific iteration limits. The generator also emits the broader compatibility fallback `max_iterations` and an explicit default-off `self_heal` block.
+
+前面的手写最小示例使用阶段专属迭代上限；generator 还会输出通用兼容 fallback `max_iterations` 和显式默认关闭的 `self_heal` 块。
 
 ---
 

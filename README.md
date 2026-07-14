@@ -96,7 +96,7 @@ Unison can automate implementation and verification loops; it cannot decide what
 ### 1. Install
 
 ```bash
-pip install unison-wanwuyixin
+python3 -m pip install unison-wanwuyixin
 
 # Or install from source
 # git clone https://github.com/Xuan0629/unison.git
@@ -256,6 +256,7 @@ Common run options:
 
 ```bash
 unison run --pipeline pipeline.yaml --project /path/to/worktree
+unison run --pipeline pipeline.yaml --dry-run
 unison run --pipeline pipeline.yaml --json
 unison run --pipeline pipeline.yaml --switch reviewer:claude
 unison run --pipeline pipeline.yaml --model reviewer:YOUR_REVIEWER_MODEL
@@ -266,7 +267,15 @@ unison run --pipeline pipeline.yaml --switch reviewer:claude --save-pref
 
 ## Roadmap: v1.1 and the “All Things” side of Unison
 
-Unison 1.0 composes bounded roles, models, phases, artifacts, and review loops around one goal. v1.1 plans to extend the “all things / 万物” side with a declarative custom Runtime adapter contract for tools such as Aider or internal CLIs. It must define prompt transport, model and timeout mapping, stdout/stderr and exit semantics, shell policy, secret masking, cancellation, concurrency, and output parsing. Until that protocol is implemented and tested, v1.0 intentionally rejects arbitrary Runtime keys rather than pretending that YAML alone creates a working integration.
+Unison 1.0 composes bounded roles, models, phases, artifacts, and review loops around one goal. v1.1 will extend the “all things / 万物” side in this order:
+
+1. declarative workflows and richer custom-role behavior;
+2. explicit Runner capability metadata;
+3. per-Agent execution profiles for isolated prompts, models, and supported skills/tools/memory scopes;
+4. a constrained Runtime adapter framework, validated first with Crush;
+5. truthful usage reporting (`actual`, `estimated`, or `unavailable`), deferred if a Runtime cannot expose reliable per-call usage.
+
+Until these contracts are implemented and tested, v1.0 intentionally rejects arbitrary Runtime keys rather than pretending that YAML alone creates a working integration. SQLiteChannel remains an evidence-gated possibility: it may be proposed only after reproducible FileChannel limitations and requires separate maintainer approval before design or implementation. Unison remains local-first and single-operator; SaaS/multi-user WebUI, identity federation, and a separate Unison plugin ecosystem are not planned.
 
 ## Documentation
 
