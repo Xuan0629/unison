@@ -358,6 +358,303 @@ class TestPersistence:
                 daily_persist_path=path,
             )
 
+    def test_split_persistence_uses_one_authoritative_ledger(self, tmp_path: Path):
+        run_file = tmp_path / "runs" / "run-a" / "budget.json"
+        ledger_file = tmp_path / "budget-ledger.json"
+        tracker = BudgetTracker(
+            daily_limit=1000,
+            per_task_limit=200,
+            persist_path=run_file,
+            daily_persist_path=ledger_file,
+        )
+
+        tracker.add_usage(100, phase="planning", iter_n=1)
+
+        assert ledger_file.exists()
+        assert not run_file.exists()
+        data = json.loads(ledger_file.read_text(encoding="utf-8"))
+        assert data["version"] == 2
+        assert data["daily_used"] == 100
+        assert len(data["runs"]) == 1
+        run = next(iter(data["runs"].values()))
+        assert run["task_used"] == 100
+        assert run["phases"][0]["phase"] == "planning"
+
+    def test_split_persistence_failure_latches_budget_closed(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        import unison.budget as budget_module
+
+        ledger_file = tmp_path / "budget-ledger.json"
+        tracker = BudgetTracker(
+            daily_limit=1000,
+            per_task_limit=200,
+            persist_path=tmp_path / "runs" / "run-a" / "budget.json",
+            daily_persist_path=ledger_file,
+        )
+
+        def fail_write(path, data):
+            raise OSError("ledger unavailable")
+
+        monkeypatch.setattr(budget_module, "atomic_write_json", fail_write)
+
+        with pytest.raises(OSError, match="ledger unavailable"):
+            tracker.add_usage(100)
+
+        assert tracker.check_budget() is False
+        with pytest.raises(RuntimeError, match="persistence failed"):
+            tracker.add_usage(1)
+
+    def test_split_persistence_keeps_runs_isolated_and_daily_shared(
+        self, tmp_path: Path,
+    ):
+        ledger_file = tmp_path / "budget-ledger.json"
+        run_a = tmp_path / "runs" / "run-a" / "budget.json"
+        run_b = tmp_path / "runs" / "run-b" / "budget.json"
+        tracker_a = BudgetTracker(1000, 200, run_a, ledger_file)
+        tracker_a.add_usage(80)
+        tracker_b = BudgetTracker(1000, 200, run_b, ledger_file)
+        tracker_b.add_usage(30)
+
+        reloaded_a = BudgetTracker(1000, 200, run_a, ledger_file)
+        reloaded_b = BudgetTracker(1000, 200, run_b, ledger_file)
+        assert reloaded_a.get_usage_summary().daily_used == 110
+        assert reloaded_a.get_usage_summary().per_task_used == 80
+        assert reloaded_b.get_usage_summary().daily_used == 110
+        assert reloaded_b.get_usage_summary().per_task_used == 30
+        assert tracker_a.check_budget() is True
+        assert tracker_a.current_usage == 110
+        assert tracker_a.get_usage_summary().daily_used == 110
+
+    def test_legacy_migration_preserves_daily_total(self, tmp_path: Path):
+        ledger_file = tmp_path / "budget-ledger.json"
+        run_file = tmp_path / "runs" / "run-a" / "budget.json"
+        ledger_file.write_text(json.dumps({
+            "date": date.today().isoformat(), "daily_used": 500,
+        }))
+        run_file.parent.mkdir(parents=True)
+        run_file.write_text(json.dumps({
+            "date": date.today().isoformat(),
+            "daily_used": 500,
+            "task_used": 80,
+            "phases": [],
+        }))
+
+        tracker = BudgetTracker(1000, 200, run_file, ledger_file)
+        data = json.loads(ledger_file.read_text(encoding="utf-8"))
+        assert data["daily_used"] == 500
+        assert tracker.get_usage_summary().daily_used == 500
+        assert tracker.get_usage_summary().per_task_used == 80
+
+    def test_ledger_reset_task_persists_zero(self, tmp_path: Path):
+        ledger_file = tmp_path / "budget-ledger.json"
+        run_file = tmp_path / "runs" / "run-a" / "budget.json"
+        tracker = BudgetTracker(1000, 200, run_file, ledger_file)
+        tracker.add_usage(80)
+        tracker.reset_task()
+
+        restarted = BudgetTracker(1000, 200, run_file, ledger_file)
+        assert restarted.get_usage_summary().daily_used == 80
+        assert restarted.get_usage_summary().per_task_used == 0
+
+    def test_ledger_reset_failure_latches_closed(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        import unison.budget as budget_module
+
+        ledger_file = tmp_path / "budget-ledger.json"
+        run_file = tmp_path / "runs" / "run-a" / "budget.json"
+        tracker = BudgetTracker(1000, 200, run_file, ledger_file)
+        tracker.add_usage(80)
+        monkeypatch.setattr(
+            budget_module,
+            "atomic_write_json",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("reset failed")),
+        )
+
+        with pytest.raises(OSError, match="reset failed"):
+            tracker.reset_task()
+        assert tracker.check_budget() is False
+
+    def test_same_run_refresh_then_add_does_not_double_count(self, tmp_path: Path):
+        ledger_file = tmp_path / "budget-ledger.json"
+        run_file = tmp_path / "runs" / "run-a" / "budget.json"
+        first = BudgetTracker(1000, 500, run_file, ledger_file)
+        stale = BudgetTracker(1000, 500, run_file, ledger_file)
+        first.add_usage(80, phase="first", iter_n=1)
+        assert stale.current_usage == 80
+        stale.add_usage(30, phase="second", iter_n=2)
+
+        restarted = BudgetTracker(1000, 500, run_file, ledger_file)
+        summary = restarted.get_usage_summary()
+        assert summary.daily_used == 110
+        assert summary.per_task_used == 110
+        assert summary.phase_breakdown == {"first": 80, "second": 30}
+
+    def test_later_legacy_run_is_merged_into_existing_v2_ledger(
+        self, tmp_path: Path,
+    ):
+        ledger_file = tmp_path / "budget-ledger.json"
+        run_a = tmp_path / "runs" / "run-a" / "budget.json"
+        run_b = tmp_path / "runs" / "run-b" / "budget.json"
+        ledger_file.write_text(json.dumps({
+            "date": date.today().isoformat(), "daily_used": 500,
+        }))
+        run_a.parent.mkdir(parents=True)
+        run_a.write_text(json.dumps({
+            "date": date.today().isoformat(), "daily_used": 500,
+            "task_used": 80, "phases": [],
+        }))
+        BudgetTracker(1000, 200, run_a, ledger_file)
+        run_b.parent.mkdir(parents=True)
+        run_b.write_text(json.dumps({
+            "date": date.today().isoformat(), "daily_used": 500,
+            "task_used": 50, "phases": [],
+        }))
+
+        tracker_b = BudgetTracker(1000, 200, run_b, ledger_file)
+        assert tracker_b.get_usage_summary().daily_used == 500
+        assert tracker_b.get_usage_summary().per_task_used == 50
+        assert len(json.loads(ledger_file.read_text())["runs"]) == 2
+
+    def test_day_rollover_preserves_task_usage(self, tmp_path: Path):
+        ledger_file = tmp_path / "budget-ledger.json"
+        run_file = tmp_path / "runs" / "run-a" / "budget.json"
+        tracker = BudgetTracker(1000, 200, run_file, ledger_file)
+        tracker.add_usage(100)
+        data = json.loads(ledger_file.read_text())
+        data["date"] = "2020-01-01"
+        ledger_file.write_text(json.dumps(data))
+
+        restarted = BudgetTracker(1000, 200, run_file, ledger_file)
+        restarted.add_usage(10)
+        summary = restarted.get_usage_summary()
+        assert summary.daily_used == 10
+        assert summary.per_task_used == 110
+
+    def test_concurrent_same_run_preserves_phase_history(self, tmp_path: Path):
+        import threading
+
+        ledger_file = tmp_path / "budget-ledger.json"
+        run_file = tmp_path / "runs" / "run-a" / "budget.json"
+        first = BudgetTracker(1000, 500, run_file, ledger_file)
+        second = BudgetTracker(1000, 500, run_file, ledger_file)
+        barrier = threading.Barrier(2)
+
+        def add(tracker, amount, phase):
+            barrier.wait(timeout=1)
+            tracker.add_usage(amount, phase=phase, iter_n=1)
+
+        threads = [
+            threading.Thread(target=add, args=(first, 80, "first")),
+            threading.Thread(target=add, args=(second, 30, "second")),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=2)
+
+        summary = BudgetTracker(1000, 500, run_file, ledger_file).get_usage_summary()
+        assert summary.daily_used == 110
+        assert summary.per_task_used == 110
+        assert summary.phase_breakdown == {"first": 80, "second": 30}
+
+    def test_concurrent_trackers_do_not_lose_daily_usage(self, tmp_path: Path):
+        import threading
+
+        ledger_file = tmp_path / "budget-ledger.json"
+        run_a = tmp_path / "runs" / "run-a" / "budget.json"
+        run_b = tmp_path / "runs" / "run-b" / "budget.json"
+        tracker_a = BudgetTracker(1000, 500, run_a, ledger_file)
+        tracker_b = BudgetTracker(1000, 500, run_b, ledger_file)
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def add(tracker, amount):
+            try:
+                barrier.wait(timeout=1)
+                tracker.add_usage(amount)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=add, args=(tracker_a, 80)),
+            threading.Thread(target=add, args=(tracker_b, 30)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=2)
+
+        assert errors == []
+        data = json.loads(ledger_file.read_text(encoding="utf-8"))
+        assert data["daily_used"] == 110
+
+    def test_corrupt_authoritative_ledger_fails_closed(self, tmp_path: Path):
+        ledger_file = tmp_path / "budget-ledger.json"
+        ledger_file.write_text("not json", encoding="utf-8")
+        tracker = BudgetTracker(
+            1000,
+            200,
+            tmp_path / "runs" / "run-a" / "budget.json",
+            ledger_file,
+        )
+
+        assert tracker.check_budget() is False
+        with pytest.raises(RuntimeError, match="persistence failed"):
+            tracker.add_usage(1)
+
+    @pytest.mark.parametrize("payload", [
+        {"version": 999, "date": "2026-07-14", "daily_used": 900, "runs": {}},
+        {"version": 2, "date": "2026-07-14", "daily_used": 0, "runs": []},
+    ])
+    def test_invalid_authoritative_schema_fails_closed(
+        self, tmp_path: Path, payload,
+    ):
+        ledger_file = tmp_path / "budget-ledger.json"
+        ledger_file.write_text(json.dumps(payload), encoding="utf-8")
+        tracker = BudgetTracker(
+            1000, 200,
+            tmp_path / "runs" / "run-a" / "budget.json",
+            ledger_file,
+        )
+
+        assert tracker.check_budget() is False
+        with pytest.raises(RuntimeError, match="persistence failed"):
+            tracker.add_usage(1)
+        assert json.loads(ledger_file.read_text()) == payload
+
+    @pytest.mark.parametrize("payload", [
+        {"version": 2, "date": [], "daily_used": 900, "runs": {}},
+        {"version": 2, "date": "2026-07-14", "daily_used": -1, "runs": {}},
+        {"version": 2, "date": "2026-07-14", "daily_used": True, "runs": {}},
+    ])
+    def test_malformed_authoritative_fields_fail_closed(
+        self, tmp_path: Path, payload,
+    ):
+        ledger_file = tmp_path / "budget-ledger.json"
+        ledger_file.write_text(json.dumps(payload), encoding="utf-8")
+        tracker = BudgetTracker(
+            1000, 200,
+            tmp_path / "runs" / "run-a" / "budget.json",
+            ledger_file,
+        )
+        assert tracker.check_budget() is False
+
+    def test_corruption_after_initialization_fails_closed(self, tmp_path: Path):
+        ledger_file = tmp_path / "budget-ledger.json"
+        tracker = BudgetTracker(
+            1000, 200,
+            tmp_path / "runs" / "run-a" / "budget.json",
+            ledger_file,
+        )
+        tracker.add_usage(10)
+        ledger_file.write_text("not json", encoding="utf-8")
+
+        assert tracker.check_budget() is False
+        with pytest.raises(RuntimeError, match="persistence failed"):
+            tracker.add_usage(1)
+
     @pytest.mark.parametrize("daily_only", [False, True])
     def test_persist_failure_preserves_previous_json(
         self, tmp_path: Path, monkeypatch, daily_only: bool,
