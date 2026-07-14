@@ -2462,6 +2462,32 @@ webui:
         assert orch._state.halt_reason is not None
         assert "amendment was not approved" in orch._state.halt_reason
 
+    def test_development_preserves_amendment_gate_halt_reason(
+        self, tmp_path, monkeypatch,
+    ):
+        """A gate-side Agent halt keeps its diagnostic instead of a generic reason."""
+        orch = self._make_orchestrator(tmp_path)
+        orch.spec = replace(orch.spec, max_dev_iterations=1)
+
+        monkeypatch.setattr(orch, "_check_pipeline_timeout", lambda: None)
+        monkeypatch.setattr(orch, "_check_control_files", lambda: [])
+        monkeypatch.setattr(orch, "_check_redirect_file", lambda: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_publish_phase_event", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_invoke_agent_for_role", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_verify_frozen_specification", lambda: False)
+
+        def halted_gate(iteration):
+            orch.halt("Planner process timed out", category="external")
+            return False
+
+        monkeypatch.setattr(orch, "_review_specification_amendment", halted_gate)
+
+        orch._run_loop("dev_active", "dev_review", "code + tests", role="developer")
+
+        assert orch._state.halt_signal is True
+        assert orch._state.halt_reason == "Planner process timed out"
+
     @pytest.mark.parametrize(
         ("planner_verdict", "reviewer_verdict", "expected", "expected_roles"),
         [

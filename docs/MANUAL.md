@@ -1088,6 +1088,8 @@ Built-in Discord webhook delivery is disabled in 1.0. Integrate an external proc
 | WebUI control returns 401 | Token missing/mismatched. Restart cleanly or use the active `~/.unison/webui-token`. Do not publish it. |
 | WebUI control rejects a run | Select a native run with status `running`; legacy/finished records are intentionally not controllable. |
 | Observer sends no Discord message | Expected in 1.0: built-in webhook delivery is disabled. Consume `notifications.jsonl` externally. |
+| `budget.halt_action` rejects `discord_notify` | Built-in remote delivery was removed in 1.0. Remove the stale field or set `halt_action: halt_only`; consume `notifications.jsonl` externally. 内建远程投递已移除；删除旧字段或改为 `halt_only`，远程通知由外部消费者处理。 |
+| `mode: custom` rejects an older YAML | 1.0 requires an explicit non-empty `phases:` list. Add an ordered, non-repeating subset of `planning`, `discuss`, `spec-check`, `dev`, and `review`. 旧 YAML 需补充显式、非空且有序不重复的 `phases:`。 |
 | Self-heal does nothing | Expected by default. Explicitly enable the relevant switch only after reviewing the risk. |
 | `--save-pref` reformats YAML | Expected PyYAML round-trip behavior; comments/anchors/custom layout may be lost. Inspect or revert the diff. |
 | Native Windows import/runtime failure | Use WSL/Linux/macOS; `fcntl` is required for supported locking semantics. |

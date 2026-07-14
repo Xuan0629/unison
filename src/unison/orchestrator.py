@@ -571,11 +571,12 @@ class Orchestrator:
                 if pd.active_phase == "dev_active":
                     if not self._verify_frozen_specification():
                         if not self._review_specification_amendment(1):
-                            self.halt(
-                                "Frozen specification amendment was not approved by both "
-                                "Planner and Reviewer",
-                                category="external",
-                            )
+                            if not self._state.halt_signal:
+                                self.halt(
+                                    "Frozen specification amendment was not approved by both "
+                                    "Planner and Reviewer",
+                                    category="external",
+                                )
                             return
                     self._state.transition(
                         "dev_active", "orchestrator",
@@ -1867,11 +1868,12 @@ class Orchestrator:
 
             if active_phase == "dev_active" and not self._verify_frozen_specification():
                 if not self._review_specification_amendment(iteration):
-                    self.halt(
-                        "Frozen specification amendment was not approved by both "
-                        "Planner and Reviewer",
-                        category="external",
-                    )
+                    if not self._state.halt_signal:
+                        self.halt(
+                            "Frozen specification amendment was not approved by both "
+                            "Planner and Reviewer",
+                            category="external",
+                        )
                     return
 
             # ---- Review phase -----------------------------------------------
