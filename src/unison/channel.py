@@ -137,9 +137,7 @@ class FileChannel:
         """
 
         def _poll() -> Iterator[dict]:
-            import time as _time
-
-            seen: set[int] = set()
+            offsets: dict[Path, tuple[int, int]] = {}
             while True:
                 if self.world.inbox_dir.exists():
                     for inbox_file in sorted(
@@ -148,20 +146,29 @@ class FileChannel:
                         if not self._matches(inbox_file.stem, pattern):
                             continue
                         try:
+                            stat = inbox_file.stat()
+                            inode, offset = offsets.get(inbox_file, (stat.st_ino, 0))
+                            if inode != stat.st_ino or stat.st_size < offset:
+                                offset = 0
+                            pending: list[dict] = []
                             with open(inbox_file) as f:
-                                for line in f:
+                                f.seek(offset)
+                                while True:
+                                    line = f.readline()
+                                    if not line:
+                                        break
+                                    offsets[inbox_file] = (stat.st_ino, f.tell())
                                     line = line.strip()
                                     if not line:
                                         continue
-                                    msg_id = hash(line)
-                                    if msg_id in seen:
-                                        continue
-                                    seen.add(msg_id)
                                     try:
-                                        yield json.loads(line)
+                                        pending.append(json.loads(line))
                                     except json.JSONDecodeError:
                                         continue
+                                offsets[inbox_file] = (stat.st_ino, f.tell())
+                            yield from pending
                         except FileNotFoundError:
+                            offsets.pop(inbox_file, None)
                             continue
                 _time.sleep(1.0)
 

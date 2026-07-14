@@ -218,6 +218,51 @@ class TestFileChannel:
         assert len(lines) == 1
         assert json.loads(lines[0])["payload"] == {"content": "hello"}
 
+    def test_subscribe_reads_only_appended_bytes(self, tmp_path, monkeypatch):
+        world = World(root=tmp_path)
+        channel = FileChannel(world=world)
+        channel.write("planner", {
+            "recipient": "developer", "iter_n": 1, "content": "first",
+        })
+        iterator = channel.subscribe(pattern="developer")
+        assert next(iterator)["payload"]["content"] == "first"
+
+        inbox = world.inbox_dir / "developer.jsonl"
+        original_open = open
+        starts = []
+
+        class TrackingFile:
+            def __init__(self, file_obj):
+                self._file = file_obj
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self._file.close()
+            def readline(self):
+                return self._file.readline()
+            def seek(self, offset, *args):
+                starts.append(offset)
+                return self._file.seek(offset, *args)
+            def tell(self):
+                return self._file.tell()
+            def fileno(self):
+                return self._file.fileno()
+            def write(self, data):
+                return self._file.write(data)
+            def flush(self):
+                return self._file.flush()
+
+        def tracking_open(path, *args, **kwargs):
+            file_obj = original_open(path, *args, **kwargs)
+            return TrackingFile(file_obj) if Path(path) == inbox else file_obj
+
+        monkeypatch.setattr("builtins.open", tracking_open)
+        channel.write("planner", {
+            "recipient": "developer", "iter_n": 2, "content": "second",
+        })
+        assert next(iterator)["payload"]["content"] == "second"
+        assert starts and starts[-1] > 0
+
     def test_subscribe_polling(self, tmp_path):
         """subscribe() returns an iterator (v1: polling)."""
         world = World(root=tmp_path)
