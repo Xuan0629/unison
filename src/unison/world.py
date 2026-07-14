@@ -167,6 +167,12 @@ class World:
         """Run-scoped Planner/Developer discussion verdict file."""
         return self.reviews_dir_for(ctx) / f"discuss-iter-{iter_n}.md"
 
+    def specification_amendment_file_for(
+        self, ctx: RunContext, reviewer: str, iter_n: int,
+    ) -> Path:
+        """Run-scoped frozen-spec amendment verdict file."""
+        return self.reviews_dir_for(ctx) / f"spec-amendment-{reviewer}-{iter_n}.md"
+
     # ---- .unison ----
 
     @property

@@ -556,11 +556,13 @@ class Orchestrator:
                 # entering the active→review loop.
                 if pd.active_phase == "dev_active":
                     if not self._verify_frozen_specification():
-                        self.halt(
-                            "Frozen specification changed after discussion agreement",
-                            category="external",
-                        )
-                        return
+                        if not self._review_specification_amendment(1):
+                            self.halt(
+                                "Frozen specification amendment was not approved by both "
+                                "Planner and Reviewer",
+                                category="external",
+                            )
+                            return
                     self._state.transition(
                         "dev_active", "orchestrator",
                         iter_n=1, note="starting development loop",
@@ -1573,6 +1575,27 @@ class Orchestrator:
         finally:
             self._discussion_convergence = False
 
+    def _review_specification_amendment(self, iteration: int) -> bool:
+        """Require Planner user-intent approval and Reviewer risk approval."""
+        self._invoke_agent_for_role(
+            "planner", iteration, review_phase="spec_amendment_planner"
+        )
+        if self._state.halt_signal:
+            return False
+        if self._parse_verdict(iteration, "spec_amendment_planner") != "PASS":
+            return False
+
+        self._invoke_agent_for_role(
+            "reviewer", iteration, review_phase="spec_amendment_reviewer"
+        )
+        if self._state.halt_signal:
+            return False
+        if self._parse_verdict(iteration, "spec_amendment_reviewer") != "PASS":
+            return False
+
+        self._freeze_specification()
+        return True
+
     def _run_spec_verification(self) -> None:
         """Validate all 4 SDD artifacts exist and have substance.
 
@@ -1822,11 +1845,13 @@ class Orchestrator:
                 return
 
             if active_phase == "dev_active" and not self._verify_frozen_specification():
-                self.halt(
-                    "Developer modified frozen specification after discussion agreement",
-                    category="external",
-                )
-                return
+                if not self._review_specification_amendment(iteration):
+                    self.halt(
+                        "Frozen specification amendment was not approved by both "
+                        "Planner and Reviewer",
+                        category="external",
+                    )
+                    return
 
             # ---- Review phase -----------------------------------------------
             self._state.transition(
@@ -3451,6 +3476,30 @@ class Orchestrator:
                 "with concrete open questions. Do not write implementation code."
             )
 
+        if review_phase == "spec_amendment_planner" and role == "planner":
+            review_file = self._review_file_for_phase(review_phase, iteration)
+            task = (
+                "A Developer changed the frozen specification during implementation. "
+                "Compare the changed PRD, architecture, specification, technology "
+                "choices, and implementation proposal with the user's original intent. "
+                "Confirm that the change is necessary and remains the closest faithful "
+                "interpretation of the user's requirements. Do not edit code or specs. "
+                f"Write {review_file} with YAML frontmatter verdict PASS only if both "
+                "necessity and user-intent alignment are established; otherwise write "
+                "REQUEST_CHANGES with concrete reasons."
+            )
+
+        if review_phase == "spec_amendment_reviewer" and role == "reviewer":
+            review_file = self._review_file_for_phase(review_phase, iteration)
+            task = (
+                "Independently risk-review the Developer's frozen specification change "
+                "after Planner approval. Check implementation, security, architecture, "
+                "compatibility, test, and regression risk. Do not edit code or specs. "
+                f"Write {review_file} with YAML frontmatter verdict PASS only when the "
+                "change introduces no unacceptable risk; otherwise write "
+                "REQUEST_CHANGES with concrete findings."
+            )
+
         if review_phase == "discuss_review" and getattr(
             self, "_discussion_convergence", False
         ):
@@ -4591,6 +4640,14 @@ class Orchestrator:
                 scoped = self.spec.world.plan_review_file_for(ctx, iteration)
             elif review_phase == "discuss_review":
                 scoped = self.spec.world.discussion_review_file_for(ctx, iteration)
+            elif review_phase == "spec_amendment_planner":
+                scoped = self.spec.world.specification_amendment_file_for(
+                    ctx, "planner", iteration
+                )
+            elif review_phase == "spec_amendment_reviewer":
+                scoped = self.spec.world.specification_amendment_file_for(
+                    ctx, "reviewer", iteration
+                )
             else:
                 scoped = self.spec.world.review_file_for(ctx, iteration)
             return scoped
@@ -4599,6 +4656,10 @@ class Orchestrator:
             return self.spec.world.reviews_dir / f"plan-iter-{iteration}.md"
         if review_phase == "discuss_review":
             return self.spec.world.reviews_dir / f"discuss-iter-{iteration}.md"
+        if review_phase == "spec_amendment_planner":
+            return self.spec.world.reviews_dir / f"spec-amendment-planner-{iteration}.md"
+        if review_phase == "spec_amendment_reviewer":
+            return self.spec.world.reviews_dir / f"spec-amendment-reviewer-{iteration}.md"
         return self.spec.world.reviews_dir / f"iter-{iteration}.md"
 
     def _parse_verdict(

@@ -2271,10 +2271,10 @@ class TestP10023ExhaustionAndSkipRedirect:
     def test_development_halts_before_review_if_frozen_spec_changes(
         self, tmp_path, monkeypatch,
     ):
-        """Developer cannot silently rewrite the agreed specification."""
+        """Frozen changes require Planner and Reviewer approval before continuing."""
         orch = self._make_orchestrator(tmp_path)
         orch.spec = replace(orch.spec, max_dev_iterations=1)
-        reviewer_calls = []
+        calls = []
 
         monkeypatch.setattr(orch, "_check_pipeline_timeout", lambda: None)
         monkeypatch.setattr(orch, "_check_control_files", lambda: [])
@@ -2283,16 +2283,135 @@ class TestP10023ExhaustionAndSkipRedirect:
         monkeypatch.setattr(orch, "_publish_phase_event", lambda *a, **kw: None)
         monkeypatch.setattr(
             orch, "_invoke_agent_for_role",
-            lambda role, *a, **kw: reviewer_calls.append(role),
+            lambda role, *a, **kw: calls.append(role),
         )
         monkeypatch.setattr(orch, "_verify_frozen_specification", lambda: False)
+        monkeypatch.setattr(
+            orch, "_review_specification_amendment",
+            lambda iteration: calls.append("amendment-gate") or False,
+        )
 
         orch._run_loop("dev_active", "dev_review", "code + tests", role="developer")
 
-        assert reviewer_calls == ["developer"]
+        assert calls == ["developer", "amendment-gate"]
         assert orch._state.halt_signal is True
         assert orch._state.halt_reason is not None
-        assert "modified frozen specification" in orch._state.halt_reason
+        assert "amendment was not approved" in orch._state.halt_reason
+
+    @pytest.mark.parametrize(
+        ("planner_verdict", "reviewer_verdict", "expected", "expected_roles"),
+        [
+            ("PASS", "PASS", True, ["planner", "reviewer"]),
+            ("REQUEST_CHANGES", "PASS", False, ["planner"]),
+            ("PASS", "REQUEST_CHANGES", False, ["planner", "reviewer"]),
+            (None, "PASS", False, ["planner"]),
+        ],
+    )
+    def test_specification_amendment_requires_dual_approval(
+        self, tmp_path, monkeypatch, planner_verdict, reviewer_verdict,
+        expected, expected_roles,
+    ):
+        """Planner protects user intent; Reviewer independently protects risk."""
+        orch = self._make_orchestrator(tmp_path)
+        roles = []
+        frozen = []
+        verdicts = {
+            "spec_amendment_planner": planner_verdict,
+            "spec_amendment_reviewer": reviewer_verdict,
+        }
+
+        monkeypatch.setattr(
+            orch, "_invoke_agent_for_role",
+            lambda role, *a, **kw: roles.append(role),
+        )
+        monkeypatch.setattr(
+            orch, "_parse_verdict",
+            lambda iteration, phase: verdicts[phase],
+        )
+        monkeypatch.setattr(orch, "_freeze_specification", lambda: frozen.append(True))
+
+        assert orch._review_specification_amendment(1) is expected
+        assert roles == expected_roles
+        assert frozen == ([True] if expected else [])
+
+    def test_specification_amendment_verdicts_are_phase_isolated(self, tmp_path):
+        """Dual-gate verdicts never reuse discussion or development review files."""
+        orch = self._make_orchestrator(tmp_path)
+        planner = orch._review_file_for_phase("spec_amendment_planner", 2)
+        reviewer = orch._review_file_for_phase("spec_amendment_reviewer", 2)
+        discuss = orch._review_file_for_phase("discuss_review", 2)
+        dev = orch._review_file_for_phase("dev_review", 2)
+
+        assert planner.name == "spec-amendment-planner-2.md"
+        assert reviewer.name == "spec-amendment-reviewer-2.md"
+        assert len({planner, reviewer, discuss, dev}) == 4
+
+    def test_run_loop_dual_approval_refreezes_then_runs_normal_review(
+        self, tmp_path, monkeypatch,
+    ):
+        """Production loop executes both amendment gates before code review."""
+        orch = self._make_orchestrator(tmp_path)
+        orch.spec = replace(orch.spec, max_dev_iterations=1)
+        calls = []
+
+        monkeypatch.setattr(orch, "_check_pipeline_timeout", lambda: None)
+        monkeypatch.setattr(orch, "_check_control_files", lambda: [])
+        monkeypatch.setattr(orch, "_check_redirect_file", lambda: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_publish_phase_event", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_write_lifecycle_notification", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_generate_review_package", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_verify_frozen_specification", lambda: False)
+
+        def invoke(role, iteration, review_phase="dev_review"):
+            calls.append((role, review_phase))
+            if role == "developer":
+                return
+            verdict_path = orch._review_file_for_phase(review_phase, iteration)
+            verdict_path.parent.mkdir(parents=True, exist_ok=True)
+            verdict_path.write_text(
+                "---\nverdict: PASS\nsummary: approved\nfindings: []\n---\n",
+                encoding="utf-8",
+            )
+
+        monkeypatch.setattr(orch, "_invoke_agent_for_role", invoke)
+
+        orch._run_loop("dev_active", "dev_review", "code + tests", role="developer")
+
+        assert calls == [
+            ("developer", "dev_review"),
+            ("planner", "spec_amendment_planner"),
+            ("reviewer", "spec_amendment_reviewer"),
+            ("reviewer", "dev_review"),
+        ]
+        manifest = orch.spec.world.unison_run_dir_for(orch._run_ctx) / "frozen-spec.json"
+        assert manifest.exists()
+        assert orch._state.halt_signal is False
+        assert orch._state.last_review_verdict == "PASS"
+
+    def test_pre_development_change_uses_same_dual_gate(self, tmp_path, monkeypatch):
+        """A changed manifest before dev start is not categorically rejected."""
+        orch = self._make_orchestrator(tmp_path)
+        orch.spec = replace(orch.spec, mode="dev:quick")
+        calls = []
+
+        monkeypatch.setattr(orch, "_publish_phase_event", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_write_lifecycle_notification", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_verify_frozen_specification", lambda: False)
+        monkeypatch.setattr(
+            orch, "_review_specification_amendment",
+            lambda iteration: calls.append(("amendment", iteration)) or True,
+        )
+        monkeypatch.setattr(orch, "_freeze_acceptance_criteria", lambda: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            orch, "_run_loop", lambda *a, **kw: calls.append(("development", 1))
+        )
+
+        orch._run_state_machine()
+
+        assert calls[:2] == [("amendment", 1), ("development", 1)]
+        assert orch._state.halt_signal is False
 
     def test_discussion_convergence_prompt_is_injected(self, tmp_path):
         """Near the cap, both sides receive a material-conflicts-only prompt."""
