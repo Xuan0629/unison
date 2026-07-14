@@ -534,6 +534,13 @@ class PipelineLoader:
         """Build BudgetConfig, falling back to defaults."""
         if not raw:
             return BudgetConfig()
+        halt_action = raw.get("halt_action", "halt_only")
+        if halt_action != "halt_only":
+            raise PipelineValidationError(
+                "budget.halt_action must be 'halt_only'; built-in remote "
+                "notification delivery was removed in v1.0. Remove the stale "
+                "halt_action setting or set it to 'halt_only'"
+            )
         kwargs: dict[str, Any] = {}
         for key in (
             "daily_token_limit",

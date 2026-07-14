@@ -143,6 +143,32 @@ budget:
         assert spec.budget.daily_token_limit == 500000
         assert spec.budget.per_task_limit == 100000
         assert spec.budget.overflow_action == "halt"
+        assert spec.budget.halt_action == "halt_only"
+
+    def test_rejects_disabled_discord_budget_halt_action(self, tmp_path):
+        """Built-in Discord delivery is disabled, so its old action must fail closed."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: deepseek-v4-pro
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+budget:
+  overflow_action: halt
+  halt_action: discord_notify
+""")
+
+        with pytest.raises(PipelineValidationError, match="budget.halt_action"):
+            PipelineLoader().load(pipeline_file)
 
     def test_load_pipeline_with_snapshots(self, tmp_path):
         """Load pipeline with snapshot configuration."""

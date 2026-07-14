@@ -14,7 +14,7 @@ Abstractions:
   RiskEvaluator（三元组规则引擎）
   SnapshotManager
   LockManager
-  Observer / DiscordSink
+  Observer / local notification records
   HarnessOptimizer
   Orchestrator
 """
@@ -129,7 +129,7 @@ class BudgetConfig:
     per_task_limit: int = 200_000
     cost_tracking: Literal["approximate", "api_callback"] = "approximate"
     overflow_action: Literal["downgrade", "halt"] = "downgrade"
-    halt_action: Literal["discord_notify", "halt_only"] = "discord_notify"
+    halt_action: Literal["halt_only"] = "halt_only"
     downgrade_map: dict[str, dict[str, str]] = field(default_factory=lambda: {
         "reviewer": {"from": "codex", "to": "claude", "model": "claude-sonnet-5"}
     })
@@ -198,7 +198,7 @@ class SelfHealConfig:
     """Self-heal auto-fix configuration.
 
     Attributes:
-        auto_fix_unison: Auto-fix Unison framework bugs (default True).
+        auto_fix_unison: Auto-fix Unison framework bugs (default False, opt-in).
         auto_fix_consumer: Auto-fix consumer project bugs (default False, opt-in).
         max_fix_rounds: Max rounds for fixer to revise patches.
         fix_timeout: Fixer diagnosis timeout in seconds.
@@ -752,7 +752,7 @@ class Notification:
     run_id: str = ""            # P12c: Unique run identifier
     iteration: int = 0          # Current iteration when event fired
     verdict: str = ""           # PASS or REQUEST_CHANGES
-    summary: str = ""           # One-line summary for Feishu
+    summary: str = ""           # One-line summary for notification consumers
     language: str = "en"        # observer_language at time of event (self-describing JSONL)
 
 
@@ -795,13 +795,13 @@ class RedirectControl:
 
 
 class DiscordSink(Protocol):
-    """Observer 的 Discord 输出。唯一可靠路径：Hermes send_message 工具。"""
+    """Legacy external notification sink protocol; built-in webhook is disabled."""
     def send(self, notif: Notification) -> bool:
         """返回是否成功。失败时 caller 写 dead_letter。"""
         ...
 
 class Observer(Protocol):
-    """独立进程。轮询 state.json + notifications.jsonl → DiscordSink。"""
+    """独立进程。轮询 state.json + notifications.jsonl 并写本地事件。"""
     def run(self) -> None:
         """阻塞循环。检测 phase transition + liveness。Ctrl-C 退出。"""
         ...
@@ -813,7 +813,7 @@ class Observer(Protocol):
         ...
 
     def check_liveness(self, state: State) -> bool:
-        """5min 无活动 + phase ≠ done → Discord 紧急通知。"""
+        """5min 无活动 + phase ≠ done → 写高优先级本地通知。"""
         ...
 
 # ============================================================================
