@@ -230,10 +230,9 @@ The generators create `pipeline.yaml` and prompt files. They currently emit back
 
 Generator 会创建 `pipeline.yaml` 和 prompt 文件。开发 preset 当前仍输出兼容名称；它们可以运行，但手工维护时建议改用 canonical mode。
 
-> [!WARNING]
-> Generated files should be reviewed before execution. In 1.0, `pipeline_generator` writes both `max_iterations` and `per_agent_timeout` inside `project`. The Loader accepts nested `max_iterations`, but reads `per_agent_timeout` only at the top level. Move `per_agent_timeout` to the top level if you need a non-default timeout; this asymmetric behavior is easy to miss.
->
-> 生成文件在运行前必须审查。1.0 的 generator 会把 `max_iterations` 和 `per_agent_timeout` 都写进 `project`；Loader 接受嵌套的 `max_iterations`，却只从顶层读取 `per_agent_timeout`。如需非默认 timeout，请把 `per_agent_timeout` 移到顶层；这种不对称行为很容易误导。
+Generated files should still be reviewed before execution. The v1.0 generator emits `max_iterations` and `per_agent_timeout` at the top level and includes an explicit default-off `self_heal` block, matching the Loader contract.
+
+生成文件在运行前仍应审查。v1.0 generator 会在顶层输出 `max_iterations`、`per_agent_timeout`，并显式生成默认关闭的 `self_heal` 配置，与 Loader 合同一致。
 
 ### 4.2 Validation sequence · 校验顺序
 
@@ -411,15 +410,51 @@ Choose limits from observed runtime behavior. A timeout that is shorter than mod
 | Mode | Flow | Notes · 说明 |
 |---|---|---|
 | `dev:quick` | Dev ↔ Review | Requires developer and reviewer roles. |
-| `dev:standard` | Plan ↔ Review → Discuss ↔ Review → Dev ↔ Review | Requires planner, developer, reviewer. |
+| `dev:standard` | Planner drafts Spec → Developer ↔ Planner reconciliation → freeze → Dev ↔ Review | Requires planner, developer, reviewer. |
 | `dev:deep` | Standard flow → comprehensive final review | Use for high-risk/release gates. |
 | `moa:analyze` | Analyzer fan-out → synthesis | Produces an analysis artifact. |
 | `moa:plan` | Planning perspectives → synthesis | Produces a planning artifact. |
 | `moa:review` | Review perspectives → synthesis | Produces a structured review artifact. |
 | `chain` | Ordered child stages | Requires `chain.stages`. |
-| `custom` | Role-driven dev/review flow | Current default phase contract resembles quick development. |
+| `custom` | Constrained ordered `phases:` | Reuses built-in handlers; no arbitrary handler or command execution. |
 
-### 6.2 Backward-compatible modes · 向后兼容模式
+### 6.2 Constrained custom phases · 受约束 Custom Phase
+
+```yaml
+mode: custom
+phases:
+  - planning
+  - discuss
+  - spec-check
+  - dev
+  - review
+
+agents:
+  requirements_guardian:
+    role: requirements-guardian
+    pipeline_role: planner
+    runtime: hermes
+    model: YOUR_PLANNER_MODEL
+    system_prompt_path: prompts/requirements.md
+  builder:
+    role: domain-builder
+    pipeline_role: developer
+    runtime: claude
+    model: YOUR_DEVELOPER_MODEL
+    system_prompt_path: prompts/builder.md
+  security:
+    role: security-auditor
+    pipeline_role: reviewer
+    runtime: codex
+    model: YOUR_REVIEWER_MODEL
+    system_prompt_path: prompts/security.md
+```
+
+The allowed phase order is `planning → discuss → spec-check → dev → review`. Choose a non-empty, non-repeating subset without changing that order. `discuss` and `spec-check` require `planning`. The Loader derives required orchestration roles from the selected phases and accepts domain-specific `role` values through `pipeline_role` mappings.
+
+允许顺序固定为 `planning → discuss → spec-check → dev → review`。可以选择非空、不重复的子集，但不能改变顺序；`discuss`、`spec-check` 必须有前置 `planning`。Loader 按所选阶段推导需要的编排角色，并通过 `pipeline_role` 接受领域化 `role`。
+
+### 6.3 Backward-compatible modes · 向后兼容模式
 
 | Legacy mode | Current behavior |
 |---|---|
@@ -437,7 +472,7 @@ Do not mechanically replace `design-debate`, `inspect-only`, or `spec-driven`: t
 
 不要机械替换 `design-debate`、`inspect-only`、`spec-driven`，它们仍保留独立阶段契约。
 
-### 6.3 Auto-detection · 自动检测
+### 6.4 Auto-detection · 自动检测
 
 When `mode` is omitted:
 
@@ -449,7 +484,7 @@ Explicit mode is preferable because it makes review and operations predictable.
 
 未写 `mode` 时会按角色自动判断；生产配置建议显式设置，便于审查和运维。
 
-### 6.4 MoA configuration · MoA 配置
+### 6.5 MoA configuration · MoA 配置
 
 ```yaml
 mode: moa:review
@@ -474,7 +509,7 @@ moa:
 - One round is the default fan-out/fan-in design; more rounds explicitly enable rebuttal.
 - Analyzer failures are recorded; synthesis should not silently present missing perspectives as success.
 
-### 6.5 Chain configuration · Chain 配置
+### 6.6 Chain configuration · Chain 配置
 
 ```yaml
 mode: chain
@@ -594,9 +629,13 @@ A majority count must be odd.
 
 ### 7.5 Acceptance criteria · 验收标准
 
-Freeze acceptance criteria before development. The reviewer should judge the same contract that the developer received. If scope changes, update the contract explicitly and restart the affected review logic rather than moving the target silently.
+In `dev:standard` and `dev:deep`, Planner first drafts the specification. Developer then proposes how to implement each item, and Planner may revise the scoped specification to reconcile user intent with implementation-level reality. After both sides agree, Unison freezes the PRD, architecture, specification, technology choices, and proposal by content hash.
 
-开发前冻结验收标准。Reviewer 与 Developer 必须面对同一契约；范围变化应显式更新并重新审查，不能静默移动目标。
+If Developer changes a frozen artifact during implementation, Unison invokes Planner to confirm necessity and alignment with user intent, then invokes Reviewer for an independent implementation/security/architecture/compatibility/test/regression risk review. Only dual `PASS` re-freezes the manifest and allows normal code review to continue. Any rejection, unparsable verdict, or agent halt fails closed.
+
+在 `dev:standard`、`dev:deep` 中，Planner 先起草规格；Developer 再逐项说明实现方案，Planner 可根据用户需求和实现级现实修订 scoped spec。双方一致后，Unison 按内容 hash 冻结 PRD、架构、Spec、技术选型和实现方案。
+
+如果 Developer 在实现中修改冻结产物，Unison 先调用 Planner 确认必要性和用户需求一致性，再调用 Reviewer 独立审查实现、安全、架构、兼容、测试和回归风险。只有双 `PASS` 才重新冻结并继续正常代码审查；任一拒绝、verdict 无法解析或 Agent halt 都 fail-closed。
 
 ---
 
@@ -619,9 +658,20 @@ unison run --pipeline pipeline.yaml --project /tmp/isolated-worktree
 unison run --pipeline pipeline.yaml --json
 ```
 
-Known CLI limitation in 1.0: `--switch`, `--model`, and `--save-pref` are accepted by `argparse`, and `--switch` influences executable preflight, but none of the selected runtime/model changes are applied to the `PipelineSpec` passed to the Orchestrator. Edit the YAML directly and re-run `dry-run`; do not rely on these flags until a later release fixes them.
+Runtime/model overrides target the unique key under `agents:`:
 
-1.0 已知 CLI 限制：`argparse` 虽接受 `--switch`、`--model` 和 `--save-pref`，且 `--switch` 会影响 executable 预检，但这些 runtime/model 变更都没有应用到传给 Orchestrator 的 `PipelineSpec`。请直接修改 YAML 并重新执行 `dry-run`；后续版本修复前不要依赖这些参数。
+```bash
+unison run --pipeline pipeline.yaml --switch reviewer:claude
+unison run --pipeline pipeline.yaml --model reviewer:YOUR_REVIEWER_MODEL
+unison run --pipeline pipeline.yaml \
+  --switch reviewer:claude \
+  --model reviewer:YOUR_REVIEWER_MODEL \
+  --save-pref
+```
+
+`--switch` changes Runtime only; `--model` changes model only; neither changes `role` or `pipeline_role`. The current run always uses the effective immutable spec. `--save-pref` is opt-in, runs only after authorization, and atomically writes effective runtime/model values back to the selected YAML. PyYAML round-tripping may remove comments, anchors, and custom formatting, so inspect the Git diff.
+
+Runtime/model override 的目标是 `agents:` 下的唯一 key。`--switch` 只改 Runtime，`--model` 只改 model，不改变 `role` 或 `pipeline_role`。当前运行使用有效的不可变 spec；`--save-pref` 只在授权通过后按显式 opt-in 原子写回 YAML。PyYAML round-trip 可能移除注释、anchor 和自定义排版，应检查 Git diff。
 
 ### 8.2 Exit codes · 退出码
 
@@ -635,9 +685,9 @@ Known CLI limitation in 1.0: `--switch`, `--model`, and `--save-pref` are accept
 
 ### 8.3 Tool preflight · 工具预检
 
-`unison run` checks Git and selected non-OpenClaw runtime executables. If a runtime is missing, install the executable selected in YAML, then verify credentials, model access, and provider health separately. The 1.0 `--switch` flag changes this preflight calculation but not the executed `PipelineSpec`, so it is not a valid runtime fallback.
+`unison run` checks Git and the executables selected by the effective spec after `--switch` overrides. If a runtime is missing, install it and verify credentials, model access, and provider health separately.
 
-`unison run` 会检查 Git 和选中的非 OpenClaw executable。缺失时应安装 YAML 选中的 executable，再分别验证凭据、模型权限和 provider 健康。1.0 的 `--switch` 只会改变预检计算，不会改变实际执行的 `PipelineSpec`，因此不能作为有效 runtime fallback。
+`unison run` 会检查 Git，以及应用 `--switch` 后有效 spec 所选择的 executable。缺失时应安装对应工具，并分别验证凭据、模型权限和 provider 健康。
 
 ### 8.4 WebUI controls · WebUI 控制
 
@@ -806,10 +856,9 @@ For one selected project:
 - `history` comes from `RunHistoryStore`;
 - live phase and transitions come from `.unison/state.json`;
 - budget limits come from the selected pipeline;
-- project daily usage comes from the authoritative budget ledger;
-- **1.0 known limitation:** the WebUI still looks for a legacy run-local `budget.json` when displaying `per_task_used`, while the v2 BudgetTracker stores run entries inside the authoritative ledger. The task gauge may therefore show `0` even when run usage exists. Treat the ledger as authoritative until this adapter is fixed.
+- project daily and selected-run task usage come from the authoritative v2 budget ledger; legacy split files are read only for pre-v2 ledgers.
 
-对选中项目：`mode/config` 来自同一 active pipeline YAML；`agents` 优先使用 state 中实际 runtime agent，否则回退到同一 YAML；History 来自 `RunHistoryStore`；live phase 来自 state；预算限制来自 pipeline，project daily usage 来自权威 ledger。**1.0 已知限制：** WebUI 显示 `per_task_used` 时仍读取 legacy run-local `budget.json`，而 v2 BudgetTracker 已把 run entry 存在权威 ledger 中，因此 task gauge 可能错误显示 `0`。修复 adapter 前以 ledger 为准。
+对选中项目：`mode/config` 来自同一 active pipeline YAML；`agents` 优先使用 state 中实际 runtime agent，否则回退到同一 YAML；History 来自 `RunHistoryStore`；live phase 来自 state；预算限制来自 pipeline；project daily usage 和选中 run 的 task usage 都来自权威 v2 ledger，只有 pre-v2 ledger 才读取 legacy split file。
 
 ### 10.5 Network warning · 网络警告
 
@@ -922,9 +971,19 @@ self_heal:
   consumer_fix_mode: full
 ```
 
-Both automatic fix switches default to `false`. When enabled, failures are classified before repair. Fix attempts are bounded; framework fixes use review logic before retry. Enable this only in an isolated repository with a clean baseline.
+Both automatic fix switches default to `false`. Recommended framework-only opt-in:
 
-两个自动修复开关默认均为 `false`。开启后先分类错误，再尝试有界修复与审查。只应在有 clean baseline 的隔离仓库启用。
+```yaml
+self_heal:
+  auto_fix_unison: true
+  auto_fix_consumer: false
+  max_fix_rounds: 2
+  fix_timeout: 300
+```
+
+Enable `auto_fix_consumer` only by an explicit project-owner decision: it broadens the writable scope, token/time use, and the chance that repair work obscures the original failure evidence. Use an isolated clean repository and review every resulting diff.
+
+两个自动修复开关默认均为 `false`。推荐只开启 framework 修复、保持 consumer 修复关闭。只有项目 owner 明确决定时才开启 `auto_fix_consumer`，因为它会扩大写入范围、token/时间消耗，并可能掩盖原始失败证据。应在 clean 的隔离仓库运行并审查所有 diff。
 
 ### 12.2 Greenfield boundary · Greenfield 边界
 
@@ -1019,10 +1078,10 @@ Built-in Discord webhook delivery is disabled in 1.0. Integrate an external proc
 | `Prompt file not found` | Prompt paths are relative to resolved project root; create the file or correct `project_root`. |
 | `Invalid runtime` | Use `claude`, `codex`, `hermes`, or `openclaw`; arbitrary custom keys are rejected. |
 | Missing `developer`/`reviewer` role | Add agents with the required `pipeline_role`, except reviewer-only or MoA contracts. |
-| Tool check failure | Install the executable selected in YAML and verify its credentials. In 1.0, do not rely on `--switch` to change the executed runtime. |
+| Tool check failure | Install the executable selected by YAML plus current-run overrides; verify credentials and model access. |
 | `Could not acquire lock` | Another process may hold the kernel lock. Do not delete the persistent lock file. Use `fuser`/`lsof`. |
 | Budget immediately rejects work | Inspect the authoritative ledger for corruption, unknown schema, previous usage, or permissions. Do not “fix” it by silently resetting usage. |
-| Runtime/model override flag appears ineffective | Expected in 1.0: `--switch`, `--model`, and `--save-pref` do not update the executed spec. Edit YAML and re-run `dry-run`. |
+| Runtime/model override fails | Target the exact `agents:` key and use `agent-key:value`; unsupported Runtime keys and unknown agents fail closed. |
 | Pipeline keeps requesting changes | Read the newest run-scoped review and findings; confirm acceptance criteria are stable and tests reproduce the issue. |
 | WebUI shows the wrong project | Use the project selector; confirm registry paths in `~/.unison/webui/projects.json`. |
 | WebUI History is empty | A native run record is written when a pipeline starts; check `<project>/.unison/runs/` and permissions. |
@@ -1030,7 +1089,7 @@ Built-in Discord webhook delivery is disabled in 1.0. Integrate an external proc
 | WebUI control rejects a run | Select a native run with status `running`; legacy/finished records are intentionally not controllable. |
 | Observer sends no Discord message | Expected in 1.0: built-in webhook delivery is disabled. Consume `notifications.jsonl` externally. |
 | Self-heal does nothing | Expected by default. Explicitly enable the relevant switch only after reviewing the risk. |
-| `--save-pref` changes disappear | Expected in 1.0; edit pipeline YAML directly. |
+| `--save-pref` reformats YAML | Expected PyYAML round-trip behavior; comments/anchors/custom layout may be lost. Inspect or revert the diff. |
 | Native Windows import/runtime failure | Use WSL/Linux/macOS; `fcntl` is required for supported locking semantics. |
 
 ### 13.3 Lock inspection · Lock 检查
@@ -1129,10 +1188,9 @@ unison run --pipeline ./project/pipeline.yaml
 unison run --pipeline ./project/pipeline.yaml --json
 unison run --pipeline ./project/pipeline.yaml --project /tmp/worktree
 
-# 1.0 known limitation: parser accepts these, but they do not change the executed spec
-# unison run --pipeline ./project/pipeline.yaml --switch reviewer:claude
-# unison run --pipeline ./project/pipeline.yaml --model reviewer:gpt-5.5
-# unison run --pipeline ./project/pipeline.yaml --save-pref
+unison run --pipeline ./project/pipeline.yaml --switch reviewer:claude
+unison run --pipeline ./project/pipeline.yaml --model reviewer:YOUR_REVIEWER_MODEL
+unison run --pipeline ./project/pipeline.yaml --switch reviewer:claude --save-pref
 
 # Observe
 unison webui --project ./project --port 9099

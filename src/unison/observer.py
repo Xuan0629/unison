@@ -602,7 +602,7 @@ class MockWatcher:
 
 
 class Observer:
-    """独立进程。监控 state.json + notifications.jsonl → 通知 Discord。
+    """独立进程。监控 state.json + notifications.jsonl 并写本地通知记录。
 
     使用 FileWatcher 监控文件变化，支持 inotify（Linux）和 polling（fallback）。
     """

@@ -176,13 +176,13 @@ unison run --pipeline pipeline.yaml
 | 模式 | 流程 | 适用场景 |
 |---|---|---|
 | `dev:quick` | Developer ↔ Reviewer | 已有设计的明确实现任务。 |
-| `dev:standard` | Planner ↔ Reviewer → Discuss ↔ Reviewer → Developer ↔ Reviewer | 先规划再开发的功能。 |
+| `dev:standard` | Planner 起草 Spec → Developer ↔ Planner 讨论 → 冻结 → Developer ↔ Reviewer | 先规划再开发的功能。 |
 | `dev:deep` | Standard 流程 + 综合终审 | 高风险或发布关键任务。 |
 | `moa:analyze` | 多 Analyzer 并行 → Synthesizer | 调研、比较或宽范围分析。 |
 | `moa:plan` | 产品/架构/技术/spec 多视角 → Synthesizer | 规划和设计文档。 |
 | `moa:review` | 正确性/安全/架构/测试多视角 → Synthesizer | 独立审查报告。 |
 | `chain` | 带输出映射的顺序 pipeline stages | 多步骤工作流。 |
-| `custom` | 参数化角色流程 | 领域定制编排。 |
+| `custom` | 使用内建 handler 的受约束有序 `phases:` | 不执行任意代码的领域定制编排。 |
 
 仍接受以下兼容模式：`code-dev`、`full-dev`、`agent-fix`、`migrate`、`greenfield`、`design-debate`、`inspect-only`、`spec-driven` 和裸 `moa`。除非需要 legacy mode 的独立契约，新 YAML 应优先采用 canonical 名称。
 
@@ -198,6 +198,8 @@ unison run --pipeline pipeline.yaml
 | OpenClaw | `openclaw` | 本地 `openclaw agent` CLI，每次调用使用唯一 session key。 |
 
 Unison v1.0 只校验这四个 runtime key。当前 `PipelineLoader` 不支持任意 `runtime: custom` 配置。
+
+`mode: custom` 与 Custom Runtime 不同。v1.0 允许从 `planning`、`discuss`、`spec-check`、`dev`、`review` 中选择按固定顺序排列且不重复的阶段子集。Loader 会校验阶段依赖和所需 `pipeline_role`，执行时仍复用内建的有界 handler。
 
 ## Web 状态面板
 
@@ -230,7 +232,7 @@ Control endpoint 使用生成的 session token，token 文件只允许 owner 读
 1. **先运行 `dry-run`。** 在消耗 Agent 调用前检查路径、prompt、角色和 mode。
 2. **显式写 `pipeline_role`。** `role` 表示人类可读专业身份，`pipeline_role` 表示编排契约。
 3. **生产者和 Reviewer 分离。** 优先使用不同模型或 provider；只有风险值得时才增加 Reviewer 数量。
-4. **冻结验收标准。** 开发前明确完成条件，不要在 review 中移动目标。
+4. **冻结双方一致的规格。** Standard mode 在 Planner/Developer 达成一致后冻结 PRD、架构、Spec、技术选型和实现方案。Developer 后续确需改动时，必须先由 Planner 确认符合用户需求，再由 Reviewer 独立确认风险，双 PASS 后才能重新冻结。
 5. **一次实验只改一个变量。** Prompt、model、policy 分开变更，结果才可归因。
 6. **使用有界自治。** 设置迭代上限、per-agent timeout；无人值守时再设置 pipeline timeout 和保守预算。
 7. **生成状态不进 Git。** 默认忽略 `.unison/`、`observer/logs/`、run-scoped review、secret 和私有 pipeline 文件，除非它们是经过整理的公开产物。
@@ -255,9 +257,16 @@ unison observe   启动项目 Observer
 ```bash
 unison run --pipeline pipeline.yaml --project /path/to/worktree
 unison run --pipeline pipeline.yaml --json
+unison run --pipeline pipeline.yaml --switch reviewer:claude
+unison run --pipeline pipeline.yaml --model reviewer:YOUR_REVIEWER_MODEL
+unison run --pipeline pipeline.yaml --switch reviewer:claude --save-pref
 ```
 
-1.0 已知 CLI 限制：parser 虽接受 `--switch`、`--model` 和 `--save-pref`，但 runtime/model 变更并未应用到传给 Orchestrator 的 `PipelineSpec`。请直接修改 YAML；后续版本修复前不要依赖这三个参数。
+`--switch` 和 `--model` 的目标是 `agents:` 下的唯一 key，并作用于当前运行。`--save-pref` 会在授权通过后把有效 runtime/model 原子写回所选 YAML。持久化使用 PyYAML，因此可能丢失注释、anchor 和自定义排版；应把配置纳入版本控制并检查 diff。
+
+## 更新计划：v1.1 与“万物”
+
+Unison 1.0 已能把有限的角色、模型、阶段、产物和审查循环围绕一个目标重新组合。v1.1 计划扩展“万物”一侧，加入声明式 Custom Runtime adapter，使 Aider 或内部 CLI 能被可靠接入。正式合同必须定义 prompt 传输、model/timeout 映射、stdout/stderr/exit code、shell policy、secret masking、取消、并发和输出解析。在协议真正实现并经过测试前，v1.0 会明确拒绝任意 Runtime key，而不是假装只写 YAML 就完成了集成。
 
 ## 文档
 

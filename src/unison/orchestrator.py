@@ -460,7 +460,7 @@ class Orchestrator:
             self._auto_start_webui()
 
             # ------------------------------------------------------------------
-            # 3b. Auto-start Observer (notifications → Feishu/Discord)
+            # 3b. Auto-start Observer (local structured notifications)
             # ------------------------------------------------------------------
             self._auto_start_observer()
 
@@ -4552,8 +4552,8 @@ class Orchestrator:
         Checks whether an Observer process is active for this project
         via a PID file at ``~/.unison/observer/<project>.pid``.  If no
         live process is found, spawns a background ``unison observe``
-        process.  The Observer writes ``notifications.jsonl`` that the
-        Feishu/Discord cron job reads for pipeline event delivery.
+        process. The Observer writes local structured records to
+        ``notifications.jsonl`` for optional external consumers.
 
         Does NOT halt on failure — the Observer is best-effort.
         """

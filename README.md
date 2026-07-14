@@ -176,13 +176,13 @@ A successful run exits `0`; a controlled halt exits `2`; validation or runtime s
 | Mode | Flow | Best for |
 |---|---|---|
 | `dev:quick` | Developer ↔ Reviewer | A scoped implementation with an existing design. |
-| `dev:standard` | Planner ↔ Reviewer → Discuss ↔ Reviewer → Developer ↔ Reviewer | Plan-first feature work. |
+| `dev:standard` | Planner drafts Spec → Developer ↔ Planner discussion → freeze → Developer ↔ Reviewer | Plan-first feature work. |
 | `dev:deep` | Standard flow plus comprehensive final review | High-risk or release-critical work. |
 | `moa:analyze` | Parallel analyzers → synthesizer | Research, comparison, or broad analysis. |
 | `moa:plan` | Product/architecture/technology/spec perspectives → synthesizer | Planning and design documents. |
 | `moa:review` | Correctness/security/architecture/testing perspectives → synthesizer | Independent review reports. |
 | `chain` | Ordered pipeline stages with declared output mapping | Multi-step workflows. |
-| `custom` | Parameterized role-based flow | Domain-specific orchestration. |
+| `custom` | Ordered constrained `phases:` using built-in handlers | Domain-specific orchestration without arbitrary code execution. |
 
 Backward-compatible modes remain accepted: `code-dev`, `full-dev`, `agent-fix`, `migrate`, `greenfield`, `design-debate`, `inspect-only`, `spec-driven`, and bare `moa`. New YAML should use canonical names unless it needs one of the legacy modes’ distinct contracts.
 
@@ -198,6 +198,8 @@ See the [manual](docs/MANUAL.md) for exact phase behavior, compatibility notes, 
 | OpenClaw | `openclaw` | Local `openclaw agent` CLI with a unique session key per invocation. |
 
 Unison v1.0 validates these four runtime keys. The implementation is intentionally narrow: adding an arbitrary `runtime: custom` entry is not currently supported by `PipelineLoader`.
+
+`mode: custom` is different from a custom Runtime. In v1.0 it accepts an ordered, non-repeating subset of `planning`, `discuss`, `spec-check`, `dev`, and `review`. The Loader enforces dependencies and required `pipeline_role` mappings, and execution reuses the built-in bounded handlers.
 
 ## Web dashboard
 
@@ -230,7 +232,7 @@ Control endpoints use a generated session token stored with owner-only permissio
 1. **Start with `dry-run`.** Validate paths, prompts, roles, and mode before paying for agent calls.
 2. **Use explicit `pipeline_role`.** Treat `role` as a human-facing specialty and `pipeline_role` as the orchestration contract.
 3. **Separate producer and reviewer.** Prefer different models or providers; use more reviewers only when the risk justifies the token cost.
-4. **Freeze acceptance criteria.** State what counts as done before development starts; do not let the review target move mid-loop.
+4. **Freeze the agreed specification.** Standard mode freezes the PRD, architecture, specification, technology choices, and implementation proposal after Planner/Developer agreement. A later Developer amendment requires Planner user-intent approval and independent Reviewer risk approval before re-freezing.
 5. **Keep one variable per experiment.** Change a prompt, model, or policy independently so outcomes remain attributable.
 6. **Use bounded autonomy.** Set iteration limits, per-agent timeouts, a pipeline timeout for unattended runs, and conservative budgets.
 7. **Keep generated state out of Git.** Ignore `.unison/`, `observer/logs/`, run-scoped reviews, secrets, and private pipeline files unless they are intentionally curated artifacts.
@@ -255,9 +257,16 @@ Common run options:
 ```bash
 unison run --pipeline pipeline.yaml --project /path/to/worktree
 unison run --pipeline pipeline.yaml --json
+unison run --pipeline pipeline.yaml --switch reviewer:claude
+unison run --pipeline pipeline.yaml --model reviewer:YOUR_REVIEWER_MODEL
+unison run --pipeline pipeline.yaml --switch reviewer:claude --save-pref
 ```
 
-Known CLI limitation in 1.0: `--switch`, `--model`, and `--save-pref` are accepted by the parser, but the selected runtime/model changes are not applied to the `PipelineSpec`. Edit the YAML directly; do not rely on these three flags until a later release fixes them.
+`--switch` and `--model` target the unique key under `agents:` and affect the current run. `--save-pref` atomically persists those effective runtime/model values to the selected YAML after authorization. Because persistence uses PyYAML, comments, anchors, and custom formatting may be lost; keep the file under version control and inspect the diff.
+
+## Roadmap: v1.1 and the “All Things” side of Unison
+
+Unison 1.0 composes bounded roles, models, phases, artifacts, and review loops around one goal. v1.1 plans to extend the “all things / 万物” side with a declarative custom Runtime adapter contract for tools such as Aider or internal CLIs. It must define prompt transport, model and timeout mapping, stdout/stderr and exit semantics, shell policy, secret masking, cancellation, concurrency, and output parsing. Until that protocol is implemented and tested, v1.0 intentionally rejects arbitrary Runtime keys rather than pretending that YAML alone creates a working integration.
 
 ## Documentation
 

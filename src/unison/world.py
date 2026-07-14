@@ -254,12 +254,12 @@ class World:
 
     @property
     def dead_letter_file(self) -> Path:
-        """Discord send failure fallback (append-only JSONL)."""
+        """Legacy external-delivery failure fallback (append-only JSONL)."""
         return self.observer_dir / "dead_letter.jsonl"
 
     @property
     def discord_brief_file(self) -> Path:
-        """Discord brief markdown report."""
+        """Legacy-named brief markdown report for external consumers."""
         return self.reports_dir / "discord-brief.md"
 
     # ---- channels ----
