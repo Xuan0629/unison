@@ -17,9 +17,9 @@ def _strip_severity(finding: str) -> str:
 
 
 def finding_id(finding: str) -> str:
-    """Generate a stable, short ID from finding content hash."""
+    """Generate a stable 96-bit ID from normalized finding content."""
     stripped = _strip_severity(finding).lower()
-    return hashlib.sha256(stripped.encode()).hexdigest()[:8]
+    return hashlib.sha256(stripped.encode()).hexdigest()[:24]
 
 
 def parse_findings_from_yaml(yaml_text: str) -> List[str]:

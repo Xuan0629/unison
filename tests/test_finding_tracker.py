@@ -1,4 +1,5 @@
 """Tests for finding tracker (ADD-1)."""
+import hashlib
 import pytest
 from src.unison.finding_tracker import (
     finding_id, parse_findings_from_yaml, carry_forward_status,
@@ -20,6 +21,15 @@ class TestFindingID:
 
     def test_different_content_different_id(self):
         assert finding_id("fix bug A") != finding_id("add test B")
+
+    def test_known_32_bit_collision_gets_distinct_ids(self):
+        left = "audit finding candidate 27439"
+        right = "audit finding candidate 61054"
+        assert hashlib.sha256(left.encode()).hexdigest()[:8] == hashlib.sha256(
+            right.encode()
+        ).hexdigest()[:8]
+        assert finding_id(left) != finding_id(right)
+        assert len(finding_id(left)) >= 16
 
 
 class TestCarryForward:
