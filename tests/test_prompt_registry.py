@@ -112,12 +112,12 @@ class TestPromptRegistry:
         assert "reviews/iter-3.md" in task
         assert "YAML frontmatter" in task
 
-    def test_discussion_reviewer_uses_scoped_prd_dir(self):
-        """Discussion reviews read the active pipeline's PRD and design."""
+    def test_discussion_planner_uses_scoped_prd_dir(self):
+        """Planner reconciliation reads only the active run's artifacts."""
         registry = PromptRegistry()
         task = registry.task_for(
-            "reviewer", iteration=1, review_phase="discuss_review",
-            review_file="reviews/runs/key/run/iter-1.md",
+            "planner", iteration=1, review_phase="discuss_review",
+            review_file="reviews/runs/key/run/discuss-iter-1.md",
             prd_dir="prd/runs/pipeline-a/",
             proposal_file="reviews/runs/key/run/dev-proposal.md",
             findings_file="reviews/runs/key/run/findings.md",
@@ -126,6 +126,7 @@ class TestPromptRegistry:
         assert "prd/runs/pipeline-a/tech-design.md" in task
         assert "reviews/runs/key/run/dev-proposal.md" in task
         assert "reviews/runs/key/run/findings.md" in task
+        assert "reviews/runs/key/run/discuss-iter-1.md" in task
         assert "reviews/dev-proposal.md" not in task
         assert "reviews/findings.md" not in task
 

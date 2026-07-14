@@ -1,5 +1,6 @@
 """Tests for orchestrator.py — Orchestrator state machine driver."""
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
@@ -1000,6 +1001,8 @@ agents:
             lambda: freeze_called.append(True),
         )
         monkeypatch.setattr(orch, "_run_loop", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_run_planning_phase", lambda: None)
+        monkeypatch.setattr(orch, "_run_discussion_loop", lambda: None)
         monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
         monkeypatch.setattr(orch, "_archive_reviews", lambda: None)
         # Stub _run_spec_verification in case mode has spec-check (e.g.
@@ -2149,16 +2152,176 @@ class TestP10023ExhaustionAndSkipRedirect:
 
         return Orchestrator(spec=spec)
 
+    def test_standard_state_machine_routes_spec_discussion_and_review(
+        self, tmp_path, monkeypatch,
+    ):
+        """Production dispatch keeps Reviewer out until development review."""
+        orch = self._make_orchestrator(tmp_path)
+        orch.spec = replace(orch.spec, mode="dev:standard")
+        calls = []
+
+        monkeypatch.setattr(orch, "_publish_phase_event", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_write_lifecycle_notification", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_run_planning_phase", lambda: calls.append("planner-spec"))
+        monkeypatch.setattr(orch, "_run_discussion_loop", lambda: calls.append("developer-planner-discuss"))
+        monkeypatch.setattr(orch, "_freeze_acceptance_criteria", lambda: calls.append("freeze"))
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            orch, "_run_loop",
+            lambda active, review, review_of, role=None: calls.append(
+                (active, review, role)
+            ),
+        )
+
+        orch._run_state_machine()
+
+        assert calls[:4] == [
+            "planner-spec",
+            "developer-planner-discuss",
+            "freeze",
+            ("dev_active", "dev_review", "developer"),
+        ]
+        assert not any(
+            isinstance(call, tuple) and call[1] == "planning_review"
+            for call in calls
+        )
+
+    def test_discussion_alternates_developer_and_planner_then_freezes(
+        self, tmp_path, monkeypatch,
+    ):
+        """Developer proposes, Planner reconciles, and PASS freezes the agreed spec."""
+        orch = self._make_orchestrator(tmp_path, max_discuss=3)
+        developer_prompts = []
+        planner_prompts = []
+
+        monkeypatch.setattr(orch, "_check_pipeline_timeout", lambda: None)
+        monkeypatch.setattr(orch, "_check_control_files", lambda: [])
+        monkeypatch.setattr(orch, "_check_redirect_file", lambda: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_publish_phase_event", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_write_lifecycle_notification", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            orch, "_invoke_discussion_agent",
+            lambda role, iteration, convergence: (
+                developer_prompts if role == "developer" else planner_prompts
+            ).append((iteration, convergence)),
+        )
+        verdicts = iter(["REQUEST_CHANGES", "PASS"])
+        monkeypatch.setattr(orch, "_parse_verdict", lambda *a, **kw: next(verdicts))
+        monkeypatch.setattr(orch, "_freeze_specification", lambda: None)
+
+        orch._run_discussion_loop()
+
+        assert developer_prompts == [(1, False), (2, True)]
+        assert planner_prompts == [(1, False), (2, True)]
+        actors = [transition.by for transition in orch._state.history]
+        assert "reviewer" not in actors
+        assert orch._state.last_review_verdict == "PASS"
+
+    def test_discussion_exhaustion_halts_without_freezing(self, tmp_path, monkeypatch):
+        """No agreement means no silent auto-advance into implementation."""
+        orch = self._make_orchestrator(tmp_path, max_discuss=1)
+        frozen = []
+
+        monkeypatch.setattr(orch, "_check_pipeline_timeout", lambda: None)
+        monkeypatch.setattr(orch, "_check_control_files", lambda: [])
+        monkeypatch.setattr(orch, "_check_redirect_file", lambda: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_publish_phase_event", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_write_lifecycle_notification", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_invoke_discussion_agent", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_parse_verdict", lambda *a, **kw: "REQUEST_CHANGES")
+        monkeypatch.setattr(orch, "_freeze_specification", lambda: frozen.append(True))
+
+        orch._run_discussion_loop()
+
+        assert orch._state.halt_signal is True
+        assert orch._state.halt_reason is not None
+        assert "without agreement" in orch._state.halt_reason
+        assert frozen == []
+
+    def test_discussion_uses_isolated_verdict_file(self, tmp_path):
+        """Discussion PASS cannot be reused as a development review verdict."""
+        orch = self._make_orchestrator(tmp_path)
+        discuss = orch._review_file_for_phase("discuss_review", 1)
+        dev = orch._review_file_for_phase("dev_review", 1)
+
+        assert discuss.name == "discuss-iter-1.md"
+        assert dev.name == "iter-1.md"
+        assert discuss != dev
+
+    def test_frozen_specification_detects_later_mutation(self, tmp_path):
+        """Agreed PRD/architecture/proposal become immutable for development."""
+        orch = self._make_orchestrator(tmp_path)
+        prd = orch.spec.world.prd_for(orch._run_ctx.pipeline_key)
+        design = orch.spec.world.tech_design_for(orch._run_ctx.pipeline_key)
+        proposal = orch.spec.world.reviews_dir_for(orch._run_ctx) / "dev-proposal.md"
+        prd.parent.mkdir(parents=True, exist_ok=True)
+        proposal.parent.mkdir(parents=True, exist_ok=True)
+        prd.write_text("agreed user requirements", encoding="utf-8")
+        design.write_text("agreed architecture and technology", encoding="utf-8")
+        proposal.write_text("agreed implementation plan", encoding="utf-8")
+
+        orch._freeze_specification()
+        assert orch._verify_frozen_specification() is True
+
+        design.write_text("silently changed architecture", encoding="utf-8")
+        assert orch._verify_frozen_specification() is False
+
+    def test_development_halts_before_review_if_frozen_spec_changes(
+        self, tmp_path, monkeypatch,
+    ):
+        """Developer cannot silently rewrite the agreed specification."""
+        orch = self._make_orchestrator(tmp_path)
+        orch.spec = replace(orch.spec, max_dev_iterations=1)
+        reviewer_calls = []
+
+        monkeypatch.setattr(orch, "_check_pipeline_timeout", lambda: None)
+        monkeypatch.setattr(orch, "_check_control_files", lambda: [])
+        monkeypatch.setattr(orch, "_check_redirect_file", lambda: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_publish_phase_event", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            orch, "_invoke_agent_for_role",
+            lambda role, *a, **kw: reviewer_calls.append(role),
+        )
+        monkeypatch.setattr(orch, "_verify_frozen_specification", lambda: False)
+
+        orch._run_loop("dev_active", "dev_review", "code + tests", role="developer")
+
+        assert reviewer_calls == ["developer"]
+        assert orch._state.halt_signal is True
+        assert orch._state.halt_reason is not None
+        assert "modified frozen specification" in orch._state.halt_reason
+
+    def test_discussion_convergence_prompt_is_injected(self, tmp_path):
+        """Near the cap, both sides receive a material-conflicts-only prompt."""
+        orch = self._make_orchestrator(tmp_path)
+        orch._discussion_convergence = True
+
+        developer = orch._build_prompt("developer", 2, "discuss_review")
+        planner = orch._build_prompt("planner", 2, "discuss_review")
+
+        assert "CONVERGENCE REQUIRED" in developer
+        assert "CONVERGENCE REQUIRED" in planner
+        assert "Do not return PASS while a blocking disagreement remains" in planner
+
     def test_discussion_initializes_only_run_scoped_findings(self, tmp_path, monkeypatch):
         orch = self._make_orchestrator(tmp_path)
+        monkeypatch.setattr(orch, "_check_pipeline_timeout", lambda: None)
+        monkeypatch.setattr(orch, "_check_control_files", lambda: [])
+        monkeypatch.setattr(orch, "_check_redirect_file", lambda: None)
         monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
-        monkeypatch.setattr(orch, "_run_loop", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_publish_phase_event", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_invoke_discussion_agent", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_parse_verdict", lambda *a, **kw: "PASS")
+        monkeypatch.setattr(orch, "_freeze_specification", lambda: None)
 
         orch._run_discussion_loop()
 
         scoped = orch.spec.world.reviews_dir_for(orch._run_ctx) / "findings.md"
         assert scoped.exists()
-        assert "Reviewer Findings" in scoped.read_text(encoding="utf-8")
+        assert "Planner Discussion Findings" in scoped.read_text(encoding="utf-8")
         assert not (tmp_path / "reviews" / "findings.md").exists()
 
     def test_discussion_prompt_names_only_current_run_artifacts(self, tmp_path):

@@ -87,7 +87,7 @@ class PhaseRouter:
                      "code + tests"),
         ],
         "dev:standard": [
-            PhaseDef("planning", "planning_active", "planning_review",
+            PhaseDef("planning", "planning_active", "",
                      "planner", "PRD + tech-design"),
             PhaseDef("discuss", "discuss_active", "discuss_review",
                      "developer", "implementation proposal"),
@@ -95,7 +95,7 @@ class PhaseRouter:
                      "code + tests"),
         ],
         "dev:deep": [
-            PhaseDef("planning", "planning_active", "planning_review",
+            PhaseDef("planning", "planning_active", "",
                      "planner", "PRD + tech-design"),
             PhaseDef("discuss", "discuss_active", "discuss_review",
                      "developer", "implementation proposal"),

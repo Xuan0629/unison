@@ -543,6 +543,8 @@ class Orchestrator:
 
             if pd.active_phase == "spec-check":
                 self._run_spec_verification()
+            elif pd.name == "planning" and not pd.review_phase:
+                self._run_planning_phase()
             elif pd.name == "discuss":
                 self._run_discussion_loop()
             elif pd.name == "review":
@@ -553,6 +555,12 @@ class Orchestrator:
                 # Non-DAG dev phase: freeze acceptance criteria before
                 # entering the active→review loop.
                 if pd.active_phase == "dev_active":
+                    if not self._verify_frozen_specification():
+                        self.halt(
+                            "Frozen specification changed after discussion agreement",
+                            category="external",
+                        )
+                        return
                     self._state.transition(
                         "dev_active", "orchestrator",
                         iter_n=1, note="starting development loop",
@@ -1468,29 +1476,18 @@ class Orchestrator:
         )
 
     def _run_discussion_loop(self) -> None:
-        """Pre-implementation discussion: Developer proposes approach, Reviewer critiques.
-
-        Developer writes the current run's ``dev-proposal.md`` describing scope,
-        files, tech approach, boundaries, and test plan. Reviewer critiques
-        against the pipeline-scoped PRD + tech-design, writing findings to the
-        current run's ``findings.md``. Loop continues until Reviewer PASS.
-
-        This prevents the common failure mode where the Developer rushes into
-        coding with a misaligned plan — the discussion phase catches direction
-        errors before any code is written.
-        """
+        """Reconcile Planner specifications with Developer implementation plans."""
         if self._state.halt_signal:
             return
         world = self.spec.world
 
-        # Initialize cumulative findings for this run only.
+        # Initialize the run-scoped agreement record.
         findings = world.reviews_dir_for(self._run_ctx) / "findings.md"
         findings.parent.mkdir(parents=True, exist_ok=True)
         if not findings.exists():
             findings.write_text(
-                "# Reviewer Findings (cumulative)\n\n"
-                "Findings persist across iterations for the Reviewer to track "
-                "resolution status.\n\n",
+                "# Planner Discussion Findings (cumulative)\n\n"
+                "Open questions persist until Planner and Developer agree.\n\n",
                 encoding="utf-8",
             )
 
@@ -1501,11 +1498,80 @@ class Orchestrator:
         self._publish_phase_event("discuss_active", note="starting discussion loop")
         self._save_checkpoint(1)
 
-        self._run_loop(
-            "discuss_active", "discuss_review",
-            "implementation proposal",
-            role="developer",
+        max_iter = self.spec.max_discuss_iterations or self.spec.max_iterations
+        for iteration in range(1, max_iter + 1):
+            self._check_pipeline_timeout()
+            if self._state.halt_signal:
+                return
+            controls = self._check_control_files()
+            if "pause" in controls:
+                self.halt("Dashboard pause requested", category="external")
+                return
+            self._check_redirect_file()
+
+            convergence = iteration >= max(2, max_iter - 1)
+            self._state.transition(
+                "discuss_active", "developer", iter_n=iteration,
+                note=f"implementation proposal {iteration}/{max_iter}",
+            )
+            self._invoke_discussion_agent("developer", iteration, convergence)
+            if self._state.halt_signal:
+                return
+
+            self._state.transition(
+                "discuss_review", "planner", iter_n=iteration,
+                note=f"spec reconciliation {iteration}/{max_iter}",
+            )
+            self._invoke_discussion_agent("planner", iteration, convergence)
+            if self._state.halt_signal:
+                return
+
+            verdict = self._parse_verdict(iteration, "discuss_review")
+            if verdict == "PASS":
+                self._state.last_review_verdict = "PASS"
+            elif verdict == "REQUEST_CHANGES":
+                self._state.last_review_verdict = "REQUEST_CHANGES"
+            if verdict == "PASS":
+                self._freeze_specification()
+                self._publish_phase_event(
+                    "discuss_review", note=f"agreement after {iteration} iters",
+                    event="phase_done",
+                )
+                return
+            if verdict is None:
+                self.halt("Could not parse Planner discussion verdict")
+                return
+
+        self.halt(
+            f"Developer and Planner exhausted {max_iter} discussion iterations "
+            "without agreement",
+            category="external",
         )
+
+    def _run_planning_phase(self) -> None:
+        """Have Planner draft the initial specification without Reviewer mediation."""
+        self._state.transition(
+            "planning_active", "planner", iter_n=1,
+            note="drafting initial specification",
+        )
+        self._publish_phase_event("planning_active", note="drafting initial specification")
+        self._save_checkpoint(1)
+        self._invoke_agent_for_role("planner", 1, review_phase="")
+        if not self._state.halt_signal:
+            self._publish_phase_event(
+                "planning_active", note="initial specification drafted",
+                event="phase_done",
+            )
+
+    def _invoke_discussion_agent(
+        self, role: str, iteration: int, convergence: bool,
+    ) -> None:
+        """Invoke one side of the serial Developer/Planner discussion."""
+        self._discussion_convergence = convergence
+        try:
+            self._invoke_agent_for_role(role, iteration, review_phase="discuss_review")
+        finally:
+            self._discussion_convergence = False
 
     def _run_spec_verification(self) -> None:
         """Validate all 4 SDD artifacts exist and have substance.
@@ -1753,6 +1819,13 @@ class Orchestrator:
                 self._invoke_agent_for_role(agent_role, iteration, review_phase=review_phase)
 
             if self._state.halt_signal:
+                return
+
+            if active_phase == "dev_active" and not self._verify_frozen_specification():
+                self.halt(
+                    "Developer modified frozen specification after discussion agreement",
+                    category="external",
+                )
                 return
 
             # ---- Review phase -----------------------------------------------
@@ -3366,6 +3439,28 @@ class Orchestrator:
             # so it isn't appended again after assemble_context
             carry_forward = ""
 
+        if review_phase == "discuss_review" and role == "planner":
+            review_file = self._review_file_for_phase(review_phase, iteration)
+            task = (
+                f"Iteration {iteration} — Planner/Developer specification reconciliation.\n"
+                "Compare every Developer proposal item with the user's intent, PRD, "
+                "architecture, specification, and technology choices. You may revise "
+                "the scoped PRD and tech-design to close implementation-level gaps. "
+                f"Write {review_file} with YAML frontmatter verdict PASS only when both "
+                "sides have one implementable agreement; otherwise REQUEST_CHANGES "
+                "with concrete open questions. Do not write implementation code."
+            )
+
+        if review_phase == "discuss_review" and getattr(
+            self, "_discussion_convergence", False
+        ):
+            task += (
+                "\n\nCONVERGENCE REQUIRED: the discussion limit is near. Resolve only "
+                "material user-intent, feasibility, architecture, specification, or "
+                "technology conflicts. Prefer a concrete bounded decision over optional "
+                "refinement. Do not return PASS while a blocking disagreement remains."
+            )
+
         # Prepend the task to system_prompt so the LLM sees it first
         full_system = f"{task}\n\n{system_prompt}"
 
@@ -3847,6 +3942,54 @@ class Orchestrator:
             return False
 
     # === architect-loop pattern: freeze acceptance criteria ===
+    def _specification_files(self) -> list[Path]:
+        """Return existing run-scoped specification artifacts to freeze."""
+        prd_dir = self.spec.world.prd_dir_for(self._run_ctx.pipeline_key)
+        files = [path for path in prd_dir.rglob("*") if path.is_file()]
+        proposal = self.spec.world.reviews_dir_for(self._run_ctx) / "dev-proposal.md"
+        if proposal.is_file():
+            files.append(proposal)
+        return sorted(files)
+
+    def _freeze_specification(self) -> None:
+        """Persist a content-addressed manifest of the agreed specification."""
+        import json
+
+        manifest = {
+            str(path.relative_to(self.spec.world.root)): hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
+            for path in self._specification_files()
+        }
+        target = self.spec.world.unison_run_dir_for(self._run_ctx) / "frozen-spec.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+        )
+
+    def _verify_frozen_specification(self) -> bool:
+        """Fail closed when an agreed specification artifact changes or disappears."""
+        import json
+
+        target = self.spec.world.unison_run_dir_for(self._run_ctx) / "frozen-spec.json"
+        if not target.exists():
+            return True
+        try:
+            manifest = json.loads(target.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict):
+                return False
+            return all(
+                isinstance(rel, str)
+                and isinstance(digest, str)
+                and (self.spec.world.root / rel).is_file()
+                and hashlib.sha256(
+                    (self.spec.world.root / rel).read_bytes()
+                ).hexdigest() == digest
+                for rel, digest in manifest.items()
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return False
+
     def _freeze_acceptance_criteria(self) -> None:
         """Write acceptance criteria to a frozen file before dev starts."""
         world = self.spec.world
@@ -4436,22 +4579,26 @@ class Orchestrator:
         for backward compatibility with existing tests and pipelines.
 
         Planning review → ``reviews/runs/<key>/<run_id>/plan-iter-{N}.md``.
-        Development (or other) review → ``reviews/runs/<key>/<run_id>/iter-{N}.md``.
+        Discussion review → ``reviews/runs/<key>/<run_id>/discuss-iter-{N}.md``.
+        Development review → ``reviews/runs/<key>/<run_id>/iter-{N}.md``.
         """
         ctx = getattr(self, "_run_ctx", None)
         if ctx is not None and hasattr(self.spec.world, "review_file_for"):
             # P0-1: When a RunContext is active, NEVER fall back to legacy
             # global review files — stale PASS verdicts from other pipelines
             # or old reruns must not be accepted by the current run.
-            scoped = (
-                self.spec.world.plan_review_file_for(ctx, iteration)
-                if review_phase == "planning_review"
-                else self.spec.world.review_file_for(ctx, iteration)
-            )
+            if review_phase == "planning_review":
+                scoped = self.spec.world.plan_review_file_for(ctx, iteration)
+            elif review_phase == "discuss_review":
+                scoped = self.spec.world.discussion_review_file_for(ctx, iteration)
+            else:
+                scoped = self.spec.world.review_file_for(ctx, iteration)
             return scoped
         # Legacy fallback (no _run_ctx)
         if review_phase == "planning_review":
             return self.spec.world.reviews_dir / f"plan-iter-{iteration}.md"
+        if review_phase == "discuss_review":
+            return self.spec.world.reviews_dir / f"discuss-iter-{iteration}.md"
         return self.spec.world.reviews_dir / f"iter-{iteration}.md"
 
     def _parse_verdict(

@@ -163,6 +163,10 @@ class World:
         """Run-scoped planning review file."""
         return self.reviews_dir_for(ctx) / f"plan-iter-{iter_n}.md"
 
+    def discussion_review_file_for(self, ctx: RunContext, iter_n: int) -> Path:
+        """Run-scoped Planner/Developer discussion verdict file."""
+        return self.reviews_dir_for(ctx) / f"discuss-iter-{iter_n}.md"
+
     # ---- .unison ----
 
     @property

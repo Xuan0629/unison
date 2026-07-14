@@ -228,10 +228,16 @@ class PromptRegistry:
             "  covering: scope + files to modify + tech approach + boundaries + test plan\n"
             "- Do NOT modify src/ or tests/ — this is a proposal review, not implementation"
         ),
-        "developer::discuss-revise": (
-            "Iteration {iteration} — Discussion Phase: Revise Proposal\n"
-            "Review the findings in {findings_file}. Revise {proposal_file}\n"
-            "to address each finding. Do NOT write code — this is still the proposal phase."
+        "planner::discuss": (
+            "Iteration {iteration} — Planner/Developer Specification Reconciliation\n"
+            "- Read {prd_dir}PRD.md and {prd_dir}tech-design.md\n"
+            "- Read the Developer proposal at {proposal_file}\n"
+            "- Reconcile every proposal item with user intent and revise the scoped "
+            "specification when implementation-level details expose a real gap\n"
+            "- Write {review_file} with PASS only when the specification and proposal "
+            "form one implementable agreement; otherwise REQUEST_CHANGES\n"
+            "- Track concrete open questions in {findings_file}\n"
+            "- Do NOT write implementation code"
         ),
         "reviewer": (
             "Review Iteration {iteration}: "
@@ -241,16 +247,7 @@ class PromptRegistry:
             "4. Include checklist: table with status per item (done/deferred/pending) "
             "5. Do NOT modify src/"
         ),
-        "reviewer::discuss": (
-            "Discussion Review Iteration {iteration}: "
-            "1. Read {prd_dir}PRD.md and {prd_dir}tech-design.md for context\n"
-            "2. Read {proposal_file} — the Developer's implementation plan\n"
-            "3. Critique: scope correct? files right? tech approach reasonable? "
-            "boundaries clear? test plan adequate?\n"
-            "4. Write review to {review_file} with YAML frontmatter\n"
-            "5. Append findings to {findings_file} for cross-iteration tracking\n"
-            "6. Do NOT modify src/ or {proposal_file}"
-        ),
+
         "moa-analyzer": (
             "Iteration {iteration} — MoA Analyzer Operational Constraints:\n"
             "- Follow the orchestrator-supplied mode, target, scope, and primary perspective\n"

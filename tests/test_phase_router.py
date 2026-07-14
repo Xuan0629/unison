@@ -149,6 +149,27 @@ class TestPhaseRouterBackwardCompat:
         assert phases[1].name == "spec-check"
         assert phases[1].active_phase == "spec-check"
 
+    def test_dev_standard_planning_is_not_reviewer_loop(self):
+        """Planner drafts the spec once; Reviewer enters only after development."""
+        phases = PhaseRouter.get_phases("dev:standard")
+        assert phases[0] == PhaseDef(
+            "planning", "planning_active", "", "planner", "PRD + tech-design"
+        )
+        assert phases[1].name == "discuss"
+        assert phases[1].role == "developer"
+        assert phases[1].review_phase == "discuss_review"
+        assert phases[2] == PhaseDef(
+            "dev", "dev_active", "dev_review", "developer", "code + tests"
+        )
+
+    def test_dev_deep_uses_same_pre_development_contract(self):
+        """Deep mode adds final review without changing spec/discuss ownership."""
+        phases = PhaseRouter.get_phases("dev:deep")
+        assert phases[0].review_phase == ""
+        assert phases[1].review_phase == "discuss_review"
+        assert phases[2].review_phase == "dev_review"
+        assert phases[3].name == "review"
+
     def test_deprecated_mode_state_machine_order(self, tmp_path):
         """Deprecated modes execute the exact historical handler order."""
         from typing import cast
