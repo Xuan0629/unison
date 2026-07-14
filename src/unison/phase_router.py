@@ -120,10 +120,9 @@ class PhaseRouter:
         ],
 
         # ── Custom ──────────────────────────────────────────────────────
-        "custom": [
-            PhaseDef("dev", "dev_active", "dev_review", "developer",
-                     "code + tests"),
-        ],
+        # The actual sequence is loaded from PipelineSpec.custom_phases.
+        # This entry keeps the mode in the canonical validation registry.
+        "custom": [],
 
         # ── Deprecated modes with own phase definitions (P0-2) ──────────
         # These preserve the EXACT old behavior before the canonical rename.
@@ -146,6 +145,25 @@ class PhaseRouter:
             PhaseDef("dev", "dev_active", "dev_review", "developer",
                      "code + tests"),
         ],
+    }
+
+    CUSTOM_PHASES: ClassVar[dict[str, PhaseDef]] = {
+        "planning": PhaseDef(
+            "planning", "planning_active", "", "planner", "PRD + tech-design"
+        ),
+        "discuss": PhaseDef(
+            "discuss", "discuss_active", "discuss_review",
+            "developer", "implementation proposal",
+        ),
+        "spec-check": PhaseDef(
+            "spec-check", "spec-check", "", "reviewer", "spec compliance"
+        ),
+        "dev": PhaseDef(
+            "dev", "dev_active", "dev_review", "developer", "code + tests"
+        ),
+        "review": PhaseDef(
+            "review", "dev_review", "", "reviewer", "comprehensive review"
+        ),
     }
 
     # ── Canonical modes used for validation ────────────────────────────
@@ -188,3 +206,8 @@ class PhaseRouter:
     def canonical_modes(cls) -> frozenset[str]:
         """All valid mode names (including moa, which bypasses get_phases)."""
         return cls.CANONICAL_MODES
+
+    @classmethod
+    def custom_phases(cls, names: tuple[str, ...]) -> list[PhaseDef]:
+        """Resolve a loader-validated custom phase sequence."""
+        return [cls.CUSTOM_PHASES[name] for name in names]

@@ -2152,6 +2152,170 @@ class TestP10023ExhaustionAndSkipRedirect:
 
         return Orchestrator(spec=spec)
 
+    def test_custom_mode_dispatches_declared_phases_with_custom_roles(
+        self, tmp_path, monkeypatch,
+    ):
+        """Custom phases execute in declaration order through effective roles."""
+        orch = self._make_orchestrator(tmp_path)
+        base = orch.spec.agents["developer"]
+        custom_agents = {
+            "requirements_guardian": replace(
+                base,
+                role="requirements-guardian", pipeline_role="planner",
+            ),
+            "builder": replace(
+                base,
+                role="domain-builder", pipeline_role="developer",
+            ),
+            "security": replace(
+                base,
+                role="security-auditor", pipeline_role="reviewer",
+            ),
+        }
+        orch.spec = replace(
+            orch.spec,
+            mode="custom",
+            custom_phases=("planning", "discuss", "spec-check", "dev", "review"),
+            agents=custom_agents,
+        )
+        calls = []
+
+        monkeypatch.setattr(orch, "_publish_phase_event", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_write_lifecycle_notification", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_run_planning_phase", lambda: calls.append("planning"))
+        monkeypatch.setattr(orch, "_run_discussion_loop", lambda: calls.append("discuss"))
+        monkeypatch.setattr(orch, "_run_spec_verification", lambda: calls.append("spec-check"))
+        monkeypatch.setattr(
+            orch, "_run_review_only",
+            lambda: calls.append((
+                "review-only", orch._resolve_agent("reviewer").role
+            )),
+        )
+        monkeypatch.setattr(orch, "_freeze_acceptance_criteria", lambda: None)
+        monkeypatch.setattr(orch, "_save_checkpoint", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            orch, "_run_loop",
+            lambda active, review, review_of, role=None: calls.append(
+                (active, review, role, orch._resolve_agent(role).role)
+            ),
+        )
+
+        orch._run_state_machine()
+
+        assert calls == [
+            "planning",
+            "discuss",
+            "spec-check",
+            ("dev_active", "dev_review", "developer", "domain-builder"),
+            ("review-only", "security-auditor"),
+        ]
+
+    def test_runtime_agent_snapshot_preserves_key_role_and_pipeline_role(self, tmp_path):
+        """State/WebUI can display domain identity without losing routing identity."""
+        orch = self._make_orchestrator(tmp_path)
+        security = replace(
+            orch.spec.agents["developer"],
+            role="security-auditor", pipeline_role="reviewer",
+        )
+        spec = replace(orch.spec, agents={"security": security})
+
+        state = Orchestrator(spec).state()
+
+        assert state.runtime_agents == [{
+            "key": "security",
+            "role": "security-auditor",
+            "pipeline_role": "reviewer",
+            "runtime": security.runtime,
+            "model": security.model,
+        }]
+
+    def test_custom_review_only_loads_yaml_and_runs_real_handler(
+        self, tmp_path, monkeypatch,
+    ):
+        """Loader → run() → real review-only handler works with a custom role."""
+        from unison.interfaces import AgentResult
+        from unison.pipeline import PipelineLoader
+
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "prompts" / "security.md").write_text(
+            "Review security risk", encoding="utf-8"
+        )
+        pipeline = tmp_path / "custom.yaml"
+        pipeline.write_text("""
+version: "2.0"
+mode: custom
+phases: [review]
+project_root: "."
+agents:
+  security:
+    role: security-auditor
+    pipeline_role: reviewer
+    runtime: claude
+    model: review-model
+    system_prompt_path: prompts/security.md
+snapshots:
+  enabled: false
+webui:
+  auto_start: false
+""", encoding="utf-8")
+        spec = PipelineLoader().load(pipeline)
+        orch = Orchestrator(spec)
+        runner_calls = []
+
+        class FakeRunner:
+            def run(self, spec, prompt, workdir, timeout, log_path):
+                runner_calls.append((spec.role, spec.effective_role, prompt))
+                return AgentResult(
+                    success=True, exit_code=0, duration=0.01,
+                    stdout_tail="", stderr_tail="", log_path=log_path,
+                )
+
+        orch._runners["claude"] = FakeRunner()
+        monkeypatch.setattr(
+            orch._detector, "detect",
+            lambda **kwargs: AgentResult(
+                success=True, exit_code=0, duration=0.01,
+                stdout_tail="", stderr_tail="", log_path=kwargs["log_path"],
+            ),
+        )
+        monkeypatch.setattr(orch._detector, "_get_commit", lambda *a: None)
+        monkeypatch.setattr(orch._lock_mgr, "acquire", lambda *a, **kw: True)
+        monkeypatch.setattr(orch._lock_mgr, "release", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_count_commits", lambda: 0)
+
+        state = orch.run()
+
+        assert state.phase == "done"
+        assert state.halt_signal is False
+        assert [(role, pipeline_role) for role, pipeline_role, _ in runner_calls] == [
+            ("security-auditor", "reviewer")
+        ]
+        assert "Review security risk" in runner_calls[0][2]
+
+    def test_moa_runtime_agents_use_unified_snapshot_shape(self, tmp_path, monkeypatch):
+        """Dynamic MoA agents expose the same fields as configured agents."""
+        from unison.interfaces import MoaConfig
+
+        orch = self._make_orchestrator(tmp_path)
+        orch.spec = replace(
+            orch.spec, mode="moa:analyze", agents={},
+            moa=MoaConfig(agents=2, analyzer_runtime="claude",
+                          analyzer_model="a", synthesizer_runtime="claude",
+                          synthesizer_model="s"),
+        )
+        orch._state.runtime_agents = []
+        monkeypatch.setattr(orch, "_run_moa_analyze", lambda *a, **kw: None)
+        monkeypatch.setattr(orch, "_run_moa_synthesis", lambda *a, **kw: None)
+
+        orch._run_moa_pipeline()
+
+        assert len(orch.state().runtime_agents) == 3
+        assert all(
+            set(agent) == {"key", "role", "pipeline_role", "runtime", "model"}
+            for agent in orch.state().runtime_agents
+        )
+        assert orch.state().runtime_agents[-1]["pipeline_role"] == "synthesizer"
+
     def test_standard_state_machine_routes_spec_discussion_and_review(
         self, tmp_path, monkeypatch,
     ):

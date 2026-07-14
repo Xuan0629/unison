@@ -327,6 +327,7 @@ class PipelineSpec:
     reviewer_config: ReviewerConfig | None = None  # V2: multi-reviewer
     parallel_groups: dict[str, list[str]] = field(default_factory=dict)  # Pipeline B: effective_role → agent names
     mode: PipelineMode | None = None  # Named pipeline mode (auto-detected if not set)
+    custom_phases: tuple[str, ...] = ()  # mode: custom constrained phase sequence
     max_iterations: int = 5
     max_planning_iterations: int = 3  # Bug 2: Plan-review loop cap. 0 = no planning phase.
     max_discuss_iterations: int = 3   # P9: Discuss-review loop cap (full-dev discuss phase).

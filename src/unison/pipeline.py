@@ -179,6 +179,9 @@ class PipelineLoader:
         # ---- agents ----
         agents_raw = raw.get("agents")
         _mode = raw.get("mode")
+        custom_phases: tuple[str, ...] = ()
+        if _mode == "custom":
+            custom_phases = self._validate_custom_phases(raw.get("phases"))
         if _mode in MOA_MODES:
             # MoA modes generate analyzer/synthesizer agents dynamically
             # from MoaConfig — developer and reviewer are not required.
@@ -190,6 +193,13 @@ class PipelineLoader:
                 raise PipelineValidationError("Missing required field: agents")
             self._validate_required_agents(
                 agents_raw, required=frozenset({"reviewer"})
+            )
+        elif _mode == "custom":
+            if not agents_raw or not isinstance(agents_raw, dict):
+                raise PipelineValidationError("Missing required field: agents")
+            self._validate_required_agents(
+                agents_raw,
+                required=self._required_roles_for_custom_phases(custom_phases),
             )
         else:
             if not agents_raw or not isinstance(agents_raw, dict):
@@ -261,6 +271,7 @@ class PipelineLoader:
             parallel_dev=parallel_dev_cfg,
             parallel_groups=parallel_groups,
             mode=mode,
+            custom_phases=custom_phases,
             max_iterations=raw.get("max_iterations") or (raw.get("project") or {}).get("max_iterations", 5),
             max_planning_iterations=raw.get("max_planning_iterations") or (raw.get("project") or {}).get("max_planning_iterations", 3),
             max_discuss_iterations=raw.get("max_discuss_iterations") or (raw.get("project") or {}).get("max_discuss_iterations", 3),
@@ -399,6 +410,51 @@ class PipelineLoader:
                     f"(via role= or pipeline_role=). "
                     f"Currently configured: {list(agents_raw.keys())}"
                 )
+
+    @staticmethod
+    def _validate_custom_phases(phases: Any) -> tuple[str, ...]:
+        """Validate the constrained declarative phase contract for custom mode."""
+        allowed = ("planning", "discuss", "spec-check", "dev", "review")
+        if not isinstance(phases, list) or not phases:
+            raise PipelineValidationError(
+                "mode: custom requires a non-empty phases list"
+            )
+        if any(not isinstance(phase, str) or phase not in allowed for phase in phases):
+            raise PipelineValidationError(
+                "custom phases must use only: " + ", ".join(allowed)
+            )
+        if len(set(phases)) != len(phases):
+            raise PipelineValidationError("custom phases must not contain duplicates")
+        positions = [allowed.index(phase) for phase in phases]
+        if positions != sorted(positions):
+            raise PipelineValidationError(
+                "custom phases must follow: " + " -> ".join(allowed)
+            )
+        if "discuss" in phases and "planning" not in phases:
+            raise PipelineValidationError(
+                "custom phases containing discuss must also contain planning"
+            )
+        if "spec-check" in phases and "planning" not in phases:
+            raise PipelineValidationError(
+                "custom phases containing spec-check must also contain planning"
+            )
+        return tuple(phases)
+
+    @staticmethod
+    def _required_roles_for_custom_phases(
+        phases: tuple[str, ...],
+    ) -> frozenset[str]:
+        required: set[str] = set()
+        for phase in phases:
+            if phase == "planning":
+                required.add("planner")
+            elif phase == "discuss":
+                required.update(("planner", "developer"))
+            elif phase in {"spec-check", "review"}:
+                required.add("reviewer")
+            elif phase == "dev":
+                required.update(("developer", "reviewer"))
+        return frozenset(required)
 
     # -- builders ------------------------------------------------------
 

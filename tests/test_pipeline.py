@@ -196,6 +196,88 @@ snapshots:
 class TestPipelineValidation:
     """Pipeline validation tests."""
 
+    def _write_custom_pipeline(self, tmp_path, phases, agents=None):
+        agents = agents or {
+            "requirements_guardian": {
+                "role": "requirements-guardian", "pipeline_role": "planner",
+                "runtime": "hermes", "model": "plan",
+                "system_prompt_path": "prompts/planner.md",
+            },
+            "builder": {
+                "role": "domain-builder", "pipeline_role": "developer",
+                "runtime": "claude", "model": "build",
+                "system_prompt_path": "prompts/developer.md",
+            },
+            "security": {
+                "role": "security-auditor", "pipeline_role": "reviewer",
+                "runtime": "codex", "model": "review",
+                "system_prompt_path": "prompts/reviewer.md",
+            },
+        }
+        for spec in agents.values():
+            prompt = tmp_path / spec["system_prompt_path"]
+            prompt.parent.mkdir(parents=True, exist_ok=True)
+            prompt.write_text(spec["role"], encoding="utf-8")
+        pipeline = tmp_path / "custom.yaml"
+        pipeline.write_text(yaml.safe_dump({
+            "version": "2.0",
+            "mode": "custom",
+            "project_root": ".",
+            "phases": phases,
+            "agents": agents,
+        }), encoding="utf-8")
+        return pipeline
+
+    def test_custom_phases_load_with_custom_roles(self, tmp_path):
+        pipeline = self._write_custom_pipeline(
+            tmp_path, ["planning", "discuss", "spec-check", "dev", "review"]
+        )
+
+        spec = PipelineLoader().load(pipeline)
+
+        assert spec.custom_phases == (
+            "planning", "discuss", "spec-check", "dev", "review"
+        )
+        assert spec.agents["requirements_guardian"].effective_role == "planner"
+        assert spec.agents["security"].role == "security-auditor"
+
+    @pytest.mark.parametrize("phases", [
+        None, [], ["dev", "planning"], ["planning", "planning"],
+        ["discuss", "dev"], ["spec-check", "review"], ["shell", "dev"],
+    ])
+    def test_custom_phases_reject_invalid_contracts(self, tmp_path, phases):
+        pipeline = self._write_custom_pipeline(tmp_path, phases)
+
+        with pytest.raises(PipelineValidationError, match="phases"):
+            PipelineLoader().load(pipeline)
+
+    def test_custom_phases_require_only_roles_they_execute(self, tmp_path):
+        agents = {
+            "security": {
+                "role": "security-auditor", "pipeline_role": "reviewer",
+                "runtime": "codex", "model": "review",
+                "system_prompt_path": "prompts/reviewer.md",
+            },
+        }
+        pipeline = self._write_custom_pipeline(tmp_path, ["review"], agents)
+
+        spec = PipelineLoader().load(pipeline)
+
+        assert spec.custom_phases == ("review",)
+
+    def test_custom_phases_reject_missing_effective_role(self, tmp_path):
+        agents = {
+            "builder": {
+                "role": "domain-builder", "pipeline_role": "developer",
+                "runtime": "claude", "model": "build",
+                "system_prompt_path": "prompts/developer.md",
+            },
+        }
+        pipeline = self._write_custom_pipeline(tmp_path, ["dev"], agents)
+
+        with pytest.raises(PipelineValidationError, match="reviewer"):
+            PipelineLoader().load(pipeline)
+
     def test_validate_missing_version(self, tmp_path):
         """Validate pipeline without version field is auto-migrated to V2.
         Version is no longer required — missing version defaults to "1.0"

@@ -88,6 +88,16 @@ class Orchestrator:
         self.spec = spec
         self.dry_run = dry_run
         self._state = State()
+        self._state.runtime_agents = [
+            {
+                "key": key,
+                "role": agent.role,
+                "pipeline_role": agent.effective_role,
+                "runtime": agent.runtime,
+                "model": agent.model,
+            }
+            for key, agent in self.spec.agents.items()
+        ]
         self._run_history = RunHistoryStore(self.spec.world.root)
         self._run_history_started = False
         self._halt_category: str = "stage"  # "stage" or "external" (P0.5)
@@ -532,7 +542,11 @@ class Orchestrator:
             self._run_chain()
             return
 
-        phases = PhaseRouter.get_phases(mode)
+        phases = (
+            PhaseRouter.custom_phases(self.spec.custom_phases)
+            if mode == "custom"
+            else PhaseRouter.get_phases(mode)
+        )
         if not phases:
             self.halt(f"Unknown pipeline mode: {mode}", category="external")
             return
@@ -710,13 +724,18 @@ class Orchestrator:
         # to preserve agents from earlier modes instead of overwriting)
         moa_agents = []
         for i in range(1, moa_config.agents + 1):
+            key = f"moa-analyzer-{i}"
             moa_agents.append({
-                "role": f"moa-analyzer-{i}",
+                "key": key,
+                "role": key,
+                "pipeline_role": "analyzer",
                 "runtime": moa_config.analyzer_runtime,
                 "model": moa_config.analyzer_model,
             })
         moa_agents.append({
+            "key": "moa-synthesizer",
             "role": "moa-synthesizer",
+            "pipeline_role": "synthesizer",
             "runtime": moa_config.synthesizer_runtime,
             "model": moa_config.synthesizer_model,
         })
@@ -1192,9 +1211,11 @@ class Orchestrator:
                     # P0.3: Populate runtime_agents for non-MoA stages
                     # (_run_moa_pipeline handles its own population).
                     if self.spec.mode not in MOA_MODES:
-                        for agent in self.spec.agents.values():
+                        for key, agent in self.spec.agents.items():
                             self._state.runtime_agents.append({
+                                "key": key,
                                 "role": agent.role,
+                                "pipeline_role": agent.effective_role,
                                 "runtime": agent.runtime,
                                 "model": agent.model,
                             })

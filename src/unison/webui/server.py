@@ -480,10 +480,12 @@ class UnisonHandler(BaseHTTPRequestHandler):
             return []
 
         agents = []
-        for role, spec in agents_raw.items():
+        for key, spec in agents_raw.items():
             if isinstance(spec, dict):
                 agents.append({
-                    "role": role,
+                    "key": key,
+                    "role": spec.get("role", key),
+                    "pipeline_role": spec.get("pipeline_role") or spec.get("role", key),
                     "runtime": spec.get("runtime", "unknown"),
                     "model": spec.get("model", "unknown"),
                 })

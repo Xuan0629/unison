@@ -210,6 +210,30 @@ class TestUnifiedDataSources:
             "planner-model", "dev-model",
         ]
 
+    def test_pipeline_agent_fallback_preserves_custom_role_mapping(self, tmp_path):
+        from unison.webui import UnisonHandler
+
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+        agents = handler._load_agents(State(), {
+            "agents": {
+                "security": {
+                    "role": "security-auditor",
+                    "pipeline_role": "reviewer",
+                    "runtime": "codex",
+                    "model": "review-model",
+                },
+            },
+        })
+
+        assert agents == [{
+            "key": "security",
+            "role": "security-auditor",
+            "pipeline_role": "reviewer",
+            "runtime": "codex",
+            "model": "review-model",
+        }]
+
     def test_runtime_agents_come_from_loaded_state_not_second_file_read(self, tmp_path):
         import json
         from unison.webui import UnisonHandler
@@ -727,8 +751,20 @@ class TestLoadAgents:
         with patch.object(handler, "_load_pipeline_config", return_value=pipeline):
             agents = handler._load_agents()
         assert len(agents) == 2
-        assert agents[0] == {"role": "planner", "runtime": "claude", "model": "claude-sonnet-4-6"}
-        assert agents[1] == {"role": "developer", "runtime": "claude", "model": "claude-sonnet-4-6"}
+        assert agents[0] == {
+            "key": "planner",
+            "role": "planner",
+            "pipeline_role": "planner",
+            "runtime": "claude",
+            "model": "claude-sonnet-4-6",
+        }
+        assert agents[1] == {
+            "key": "developer",
+            "role": "developer",
+            "pipeline_role": "developer",
+            "runtime": "claude",
+            "model": "claude-sonnet-4-6",
+        }
 
     def test_string_value_agent_skipped(self):
         """Agent values that are strings (not dicts) are skipped."""
