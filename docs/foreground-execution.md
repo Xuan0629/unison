@@ -158,4 +158,4 @@ Unit and integration tests must cover:
 - Observer reports but cannot restart foreground work;
 - existing headless runner command tests remain unchanged.
 
-Linux end-to-end validation runs in a disposable git repository with real Claude and Codex native approval. macOS validation is executed by an external collaborator using the repository test guide delivered in this feature.
+Linux end-to-end validation runs in a disposable git repository with real Claude and Codex native approval. macOS validation is executed by an external collaborator using [the macOS foreground-execution validation pack](foreground-execution-macos-validation.md).
