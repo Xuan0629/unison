@@ -18,6 +18,7 @@
 
 - [x] Step 4a: introduced an isolated foreground invocation artifact contract: run-scoped UUID directory, atomic request/child/result/heartbeat records, and fail-closed identity validation. Targeted regression: `31 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`.
 - [x] Step 4c-state: added durable, read-only `active_foreground_invocation` State metadata with backward-compatible v2.0 loading and strict malformed-record rejection. Targeted state/checkpoint regression: `48 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`.
+- [x] Step 5a: added Observer foreground detection-only notifications for verified result availability, artifact evidence mismatch, and unverifiable wrapper identity. The Observer never evaluates a cross-process heartbeat timeout because Orchestrator monotonic timestamps are not portable across processes; 90-second timeout remains a future Orchestrator concern. Targeted Observer/state/checkpoint regression: `181 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`.
 - [ ] Step 4c-orchestrator: integrate verified foreground invocation completion only after Step 4b has an approved native-launch/prompt protocol.
 
 ## Decision Needed

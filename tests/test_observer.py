@@ -20,7 +20,8 @@ from unison.observer import (
     Observer,
     PollingWatcher,
 )
-from unison.state import State
+from unison.foreground import ForegroundInvocation, ProcessIdentity
+from unison.state import ForegroundInvocationState, State
 from unison.world import World
 
 
@@ -2913,3 +2914,174 @@ class TestObserverRedirectOnSkipFailure:
         assert redirect_file.exists()
         data = json.loads(redirect_file.read_text())
         assert "loop exhausts" in data["reason"]
+
+
+class TestForegroundDetectionOnly:
+    def _active_state(self, invocation: ForegroundInvocation) -> State:
+        return State(
+            phase="dev_active",
+            active_foreground_invocation=ForegroundInvocationState(
+                invocation_id=invocation.invocation_id,
+                phase="dev_active",
+                role="developer",
+                runtime="claude",
+                wrapper_pid=1234,
+                wrapper_start_identity="linux:100",
+                launcher_pid=None,
+                artifact_dir=str(invocation.directory),
+                result_path=str(invocation.result_path),
+                output_path=str(invocation.output_path),
+                started_at="2026-07-15T00:00:00Z",
+                last_heartbeat_observed_at=None,
+            ),
+        )
+
+    def test_verified_result_only_emits_reconcile_notification(self, tmp_path):
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / ".unison" / "runs" / "pipeline" / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path,
+            command=["claude"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        child = ProcessIdentity(pid=4321, start_identity="linux:200")
+        invocation.write_child(child, process_group_id=4321)
+        invocation.write_result(child, exit_code=0, started_at="2026-07-15T00:00:00Z")
+        state = self._active_state(invocation)
+        observer = Observer(world=world)
+
+        assert observer.observe_foreground_invocation(state) == "verified_result_available"
+        assert observer.observe_foreground_invocation(state) == "verified_result_available"
+
+        records = [json.loads(line) for line in world.notifications_file.read_text().splitlines()]
+        assert len(records) == 1
+        assert records[0]["event_type"] == "foreground_reconcile_needed"
+        assert records[0]["summary"] == f"{invocation.invocation_id}: verified_result_available"
+        assert not world.state_file.exists()
+        assert not (world.unison_dir / "control").exists()
+
+    def test_no_active_foreground_invocation_is_silent(self, tmp_path):
+        world = World(root=tmp_path)
+        world.ensure_directories()
+
+        assert Observer(world=world).observe_foreground_invocation(State()) is None
+        assert not world.notifications_file.exists()
+
+    def test_artifact_path_escape_only_emits_unverifiable_notification(self, tmp_path):
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / ".unison" / "runs" / "pipeline" / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path,
+            command=["claude"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        state = self._active_state(invocation)
+        active = state.active_foreground_invocation
+        assert active is not None
+        state.active_foreground_invocation = ForegroundInvocationState(
+            invocation_id=active.invocation_id,
+            phase=active.phase,
+            role=active.role,
+            runtime=active.runtime,
+            wrapper_pid=active.wrapper_pid,
+            wrapper_start_identity=active.wrapper_start_identity,
+            launcher_pid=active.launcher_pid,
+            artifact_dir=str(world.unison_dir / "runs" / ".." / "outside" / active.invocation_id),
+            result_path=active.result_path,
+            output_path=active.output_path,
+            started_at=active.started_at,
+            last_heartbeat_observed_at=None,
+        )
+
+        assert Observer(world=world).observe_foreground_invocation(state) == "foreground_artifact_unverifiable"
+        record = json.loads(world.notifications_file.read_text())
+        assert record["summary"] == f"{invocation.invocation_id}: foreground_artifact_unverifiable"
+        assert not (world.unison_dir / "control").exists()
+
+    def test_full_rescan_detects_verified_result_without_state_mutation(self, tmp_path):
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / ".unison" / "runs" / "pipeline" / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path,
+            command=["claude"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        child = ProcessIdentity(pid=4321, start_identity="linux:200")
+        invocation.write_child(child, process_group_id=4321)
+        invocation.write_result(child, exit_code=0, started_at="2026-07-15T00:00:00Z")
+        state = self._active_state(invocation)
+        state.atomic_write(world.state_file)
+
+        Observer(world=world)._full_rescan()
+
+        records = [json.loads(line) for line in world.notifications_file.read_text().splitlines()]
+        record = next(record for record in records if record["event_type"] == "foreground_reconcile_needed")
+        assert record["summary"] == f"{invocation.invocation_id}: verified_result_available"
+        persisted = State.atomic_read(world.state_file)
+        assert persisted.active_foreground_invocation == state.active_foreground_invocation
+        assert not (world.unison_dir / "control").exists()
+
+    def test_matching_wrapper_identity_emits_nothing(self, tmp_path, monkeypatch):
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / ".unison" / "runs" / "pipeline" / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path,
+            command=["claude"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        state = self._active_state(invocation)
+        observer = Observer(world=world)
+        monkeypatch.setattr(
+            "unison.observer.read_process_identity",
+            lambda _pid: ProcessIdentity(pid=1234, start_identity="linux:100"),
+        )
+
+        assert observer.observe_foreground_invocation(state) is None
+        assert not world.notifications_file.exists()
+        assert not world.state_file.exists()
+        assert not (world.unison_dir / "control").exists()
+
+    def test_unverifiable_wrapper_only_emits_reconcile_notification(self, tmp_path, monkeypatch):
+        world = World(root=tmp_path)
+        world.ensure_directories()
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / ".unison" / "runs" / "pipeline" / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="codex",
+            workdir=tmp_path,
+            command=["codex"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        state = self._active_state(invocation)
+        observer = Observer(world=world)
+        monkeypatch.setattr("unison.observer.read_process_identity", lambda _pid: None)
+
+        assert observer.observe_foreground_invocation(state) == "wrapper_identity_unverifiable"
+
+        record = json.loads(world.notifications_file.read_text())
+        assert record["event_type"] == "foreground_reconcile_needed"
+        assert record["summary"] == f"{invocation.invocation_id}: wrapper_identity_unverifiable"
+        assert not world.state_file.exists()
+        assert not (world.unison_dir / "control").exists()

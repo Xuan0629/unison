@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+from unison.foreground import ForegroundInvocation, ProcessIdentity, read_process_identity
 from unison.world import World
 from unison.state import State
 from unison.event_bus import get_event_bus
@@ -637,6 +638,7 @@ class Observer:
         self._last_stall_emit: float = 0.0        # time.monotonic() of last emission
         self._stall_episode_active: bool = False
         self._stall_escalation_count: int = 0      # increments each cooldown cycle
+        self._foreground_notification_keys: set[tuple[str, str]] = set()
 
     # ---- public API ----------------------------------------------------------
 
@@ -758,6 +760,7 @@ class Observer:
                             self._reset_stall_state()
                         # P10: Check for SKIP intervention on every state read
                         self._check_skip_intervention(state)
+                        self._observe_foreground_safely(state)
                     except Exception:
                         pass
                 continue
@@ -797,6 +800,7 @@ class Observer:
 
                 # P10: Check for SKIP intervention on every state.json change
                 self._check_skip_intervention(state)
+                self._observe_foreground_safely(state)
 
             # 处理 notifications.jsonl 变化
             if event.path.name == "notifications.jsonl":
@@ -1287,6 +1291,80 @@ class Observer:
 
         return elapsed < self.stall_threshold_seconds
 
+    def _observe_foreground_safely(self, state: State) -> None:
+        """Keep foreground evidence failures from stopping Observer monitoring."""
+        try:
+            self.observe_foreground_invocation(state)
+        except (OSError, ValueError):
+            active = state.active_foreground_invocation
+            if active is not None:
+                self._emit_foreground_reconcile_needed(
+                    state, active.invocation_id, "foreground_artifact_unverifiable"
+                )
+
+    def observe_foreground_invocation(self, state: State) -> str | None:
+        """Emit a detection-only foreground reconciliation notification.
+
+        The Observer never controls, kills, resumes, or launches a process.
+        It only validates evidence that is already present and asks the user
+        to run an explicit reconciliation path when that evidence changes.
+        """
+        active = state.active_foreground_invocation
+        if active is None:
+            return None
+
+        directory = Path(active.artifact_dir).resolve()
+        expected_root = (self.world.unison_dir / "runs").resolve()
+        invocation = ForegroundInvocation(
+            invocation_id=active.invocation_id,
+            directory=directory,
+        )
+        if (
+            not directory.is_relative_to(expected_root)
+            or directory.name != active.invocation_id
+            or directory.parent.name != "foreground"
+            or invocation.result_path != Path(active.result_path)
+            or invocation.output_path != Path(active.output_path)
+        ):
+            return self._emit_foreground_reconcile_needed(
+                state, active.invocation_id, "foreground_artifact_unverifiable"
+            )
+
+        if invocation.read_verified_result() is not None:
+            return self._emit_foreground_reconcile_needed(
+                state, active.invocation_id, "verified_result_available"
+            )
+
+        observed = read_process_identity(active.wrapper_pid)
+        expected = ProcessIdentity(
+            pid=active.wrapper_pid,
+            start_identity=active.wrapper_start_identity,
+        )
+        if observed != expected:
+            return self._emit_foreground_reconcile_needed(
+                state, active.invocation_id, "wrapper_identity_unverifiable"
+            )
+        return None
+
+    def _emit_foreground_reconcile_needed(
+        self, state: State, invocation_id: str, reason: str
+    ) -> str:
+        key = (invocation_id, reason)
+        if key not in self._foreground_notification_keys:
+            self._foreground_notification_keys.add(key)
+            summary = f"{invocation_id}: {reason}"
+            self._emit_event(
+                event_type="foreground_reconcile_needed",
+                phase=state.phase,
+                severity="warn",
+                title="Foreground invocation needs reconciliation",
+                body=summary,
+                iteration=state.iteration,
+                summary=summary,
+                run_id=state.run_id,
+            )
+        return reason
+
     def send_full_report(self, session_id: str, report_path: Path) -> bool:
         """Write a full report covering current state + recent notifications.
 
@@ -1422,6 +1500,7 @@ class Observer:
             else:
                 self._reset_stall_state()
             self._check_skip_intervention(state)
+            self._observe_foreground_safely(state)
 
         # 检查 notifications.jsonl
         if self.world.notifications_file.exists():
