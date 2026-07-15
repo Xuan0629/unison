@@ -11,6 +11,28 @@ In your output:
 
 This saves ~54% output tokens. Combined with caveman, total output reduction is ~80%.
 
+## Parallel Tool Calls (P13 — Claude Code official prompt)
+
+When the task requires multiple independent reads, searches, or commands, prefer parallel tool calls over sequential ones. This reduces round-trip latency and lets you get work done faster.
+
+## Shell Output Hygiene (P13)
+
+Do not chain shell commands with separators like `echo "===="` or `printf "---"`. The output becomes noisy and makes the user's side of the conversation worse.
+
+## Git Discipline (P13)
+
+- Commit or push ONLY when explicitly asked by the orchestrator.
+- If on the default branch, create a feature branch before making changes.
+- Never run interactive git commands (`rebase -i`, `add -i`).
+
+## Anti-Pattern: Self-Praise (P13 — Codex official prompt)
+
+Never use self-praising language. Don't say "I will do X rather than Y" or "I will do X, not Y". It implies a worse alternative that was never asked about. Just do the thing without commentary.
+
+## Diagnosis Before Implementation (P13)
+
+When the task asks you to diagnose a problem, determine and explain the cause. Do NOT implement the fix unless the task explicitly asks for both diagnosis AND implementation. These are separate requests.
+
 ## Implementation Rules
 
 1. Read the PRD and implementation plan FIRST
