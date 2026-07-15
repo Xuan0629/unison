@@ -17,7 +17,13 @@
 ## In Progress
 
 - [x] Step 4a: introduced an isolated foreground invocation artifact contract: run-scoped UUID directory, atomic request/child/result/heartbeat records, and fail-closed identity validation. Targeted regression: `31 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`.
-- [ ] Step 4b: add dedicated Claude/Codex interactive argv builders and platform launcher adapters. This remains separate from state/recovery integration.
+- [ ] Step 4b: blocked on an explicit prompt-delivery decision before interactive argv builders and platform launcher adapters. This remains separate from state/recovery integration.
+
+## Decision Needed
+
+- Native Claude and Codex interactive commands can be built without bypass flags: verified from local `--help` that Claude supports `--permission-mode manual` and Codex supports `--sandbox workspace-write --ask-for-approval on-request`.
+- The target design says the task prompt is written to an invocation-local file, while the guardrail prohibits Unison input injection. Supplying the prompt as a positional CLI argument would automatically submit it to the native session and is therefore input injection; omitting it requires a human to open/read/paste the prompt file before work starts.
+- Existing headless Claude provider routing uses `cc-switch`, but its current public help does not prove interactive TTY argv forwarding. Interactive `cc-switch` provider routing remains unimplemented and must fail closed until separately evidenced.
 
 ## Next
 
