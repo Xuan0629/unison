@@ -46,7 +46,9 @@ from unison.interfaces import (
     BudgetConfig,
     ChainConfig,
     ChainStage,
+    ExecutionConfig,
     GreenfieldConfig,
+    InteractiveConfig,
     MOA_MODES,
     MoaConfig,
     PipelineMode,
@@ -219,6 +221,7 @@ class PipelineLoader:
         budget_cfg = self._build_budget(raw.get("budget"))
         snapshots_cfg = self._build_snapshots(raw.get("snapshots"))
         risk_cfg = self._build_risk_matrix(raw.get("risk_matrix"))
+        execution_cfg = self._build_execution(raw.get("execution"))
 
         # ---- V2 fields ----
         dag_cfg = self._build_dag(raw.get("dag"))
@@ -257,7 +260,7 @@ class PipelineLoader:
         # P10: Load pipeline name — from project.name or pipeline file stem
         pipeline_name = project_raw.get("name") or pipeline_file.stem
 
-        return PipelineSpec(
+        spec = PipelineSpec(
             version=version,
             world=world,
             agents=agents,
@@ -266,6 +269,7 @@ class PipelineLoader:
             budget=budget_cfg,
             snapshots=snapshots_cfg,
             risk_matrix=risk_cfg,
+            execution=execution_cfg,
             dag=dag_cfg,
             reviewer_config=reviewer_cfg,
             parallel_dev=parallel_dev_cfg,
@@ -291,6 +295,8 @@ class PipelineLoader:
             observer_language=observer_language,
             pipeline_name=pipeline_name,
         )
+        PipelineLoader.validate_execution(spec)
+        return spec
 
     # ------------------------------------------------------------------
     # dry_run
@@ -373,6 +379,77 @@ class PipelineLoader:
                     f"Prompt file not found for '{role}': {prompt_path}"
                 )
         return True
+
+    def _build_execution(self, raw: dict[str, Any] | None) -> ExecutionConfig:
+        """Build the opt-in execution policy without changing headless defaults."""
+        if raw is None:
+            return ExecutionConfig()
+        if not isinstance(raw, dict):
+            raise PipelineValidationError("execution must be a mapping")
+
+        mode = raw.get("mode", "headless")
+        if mode not in {"headless", "interactive"}:
+            raise PipelineValidationError(
+                "execution.mode must be 'headless' or 'interactive'"
+            )
+        interactive_raw = raw.get("interactive", {})
+        if not isinstance(interactive_raw, dict):
+            raise PipelineValidationError("execution.interactive must be a mapping")
+        backend = interactive_raw.get("backend", "herdr")
+        if backend != "herdr":
+            raise PipelineValidationError(
+                "execution.interactive.backend must be 'herdr'"
+            )
+        session_name = interactive_raw.get("session_name", "")
+        workspace_label = interactive_raw.get("workspace_label", "")
+        approval_timeout_seconds = interactive_raw.get("approval_timeout_seconds", 0)
+        pause_while_blocked = interactive_raw.get(
+            "pause_pipeline_timeout_while_blocked", True
+        )
+        if not isinstance(session_name, str):
+            raise PipelineValidationError("execution.interactive.session_name must be a string")
+        if not isinstance(workspace_label, str):
+            raise PipelineValidationError("execution.interactive.workspace_label must be a string")
+        if isinstance(approval_timeout_seconds, bool) or not isinstance(approval_timeout_seconds, int) or approval_timeout_seconds < 0:
+            raise PipelineValidationError(
+                "execution.interactive.approval_timeout_seconds must be a non-negative integer"
+            )
+        if not isinstance(pause_while_blocked, bool):
+            raise PipelineValidationError(
+                "execution.interactive.pause_pipeline_timeout_while_blocked must be a boolean"
+            )
+        return ExecutionConfig(
+            mode=mode,
+            interactive=InteractiveConfig(
+                backend=backend,
+                session_name=session_name,
+                workspace_label=workspace_label,
+                approval_timeout_seconds=approval_timeout_seconds,
+                pause_pipeline_timeout_while_blocked=pause_while_blocked,
+            ),
+        )
+
+    @staticmethod
+    def validate_execution(spec: PipelineSpec) -> None:
+        """Fail closed for unsupported interactive combinations before dispatch."""
+        if spec.execution.mode == "headless":
+            return
+        if spec.mode in MOA_MODES:
+            raise PipelineValidationError("interactive execution does not support MoA modes")
+        if spec.mode == "chain" or spec.chain.stages:
+            raise PipelineValidationError("interactive execution does not support chain mode")
+        if spec.dag is not None:
+            raise PipelineValidationError("interactive execution does not support DAG")
+        if spec.parallel_dev is not None and spec.parallel_dev.enabled:
+            raise PipelineValidationError(
+                "interactive execution does not support parallel_dev"
+            )
+        unsupported = sorted({agent.runtime for agent in spec.agents.values()} - {"claude", "codex"})
+        if unsupported:
+            raise PipelineValidationError(
+                "interactive execution only supports claude and codex; unsupported runtime(s): "
+                + ", ".join(unsupported)
+            )
 
     # ==================================================================
     # Private helpers

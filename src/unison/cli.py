@@ -84,6 +84,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override agent model: --model reviewer:YOUR_MODEL",
     )
 
+    run.add_argument(
+        "--interactive", action="store_true",
+        help="Use the local interactive execution policy for this run only",
+    )
+
     # --- dry-run -----------------------------------------------------
     dr = sub.add_parser("dry-run", help="Validate pipeline.yaml without running")
     dr.add_argument("--pipeline", required=True, type=Path)
@@ -302,6 +307,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"OVERRIDE ERROR: {error}", file=sys.stderr)
         return 1
 
+    if getattr(args, "interactive", False):
+        spec = replace(spec, execution=replace(spec.execution, mode="interactive"))
+    try:
+        PipelineLoader.validate_execution(spec)
+    except PipelineValidationError as error:
+        print(f"EXECUTION ERROR: {error}", file=sys.stderr)
+        return 1
+    print(f"Effective execution mode: {spec.execution.mode}")
+    if spec.execution.mode == "interactive":
+        print(
+            "EXECUTION ERROR: interactive execution is configured but the "
+            "Herdr backend is not implemented yet",
+            file=sys.stderr,
+        )
+        return 1
+
     if not authorize_run(spec, TRUSTED_LOCAL_PRINCIPAL):
         print(
             "AUTHORIZATION ERROR: local CLI is not allowed by who_can_run",
@@ -344,6 +365,7 @@ def _cmd_dry_run(args: argparse.Namespace) -> int:
     mode = loader.mode(spec)
     print(f"OK  spec.version = {spec.version}")
     print(f"OK  mode = {mode}")
+    print(f"OK  execution.mode = {spec.execution.mode}")
     print(f"OK  agents = {sorted(spec.agents.keys())}")
     print(f"OK  world.root = {spec.world.root}")
     print(f"OK  project.test_command = {spec.project.test_command}")

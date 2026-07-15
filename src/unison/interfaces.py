@@ -41,6 +41,7 @@ Phase: TypeAlias = Literal[
 ]
 AgentRole: TypeAlias = str
 Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
+ExecutionMode: TypeAlias = Literal["headless", "interactive"]
 Verdict: TypeAlias = Literal["PASS", "REQUEST_CHANGES", "EXHAUSTED"]
 Actor: TypeAlias = AgentRole | Literal["orchestrator", "observer", "harness_optimizer", "sean"]
 ProjectLanguage: TypeAlias = Literal["python", "node", "rust", "go", "custom"]
@@ -107,6 +108,23 @@ class AgentSpec:
 # ============================================================================
 # PipelineSpec — 一次 pipeline 运行的全部配置
 # ============================================================================
+
+@dataclass(frozen=True)
+class ExecutionConfig:
+    """Run-level execution policy; headless remains the default."""
+    mode: ExecutionMode = "headless"
+    interactive: "InteractiveConfig" = field(default_factory=lambda: InteractiveConfig())
+
+
+@dataclass(frozen=True)
+class InteractiveConfig:
+    """Local operator settings for the Herdr-backed interactive backend."""
+    backend: Literal["herdr"] = "herdr"
+    session_name: str = ""
+    workspace_label: str = ""
+    approval_timeout_seconds: int = 0
+    pause_pipeline_timeout_while_blocked: bool = True
+
 
 @dataclass(frozen=True)
 class ProjectConfig:
@@ -317,6 +335,7 @@ class PipelineSpec:
     world: World
     agents: dict[AgentRole, AgentSpec]
     project: ProjectConfig = field(default_factory=ProjectConfig)
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     bootstrap: BootstrapConfig = field(default_factory=BootstrapConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     snapshots: SnapshotConfig = field(default_factory=SnapshotConfig)
