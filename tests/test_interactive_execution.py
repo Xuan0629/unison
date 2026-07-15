@@ -1,4 +1,6 @@
 """Phase A tests for the opt-in interactive execution contract."""
+import json
+
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,6 +9,11 @@ from unittest.mock import MagicMock
 import pytest
 import yaml
 
+from unison.foreground import (
+    ForegroundInvocation,
+    ProcessIdentity,
+    read_process_identity,
+)
 from unison.interfaces import AgentSpec, PipelineSpec, ProjectConfig, World
 from unison.pipeline import PipelineLoader, PipelineValidationError
 
@@ -276,3 +283,94 @@ class TestExecutionPolicyCli:
 
         assert cli._cmd_dry_run(SimpleNamespace(pipeline=tmp_path / "pipeline.yaml")) == 0
         assert "OK  execution.selected_policy = automatic" in capsys.readouterr().out
+
+
+class TestForegroundInvocationArtifacts:
+    def test_create_writes_run_scoped_request_with_immutable_identity(self, tmp_path):
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / "runs" / "pipeline" / "run-id",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path / "workspace",
+            command=["claude", "--permission-mode", "manual"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit="abc123",
+        )
+
+        request = invocation.read_request()
+
+        assert invocation.directory.parent == tmp_path / "runs" / "pipeline" / "run-id" / "foreground"
+        assert invocation.directory.name == invocation.invocation_id
+        assert request["schema_version"] == 1
+        assert request["invocation_id"] == invocation.invocation_id
+        assert request["phase"] == "dev_active"
+        assert request["command"] == ["claude", "--permission-mode", "manual"]
+
+        invocation.request_path.write_text(
+            json.dumps({"schema_version": 1, "invocation_id": "other"}),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="invalid"):
+            invocation.read_request()
+
+    def test_result_requires_matching_child_identity_and_numeric_exit_code(self, tmp_path):
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path,
+            command=["claude"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        child = ProcessIdentity(pid=123, start_identity="linux:456")
+        invocation.write_child(child, process_group_id=123)
+        invocation.write_result(child, exit_code=0, started_at="2026-07-15T00:00:00Z")
+
+        assert invocation.read_verified_result() is not None
+
+        invocation.child_path.unlink()
+        assert invocation.read_verified_result() is None
+        invocation.write_child(child, process_group_id=123)
+
+        with pytest.raises(ValueError, match="integer"):
+            invocation.write_result(child, exit_code=True, started_at="2026-07-15T00:00:00Z")
+
+        invocation.result_path.write_text(
+            json.dumps({
+                "schema_version": 1,
+                "invocation_id": invocation.invocation_id,
+                "child_pid": 123,
+                "child_start_identity": "linux:wrong",
+                "exit_code": 0,
+            }),
+            encoding="utf-8",
+        )
+        assert invocation.read_verified_result() is None
+
+    def test_heartbeat_requires_matching_wrapper_identity(self, tmp_path):
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="codex",
+            workdir=tmp_path,
+            command=["codex"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        wrapper = ProcessIdentity(pid=999, start_identity="linux:1000")
+        invocation.write_heartbeat(wrapper, observed_at="2026-07-15T00:00:00Z")
+
+        assert invocation.read_verified_heartbeat(wrapper) is not None
+        assert invocation.read_verified_heartbeat(
+            ProcessIdentity(pid=999, start_identity="linux:other")
+        ) is None
+
+    def test_linux_process_identity_is_unverifiable_when_proc_stat_is_missing(self, monkeypatch):
+        monkeypatch.setattr("unison.foreground.sys.platform", "linux")
+        monkeypatch.setattr("unison.foreground.Path.read_text", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("missing")))
+
+        assert read_process_identity(12345) is None
