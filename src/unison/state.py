@@ -84,6 +84,81 @@ class Transition:
 
 
 # ============================================================================
+# Foreground Invocation State
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class ForegroundInvocationState:
+    """Durable, read-only evidence for one active foreground invocation."""
+
+    invocation_id: str
+    phase: str
+    role: str
+    runtime: str
+    wrapper_pid: int
+    wrapper_start_identity: str
+    launcher_pid: int | None
+    artifact_dir: str
+    result_path: str
+    output_path: str
+    started_at: str
+    last_heartbeat_observed_at: str | None
+
+    def to_dict(self) -> dict:
+        return {
+            "invocation_id": self.invocation_id,
+            "phase": self.phase,
+            "role": self.role,
+            "runtime": self.runtime,
+            "wrapper_pid": self.wrapper_pid,
+            "wrapper_start_identity": self.wrapper_start_identity,
+            "launcher_pid": self.launcher_pid,
+            "artifact_dir": self.artifact_dir,
+            "result_path": self.result_path,
+            "output_path": self.output_path,
+            "started_at": self.started_at,
+            "last_heartbeat_observed_at": self.last_heartbeat_observed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ForegroundInvocationState | None":
+        if not isinstance(data, dict):
+            return None
+        required_strings = (
+            "invocation_id", "phase", "role", "runtime", "wrapper_start_identity",
+            "artifact_dir", "result_path", "output_path", "started_at",
+        )
+        if any(not isinstance(data.get(key), str) or not data[key] for key in required_strings):
+            return None
+        wrapper_pid = data.get("wrapper_pid")
+        launcher_pid = data.get("launcher_pid")
+        heartbeat = data.get("last_heartbeat_observed_at")
+        if (
+            isinstance(wrapper_pid, bool)
+            or not isinstance(wrapper_pid, int)
+            or wrapper_pid <= 0
+            or (launcher_pid is not None and (isinstance(launcher_pid, bool) or not isinstance(launcher_pid, int) or launcher_pid <= 0))
+            or (heartbeat is not None and not isinstance(heartbeat, str))
+        ):
+            return None
+        return cls(
+            invocation_id=data["invocation_id"],
+            phase=data["phase"],
+            role=data["role"],
+            runtime=data["runtime"],
+            wrapper_pid=wrapper_pid,
+            wrapper_start_identity=data["wrapper_start_identity"],
+            launcher_pid=launcher_pid,
+            artifact_dir=data["artifact_dir"],
+            result_path=data["result_path"],
+            output_path=data["output_path"],
+            started_at=data["started_at"],
+            last_heartbeat_observed_at=heartbeat,
+        )
+
+
+# ============================================================================
 # State
 # ============================================================================
 
@@ -108,6 +183,7 @@ class State:
     observer_language: str = "en"  # P10: Language for observer notifications
     pipeline_name: str = ""        # P10: Human-readable pipeline name
     run_id: str = ""               # Canonical execution identity
+    active_foreground_invocation: ForegroundInvocationState | None = None
 
     def __post_init__(self) -> None:
         if self.phase not in VALID_PHASES:
@@ -141,6 +217,11 @@ class State:
             "observer_language": self.observer_language,
             "pipeline_name": self.pipeline_name,
             "run_id": self.run_id,
+            "active_foreground_invocation": (
+                self.active_foreground_invocation.to_dict()
+                if self.active_foreground_invocation is not None
+                else None
+            ),
         }
 
     @classmethod
@@ -176,6 +257,9 @@ class State:
             observer_language=d.get("observer_language", "en"),
             pipeline_name=d.get("pipeline_name", ""),
             run_id=d.get("run_id", ""),
+            active_foreground_invocation=ForegroundInvocationState.from_dict(
+                d.get("active_foreground_invocation")
+            ),
         )
 
     # ---- State Machine ------------------------------------------------------

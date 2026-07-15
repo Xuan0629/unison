@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 import pytest
 
-from unison.state import State, Transition
+from unison.state import ForegroundInvocationState, State, Transition
 
 
 class TestTransition:
@@ -316,3 +316,80 @@ class TestStateSchemaMigration:
         assert s2.version == "2.0"
         assert s2.phase == s1.phase
         assert s2.iteration == s1.iteration
+
+
+class TestForegroundInvocationState:
+    def test_state_roundtrip_preserves_active_foreground_invocation(self):
+        active = ForegroundInvocationState(
+            invocation_id="3c58fc0d-2c7d-4f44-a408-1d34bb7dcffa",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            wrapper_pid=1234,
+            wrapper_start_identity="linux:999",
+            launcher_pid=1200,
+            artifact_dir="/work/.unison/runs/pipeline/run/foreground/invocation",
+            result_path="/work/.unison/runs/pipeline/run/foreground/invocation/result.json",
+            output_path="/work/.unison/runs/pipeline/run/foreground/invocation/output.log",
+            started_at="2026-07-15T00:00:00Z",
+            last_heartbeat_observed_at="2026-07-15T00:00:15Z",
+        )
+        restored = State.from_dict(State(active_foreground_invocation=active).to_dict())
+
+        assert restored.active_foreground_invocation == active
+
+    def test_existing_current_schema_state_defaults_to_no_active_foreground_invocation(self):
+        state = State.from_dict({
+            "version": "2.0",
+            "phase": "dev_active",
+            "iteration": 1,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": None,
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": None,
+        })
+
+        assert state.active_foreground_invocation is None
+
+    def test_malformed_active_foreground_invocation_is_not_restored(self):
+        state = State.from_dict({
+            "version": "2.0",
+            "phase": "dev_active",
+            "iteration": 1,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": None,
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": None,
+            "active_foreground_invocation": {
+                "invocation_id": "id",
+                "wrapper_pid": True,
+            },
+        })
+
+        assert state.active_foreground_invocation is None
+
+    def test_cleared_active_foreground_invocation_roundtrips_as_none(self):
+        state = State()
+        state.active_foreground_invocation = ForegroundInvocationState(
+            invocation_id="id",
+            phase="dev_active",
+            role="developer",
+            runtime="codex",
+            wrapper_pid=1,
+            wrapper_start_identity="linux:2",
+            launcher_pid=None,
+            artifact_dir="/artifacts",
+            result_path="/artifacts/result.json",
+            output_path="/artifacts/output.log",
+            started_at="2026-07-15T00:00:00Z",
+            last_heartbeat_observed_at=None,
+        )
+        state.active_foreground_invocation = None
+
+        assert State.from_dict(state.to_dict()).active_foreground_invocation is None
