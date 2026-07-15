@@ -43,62 +43,61 @@ def _load(tmp_path: Path, **overrides):
     return PipelineLoader().load(pipeline)
 
 
-class TestInteractiveExecutionLoader:
-    def test_omitted_execution_defaults_to_headless(self, tmp_path):
+class TestExecutionPolicyLoader:
+    def test_omitted_execution_defaults_to_automatic_headless_bypass(self, tmp_path):
         spec = _load(tmp_path)
 
-        assert spec.execution.mode == "headless"
-        assert spec.execution.interactive.backend == "herdr"
+        assert spec.execution.selected_policy == "automatic"
+        assert spec.execution.resolve_phase("dev_active") == "headless_bypass"
 
-    def test_interactive_claude_codex_sequential_pipeline_loads(self, tmp_path):
+    def test_interactive_builtin_policy_resolves_all_phases_to_foreground(self, tmp_path):
+        spec = _load(tmp_path, execution={"selected_policy": "interactive"})
+
+        assert spec.execution.selected_policy == "interactive"
+        assert spec.execution.resolve_phase("planning_active") == "foreground_manual"
+        assert spec.execution.resolve_phase("dev_review") == "foreground_manual"
+
+    def test_named_policy_phase_override_wins_over_default(self, tmp_path):
         spec = _load(
             tmp_path,
             execution={
-                "mode": "interactive",
-                "interactive": {"session_name": "local-review"},
+                "selected_policy": "review-plan-first",
+                "policies": {
+                    "review-plan-first": {
+                        "default": "headless_bypass",
+                        "phases": {"planning_active": "foreground_manual"},
+                    },
+                },
             },
         )
 
-        assert spec.execution.mode == "interactive"
-        assert spec.execution.interactive.session_name == "local-review"
+        assert spec.execution.resolve_phase("planning_active") == "foreground_manual"
+        assert spec.execution.resolve_phase("dev_active") == "headless_bypass"
 
     @pytest.mark.parametrize(
-        ("field", "value", "message"),
+        ("execution", "message"),
         [
-            ("mode", "unsafe", "execution.mode"),
-            ("backend", "socket", "execution.interactive.backend"),
-            ("approval_timeout_seconds", -1, "approval_timeout_seconds"),
-            ("pause_pipeline_timeout_while_blocked", "yes", "pause_pipeline_timeout_while_blocked"),
+            ({"selected_policy": "missing"}, "selected_policy"),
+            ({"selected_policy": 1}, "selected_policy must be a string"),
+            ({"policies": []}, "policies must be a mapping"),
+            ({"policies": {"interactive": {"default": "headless_bypass"}}}, "reserved"),
+            ({"policies": {"bad name": {"default": "headless_bypass"}}}, "policy name"),
+            ({"policies": {"safe": {"default": "unsafe"}}}, "default"),
+            ({"policies": {"safe": {"default": "headless_bypass", "phases": {"not-a-phase": "foreground_manual"}}}}, "phase"),
+            ({"policies": {"safe": {"default": "headless_bypass", "phases": {"dev_active": "unsafe"}}}}, "mode"),
         ],
     )
-    def test_invalid_interactive_config_fails_closed(self, tmp_path, field, value, message):
-        interactive = {"backend": "herdr"}
-        execution = {"mode": "interactive", "interactive": interactive}
-        if field == "mode":
-            execution["mode"] = value
-        else:
-            interactive[field] = value
-
+    def test_invalid_policy_config_fails_closed(self, tmp_path, execution, message):
         with pytest.raises(PipelineValidationError, match=message):
             _load(tmp_path, execution=execution)
 
-    @pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
-    def test_interactive_unsupported_runtime_fails_at_load(self, tmp_path, runtime):
-        overrides = {"agents": {
-            "developer": {
-                "role": "developer", "pipeline_role": "developer",
-                "runtime": runtime, "model": "default",
-                "system_prompt_path": "prompts/developer.md",
-            },
-            "reviewer": {
-                "role": "reviewer", "pipeline_role": "reviewer",
-                "runtime": "codex", "model": "default",
-                "system_prompt_path": "prompts/reviewer.md",
-            },
-        }, "execution": {"mode": "interactive"}}
+    def test_legacy_herdr_execution_config_is_rejected(self, tmp_path):
+        with pytest.raises(PipelineValidationError, match="execution.mode is no longer supported"):
+            _load(tmp_path, execution={"mode": "interactive"})
 
-        with pytest.raises(PipelineValidationError, match="only supports claude and codex"):
-            _load(tmp_path, **overrides)
+    def test_legacy_herdr_interactive_block_is_rejected(self, tmp_path):
+        with pytest.raises(PipelineValidationError, match="execution.interactive is no longer supported"):
+            _load(tmp_path, execution={"interactive": {"backend": "herdr"}})
 
     @pytest.mark.parametrize(
         ("overrides", "message"),
@@ -109,14 +108,14 @@ class TestInteractiveExecutionLoader:
             ({"mode": "chain", "chain": {"stages": [{"mode": "dev:quick"}]}}, "does not support chain"),
         ],
     )
-    def test_interactive_unsupported_combinations_fail_at_load(self, tmp_path, overrides, message):
-        overrides["execution"] = {"mode": "interactive"}
+    def test_foreground_policy_unsupported_combinations_fail_at_load(self, tmp_path, overrides, message):
+        overrides["execution"] = {"selected_policy": "interactive"}
 
         with pytest.raises(PipelineValidationError, match=message):
             _load(tmp_path, **overrides)
 
 
-class TestInteractiveExecutionCli:
+class TestExecutionPolicyCli:
     def _spec(self, tmp_path: Path) -> PipelineSpec:
         agent = AgentSpec(
             role="reviewer",
@@ -133,7 +132,7 @@ class TestInteractiveExecutionCli:
             mode="inspect-only",
         )
 
-    def test_interactive_override_is_ephemeral_and_reported(self, tmp_path, monkeypatch, capsys):
+    def test_policy_override_is_ephemeral_and_reported(self, tmp_path, monkeypatch, capsys):
         import unison.cli as cli
 
         pipeline = tmp_path / "pipeline.yaml"
@@ -144,22 +143,17 @@ class TestInteractiveExecutionCli:
         orchestrator = MagicMock()
         monkeypatch.setattr(cli, "Orchestrator", orchestrator)
         args = SimpleNamespace(
-            pipeline=pipeline,
-            project=None,
-            dry_run=False,
-            json=False,
-            switch=None,
-            model=None,
-            save_pref=False,
-            interactive=True,
+            pipeline=pipeline, project=None, dry_run=False, json=False,
+            switch=None, model=None, save_pref=False,
+            execution_policy="interactive", save_execution_policy=None,
         )
 
         assert cli._cmd_run(args) == 1
         assert pipeline.read_text(encoding="utf-8") == original
-        assert "Effective execution mode: interactive" in capsys.readouterr().out
+        assert "Effective execution policy: interactive" in capsys.readouterr().out
         orchestrator.assert_not_called()
 
-    def test_interactive_override_revalidates_effective_spec(self, tmp_path, monkeypatch, capsys):
+    def test_policy_override_revalidates_effective_spec(self, tmp_path, monkeypatch, capsys):
         import unison.cli as cli
 
         spec = replace(self._spec(tmp_path), agents={
@@ -169,21 +163,110 @@ class TestInteractiveExecutionCli:
         orchestrator = MagicMock()
         monkeypatch.setattr(cli, "Orchestrator", orchestrator)
         args = SimpleNamespace(
-            pipeline=tmp_path / "pipeline.yaml",
-            project=None,
-            dry_run=False,
-            json=False,
-            switch=None,
-            model=None,
-            save_pref=False,
-            interactive=True,
+            pipeline=tmp_path / "pipeline.yaml", project=None, dry_run=False,
+            json=False, switch=None, model=None, save_pref=False,
+            execution_policy="interactive", save_execution_policy=None,
         )
 
         assert cli._cmd_run(args) == 1
         assert "only supports claude and codex" in capsys.readouterr().err
         orchestrator.assert_not_called()
 
-    def test_dry_run_reports_headless_execution_mode(self, tmp_path, monkeypatch, capsys):
+    def test_unknown_policy_override_fails_before_dispatch(self, tmp_path, monkeypatch, capsys):
+        import unison.cli as cli
+
+        monkeypatch.setattr(cli, "_load", lambda path: (self._spec(tmp_path), MagicMock()))
+        orchestrator = MagicMock()
+        monkeypatch.setattr(cli, "Orchestrator", orchestrator)
+        args = SimpleNamespace(
+            pipeline=tmp_path / "pipeline.yaml", project=None, dry_run=False,
+            json=False, switch=None, model=None, save_pref=False,
+            execution_policy="missing", save_execution_policy=None,
+        )
+
+        assert cli._cmd_run(args) == 1
+        assert "selected_policy 'missing'" in capsys.readouterr().err
+        orchestrator.assert_not_called()
+
+    def test_conflicting_execution_policy_flags_fail_before_dispatch(self, tmp_path, monkeypatch, capsys):
+        import unison.cli as cli
+
+        monkeypatch.setattr(cli, "_load", lambda path: (self._spec(tmp_path), MagicMock()))
+        orchestrator = MagicMock()
+        monkeypatch.setattr(cli, "Orchestrator", orchestrator)
+        args = SimpleNamespace(
+            pipeline=tmp_path / "pipeline.yaml", project=None, dry_run=False,
+            json=False, switch=None, model=None, save_pref=False,
+            execution_policy="automatic", save_execution_policy="interactive",
+        )
+
+        assert cli._cmd_run(args) == 1
+        assert "must match" in capsys.readouterr().err
+        orchestrator.assert_not_called()
+
+    def test_save_execution_policy_persists_only_after_validation(self, tmp_path):
+        import unison.cli as cli
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(yaml.safe_dump(_pipeline_data(), sort_keys=False), encoding="utf-8")
+
+        cli._save_execution_policy(pipeline, "automatic")
+
+        assert yaml.safe_load(pipeline.read_text(encoding="utf-8"))["execution"] == {
+            "selected_policy": "automatic"
+        }
+
+    def test_save_execution_policy_rejects_unknown_policy_before_replace(self, tmp_path):
+        import unison.cli as cli
+
+        pipeline = tmp_path / "pipeline.yaml"
+        original = yaml.safe_dump(_pipeline_data(), sort_keys=False)
+        pipeline.write_text(original, encoding="utf-8")
+
+        with pytest.raises(PipelineValidationError, match="selected_policy 'missing'"):
+            cli._save_execution_policy(pipeline, "missing")
+
+        assert pipeline.read_text(encoding="utf-8") == original
+
+    def test_unauthorized_run_does_not_save_execution_policy(self, tmp_path, monkeypatch):
+        import unison.cli as cli
+
+        pipeline = tmp_path / "pipeline.yaml"
+        original = yaml.safe_dump(_pipeline_data(), sort_keys=False)
+        pipeline.write_text(original, encoding="utf-8")
+        denied_spec = replace(self._spec(tmp_path), who_can_run=["discord:123"])
+        monkeypatch.setattr(cli, "_load", lambda path: (denied_spec, MagicMock()))
+        save = MagicMock()
+        monkeypatch.setattr(cli, "_save_execution_policy", save)
+        args = SimpleNamespace(
+            pipeline=pipeline, project=None, dry_run=False, json=False,
+            switch=None, model=None, save_pref=False,
+            execution_policy=None, save_execution_policy="automatic",
+        )
+
+        assert cli._cmd_run(args) == 3
+        save.assert_not_called()
+        assert pipeline.read_text(encoding="utf-8") == original
+
+    def test_save_execution_policy_rejects_invalid_source_yaml(self, tmp_path):
+        import unison.cli as cli
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text("execution: [", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="pipeline YAML is invalid"):
+            cli._save_execution_policy(pipeline, "automatic")
+
+    def test_save_execution_policy_rejects_non_mapping_source_yaml(self, tmp_path):
+        import unison.cli as cli
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text("- not-a-pipeline", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="pipeline YAML must be a mapping"):
+            cli._save_execution_policy(pipeline, "automatic")
+
+    def test_dry_run_reports_selected_policy(self, tmp_path, monkeypatch, capsys):
         import unison.cli as cli
 
         spec = self._spec(tmp_path)
@@ -192,4 +275,4 @@ class TestInteractiveExecutionCli:
         monkeypatch.setattr(cli, "_load", lambda path: (spec, loader))
 
         assert cli._cmd_dry_run(SimpleNamespace(pipeline=tmp_path / "pipeline.yaml")) == 0
-        assert "OK  execution.mode = headless" in capsys.readouterr().out
+        assert "OK  execution.selected_policy = automatic" in capsys.readouterr().out

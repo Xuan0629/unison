@@ -41,7 +41,11 @@ Phase: TypeAlias = Literal[
 ]
 AgentRole: TypeAlias = str
 Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
-ExecutionMode: TypeAlias = Literal["headless", "interactive"]
+ExecutionMode: TypeAlias = Literal["headless_bypass", "foreground_manual"]
+EXECUTION_POLICY_PHASES: frozenset[str] = frozenset({
+    "planning_active", "planning_review", "discuss_active", "discuss_review",
+    "dev_active", "dev_review",
+})
 Verdict: TypeAlias = Literal["PASS", "REQUEST_CHANGES", "EXHAUSTED"]
 Actor: TypeAlias = AgentRole | Literal["orchestrator", "observer", "harness_optimizer", "sean"]
 ProjectLanguage: TypeAlias = Literal["python", "node", "rust", "go", "custom"]
@@ -110,20 +114,32 @@ class AgentSpec:
 # ============================================================================
 
 @dataclass(frozen=True)
-class ExecutionConfig:
-    """Run-level execution policy; headless remains the default."""
-    mode: ExecutionMode = "headless"
-    interactive: "InteractiveConfig" = field(default_factory=lambda: InteractiveConfig())
+class ExecutionPolicy:
+    """One named execution policy with an optional phase override map."""
+    default: ExecutionMode
+    phases: dict[str, ExecutionMode] = field(default_factory=dict)
+
+    def resolve_phase(self, phase: str) -> ExecutionMode:
+        return self.phases.get(phase, self.default)
 
 
 @dataclass(frozen=True)
-class InteractiveConfig:
-    """Local operator settings for the Herdr-backed interactive backend."""
-    backend: Literal["herdr"] = "herdr"
-    session_name: str = ""
-    workspace_label: str = ""
-    approval_timeout_seconds: int = 0
-    pause_pipeline_timeout_while_blocked: bool = True
+class ExecutionConfig:
+    """Built-in and named policies; omitted configuration stays automatic."""
+    selected_policy: str = "automatic"
+    policies: dict[str, ExecutionPolicy] = field(default_factory=dict)
+
+    def resolve_phase(self, phase: str) -> ExecutionMode:
+        if self.selected_policy == "automatic":
+            return "headless_bypass"
+        if self.selected_policy == "interactive":
+            return "foreground_manual"
+        policy = self.policies.get(self.selected_policy)
+        if policy is None:
+            raise ValueError(
+                f"unknown execution policy: {self.selected_policy!r}"
+            )
+        return policy.resolve_phase(phase)
 
 
 @dataclass(frozen=True)

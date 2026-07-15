@@ -10,6 +10,7 @@ check for prompt-file existence.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 import warnings
@@ -46,9 +47,11 @@ from unison.interfaces import (
     BudgetConfig,
     ChainConfig,
     ChainStage,
+    EXECUTION_POLICY_PHASES,
     ExecutionConfig,
+    ExecutionMode,
+    ExecutionPolicy,
     GreenfieldConfig,
-    InteractiveConfig,
     MOA_MODES,
     MoaConfig,
     PipelineMode,
@@ -381,73 +384,91 @@ class PipelineLoader:
         return True
 
     def _build_execution(self, raw: dict[str, Any] | None) -> ExecutionConfig:
-        """Build the opt-in execution policy without changing headless defaults."""
+        """Build built-in and named execution policies without a Herdr path."""
         if raw is None:
             return ExecutionConfig()
         if not isinstance(raw, dict):
             raise PipelineValidationError("execution must be a mapping")
+        if "mode" in raw:
+            raise PipelineValidationError(
+                "execution.mode is no longer supported; use selected_policy"
+            )
+        if "interactive" in raw:
+            raise PipelineValidationError(
+                "execution.interactive is no longer supported; use selected_policy"
+            )
 
-        mode = raw.get("mode", "headless")
-        if mode not in {"headless", "interactive"}:
+        selected_policy = raw.get("selected_policy", "automatic")
+        if not isinstance(selected_policy, str):
+            raise PipelineValidationError("execution.selected_policy must be a string")
+
+        policies_raw = raw.get("policies", {})
+        if not isinstance(policies_raw, dict):
+            raise PipelineValidationError("execution.policies must be a mapping")
+
+        policies: dict[str, ExecutionPolicy] = {}
+        valid_phases = EXECUTION_POLICY_PHASES
+        valid_modes = {"headless_bypass", "foreground_manual"}
+        for name, policy_raw in policies_raw.items():
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+                raise PipelineValidationError("execution policy name must use ASCII letters, digits, '_' or '-'")
+            if name in {"automatic", "interactive"}:
+                raise PipelineValidationError(f"execution policy {name!r} is reserved")
+            if not isinstance(policy_raw, dict):
+                raise PipelineValidationError(f"execution policy {name!r} must be a mapping")
+            default = policy_raw.get("default")
+            if default not in valid_modes:
+                raise PipelineValidationError(
+                    f"execution policy {name!r}.default must be headless_bypass or foreground_manual"
+                )
+            phases_raw = policy_raw.get("phases", {})
+            if not isinstance(phases_raw, dict):
+                raise PipelineValidationError(f"execution policy {name!r}.phases must be a mapping")
+            phases: dict[str, ExecutionMode] = {}
+            for phase, mode in phases_raw.items():
+                if not isinstance(phase, str) or phase not in valid_phases:
+                    raise PipelineValidationError(f"execution policy {name!r} has invalid phase {phase!r}")
+                if mode not in valid_modes:
+                    raise PipelineValidationError(
+                        f"execution policy {name!r} phase {phase!r} mode must be headless_bypass or foreground_manual"
+                    )
+                phases[phase] = mode
+            policies[name] = ExecutionPolicy(default=default, phases=phases)
+
+        if selected_policy not in {"automatic", "interactive"} | set(policies):
             raise PipelineValidationError(
-                "execution.mode must be 'headless' or 'interactive'"
+                f"execution.selected_policy {selected_policy!r} is not a built-in or configured policy"
             )
-        interactive_raw = raw.get("interactive", {})
-        if not isinstance(interactive_raw, dict):
-            raise PipelineValidationError("execution.interactive must be a mapping")
-        backend = interactive_raw.get("backend", "herdr")
-        if backend != "herdr":
-            raise PipelineValidationError(
-                "execution.interactive.backend must be 'herdr'"
-            )
-        session_name = interactive_raw.get("session_name", "")
-        workspace_label = interactive_raw.get("workspace_label", "")
-        approval_timeout_seconds = interactive_raw.get("approval_timeout_seconds", 0)
-        pause_while_blocked = interactive_raw.get(
-            "pause_pipeline_timeout_while_blocked", True
-        )
-        if not isinstance(session_name, str):
-            raise PipelineValidationError("execution.interactive.session_name must be a string")
-        if not isinstance(workspace_label, str):
-            raise PipelineValidationError("execution.interactive.workspace_label must be a string")
-        if isinstance(approval_timeout_seconds, bool) or not isinstance(approval_timeout_seconds, int) or approval_timeout_seconds < 0:
-            raise PipelineValidationError(
-                "execution.interactive.approval_timeout_seconds must be a non-negative integer"
-            )
-        if not isinstance(pause_while_blocked, bool):
-            raise PipelineValidationError(
-                "execution.interactive.pause_pipeline_timeout_while_blocked must be a boolean"
-            )
-        return ExecutionConfig(
-            mode=mode,
-            interactive=InteractiveConfig(
-                backend=backend,
-                session_name=session_name,
-                workspace_label=workspace_label,
-                approval_timeout_seconds=approval_timeout_seconds,
-                pause_pipeline_timeout_while_blocked=pause_while_blocked,
-            ),
-        )
+        return ExecutionConfig(selected_policy=selected_policy, policies=policies)
 
     @staticmethod
     def validate_execution(spec: PipelineSpec) -> None:
-        """Fail closed for unsupported interactive combinations before dispatch."""
-        if spec.execution.mode == "headless":
+        """Fail closed when the selected policy contains foreground execution."""
+        if (
+            spec.execution.selected_policy not in {"automatic", "interactive"}
+            and spec.execution.selected_policy not in spec.execution.policies
+        ):
+            raise PipelineValidationError(
+                f"execution.selected_policy {spec.execution.selected_policy!r} is not a built-in or configured policy"
+            )
+        foreground = any(
+            spec.execution.resolve_phase(phase) == "foreground_manual"
+            for phase in EXECUTION_POLICY_PHASES
+        )
+        if not foreground:
             return
         if spec.mode in MOA_MODES:
-            raise PipelineValidationError("interactive execution does not support MoA modes")
+            raise PipelineValidationError("foreground execution does not support MoA modes")
         if spec.mode == "chain" or spec.chain.stages:
-            raise PipelineValidationError("interactive execution does not support chain mode")
+            raise PipelineValidationError("foreground execution does not support chain mode")
         if spec.dag is not None:
-            raise PipelineValidationError("interactive execution does not support DAG")
+            raise PipelineValidationError("foreground execution does not support DAG")
         if spec.parallel_dev is not None and spec.parallel_dev.enabled:
-            raise PipelineValidationError(
-                "interactive execution does not support parallel_dev"
-            )
+            raise PipelineValidationError("foreground execution does not support parallel_dev")
         unsupported = sorted({agent.runtime for agent in spec.agents.values()} - {"claude", "codex"})
         if unsupported:
             raise PipelineValidationError(
-                "interactive execution only supports claude and codex; unsupported runtime(s): "
+                "foreground execution only supports claude and codex; unsupported runtime(s): "
                 + ", ".join(unsupported)
             )
 

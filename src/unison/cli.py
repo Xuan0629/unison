@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 
 from unison.auth import RunAuthorizationError, authorize_run
-from unison.interfaces import TRUSTED_LOCAL_PRINCIPAL
+from unison.interfaces import EXECUTION_POLICY_PHASES, TRUSTED_LOCAL_PRINCIPAL
 from unison.orchestrator import Orchestrator
 from unison.pipeline import PipelineLoader, PipelineValidationError
 from unison.state import State
@@ -85,8 +85,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     run.add_argument(
-        "--interactive", action="store_true",
-        help="Use the local interactive execution policy for this run only",
+        "--execution-policy", type=str, default=None,
+        help="Use an execution policy for this run only",
+    )
+    run.add_argument(
+        "--save-execution-policy", type=str, default=None,
+        help="Persist this execution policy as execution.selected_policy",
     )
 
     # --- dry-run -----------------------------------------------------
@@ -185,6 +189,44 @@ def _apply_agent_overrides(
             model=model_overrides.get(key, agent.model),
         )
     return replace(spec, agents=agents)
+
+
+def _save_execution_policy(pipeline_path: Path, policy_name: str) -> None:
+    """Atomically persist a selected policy after validating the whole YAML."""
+    import yaml
+    from unison.io import _fsync_parent_directory
+
+    path = pipeline_path.resolve()
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        raise ValueError("pipeline YAML is invalid") from error
+    if not isinstance(raw, dict):
+        raise ValueError("pipeline YAML must be a mapping")
+    execution = raw.setdefault("execution", {})
+    if not isinstance(execution, dict):
+        raise ValueError("pipeline execution must be a mapping")
+    execution["selected_policy"] = policy_name
+
+    payload = yaml.safe_dump(raw, sort_keys=False, allow_unicode=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent,
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        PipelineLoader().load(tmp_path)
+        os.replace(tmp_path, path)
+        _fsync_parent_directory(path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def _save_agent_preferences(
@@ -307,18 +349,37 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"OVERRIDE ERROR: {error}", file=sys.stderr)
         return 1
 
-    if getattr(args, "interactive", False):
-        spec = replace(spec, execution=replace(spec.execution, mode="interactive"))
+    execution_policy = getattr(args, "execution_policy", None)
+    save_execution_policy = getattr(args, "save_execution_policy", None)
+    if (
+        execution_policy is not None
+        and save_execution_policy is not None
+        and execution_policy != save_execution_policy
+    ):
+        print(
+            "EXECUTION ERROR: --execution-policy and --save-execution-policy must match when both are set",
+            file=sys.stderr,
+        )
+        return 1
+    selected_policy = execution_policy or save_execution_policy
+    if selected_policy is not None:
+        spec = replace(
+            spec,
+            execution=replace(spec.execution, selected_policy=selected_policy),
+        )
     try:
         PipelineLoader.validate_execution(spec)
     except PipelineValidationError as error:
         print(f"EXECUTION ERROR: {error}", file=sys.stderr)
         return 1
-    print(f"Effective execution mode: {spec.execution.mode}")
-    if spec.execution.mode == "interactive":
+    print(f"Effective execution policy: {spec.execution.selected_policy}")
+    if any(
+        spec.execution.resolve_phase(phase) == "foreground_manual"
+        for phase in EXECUTION_POLICY_PHASES
+    ):
         print(
-            "EXECUTION ERROR: interactive execution is configured but the "
-            "Herdr backend is not implemented yet",
+            "EXECUTION ERROR: foreground execution is configured but the "
+            "foreground backend is not implemented yet",
             file=sys.stderr,
         )
         return 1
@@ -329,6 +390,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 3
+
+    if save_execution_policy is not None:
+        try:
+            _save_execution_policy(args.pipeline, save_execution_policy)
+        except (OSError, ValueError, PipelineValidationError) as error:
+            print(f"SAVE EXECUTION POLICY ERROR: {error}", file=sys.stderr)
+            return 1
 
     if args.save_pref:
         try:
@@ -365,7 +433,7 @@ def _cmd_dry_run(args: argparse.Namespace) -> int:
     mode = loader.mode(spec)
     print(f"OK  spec.version = {spec.version}")
     print(f"OK  mode = {mode}")
-    print(f"OK  execution.mode = {spec.execution.mode}")
+    print(f"OK  execution.selected_policy = {spec.execution.selected_policy}")
     print(f"OK  agents = {sorted(spec.agents.keys())}")
     print(f"OK  world.root = {spec.world.root}")
     print(f"OK  project.test_command = {spec.project.test_command}")
