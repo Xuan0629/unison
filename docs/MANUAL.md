@@ -135,9 +135,33 @@ openclaw --version
 
 Only the binaries used by the selected agents are required. OpenClaw is exempt from the CLI preflight binary check in `unison run`, so verify its gateway and CLI yourself before an unattended run.
 
+### 2.3 Bounded agent execution profiles · 受限 Agent 执行 Profile
+
+Reusable profiles avoid repeating reviewed agent settings. A profile may contain only `system_prompt_path`, `model`, `reasoning_effort`, `skills`, and `toolsets`; it cannot add a command, environment value, memory/session scope, provider URL, permission override, or runtime adapter.
+
+```yaml
+profiles:
+  focused-review:
+    system_prompt_path: prompts/reviewer.md
+    model: gpt-5.6-sol
+    skills: [test-driven-development]
+    toolsets: [terminal, file]
+
+agents:
+  reviewer:
+    role: reviewer
+    pipeline_role: reviewer
+    runtime: hermes
+    profile: focused-review
+```
+
+`skills` and `toolsets` are supported only by `runtime: hermes`; Unison passes them through `hermes chat --skills` and `--toolsets`. Do not duplicate a profile field on the agent: the Loader rejects any overlapping field. An unprofiled Hermes agent keeps the existing default six-skill preload.
+
+Profile 示例用于复用已审查的 Agent 配置。profile 只能包含 `system_prompt_path`、`model`、`reasoning_effort`、`skills`、`toolsets`，不能注入 command、环境变量、memory/session、provider URL、权限或 runtime adapter。`skills` 与 `toolsets` 目前只支持 `runtime: hermes`；profile 与 agent 不能重复设置同一字段。
+
 运行前应分别验证配置中实际使用的 executable。只需安装当前 Agent 使用的 runtime。`unison run` 的工具预检不会检查 OpenClaw，因此无人值守前应自行验证其 CLI 与 gateway。
 
-### 2.3 Credentials · 凭据
+### 2.4 Credentials · 凭据
 
 Runtimes normally read their own configuration and environment variables. The Unison CLI also loads unset key/value pairs from:
 
