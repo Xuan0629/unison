@@ -11,11 +11,12 @@ import hashlib
 import os
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
 from unison.io import atomic_read_json, atomic_write_json
+from unison.usage import UsageRecord
 
 try:
     import fcntl
@@ -52,6 +53,9 @@ class PhaseUsage:
     iter_n: int
     tokens_used: int
     timestamp: str  # ISO 8601
+    # Direct construction represents data with no verified source. Runtime
+    # accounting goes through add_usage(), which records its local estimate.
+    usage: UsageRecord = field(default_factory=UsageRecord.unavailable)
 
 
 @dataclass
@@ -61,6 +65,35 @@ class UsageSummary:
     daily_used: int
     per_task_used: int
     phase_breakdown: dict[str, int]  # phase → total tokens
+
+
+def _usage_to_dict(usage: UsageRecord) -> dict:
+    return {
+        "token_provenance": usage.token_provenance,
+        "cost_provenance": usage.cost_provenance,
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "cache_read_tokens": usage.cache_read_tokens,
+        "total_tokens": usage.total_tokens,
+        "cost_usd": usage.cost_usd,
+    }
+
+
+def _usage_from_dict(data: object) -> UsageRecord:
+    if not isinstance(data, dict):
+        return UsageRecord.unavailable()
+    try:
+        return UsageRecord(
+            token_provenance=data["token_provenance"],
+            cost_provenance=data["cost_provenance"],
+            input_tokens=data.get("input_tokens"),
+            output_tokens=data.get("output_tokens"),
+            cache_read_tokens=data.get("cache_read_tokens"),
+            total_tokens=data.get("total_tokens"),
+            cost_usd=data.get("cost_usd"),
+        )
+    except (KeyError, TypeError, ValueError):
+        return UsageRecord.unavailable()
 
 
 # ============================================================================
@@ -217,6 +250,7 @@ class BudgetTracker:
         *,
         phase: str = "",
         iter_n: int = 0,
+        usage: UsageRecord | None = None,
     ) -> None:
         """Record *tokens* against the current usage totals.
 
@@ -257,6 +291,7 @@ class BudgetTracker:
                             iter_n=iter_n,
                             tokens_used=tokens,
                             timestamp=datetime.now(timezone.utc).isoformat(),
+                            usage=usage or UsageRecord.estimated(tokens),
                         )
                     )
 
@@ -385,6 +420,7 @@ class BudgetTracker:
                         iter_n=p.get("iter_n", 0),
                         tokens_used=p.get("tokens_used", 0),
                         timestamp=p.get("timestamp", ""),
+                        usage=_usage_from_dict(p.get("usage")),
                     )
                     for p in phases_raw
                     if isinstance(p, dict)
@@ -422,6 +458,7 @@ class BudgetTracker:
                         "iter_n": p.iter_n,
                         "tokens_used": p.tokens_used,
                         "timestamp": p.timestamp,
+                        "usage": _usage_to_dict(p.usage),
                     }
                     for p in self._phases
                 ],
@@ -472,6 +509,7 @@ class BudgetTracker:
                         "iter_n": item.iter_n,
                         "tokens_used": item.tokens_used,
                         "timestamp": item.timestamp,
+                        "usage": _usage_to_dict(item.usage),
                     }
                     for item in self._phases
                 ],
@@ -500,6 +538,7 @@ class BudgetTracker:
                         "iter_n": item.iter_n,
                         "tokens_used": item.tokens_used,
                         "timestamp": item.timestamp,
+                        "usage": _usage_to_dict(item.usage),
                     }
                     for item in self._phases
                 ],
@@ -567,6 +606,7 @@ class BudgetTracker:
                     iter_n=int(item.get("iter_n", 0)),
                     tokens_used=int(item.get("tokens_used", 0)),
                     timestamp=str(item.get("timestamp", "")),
+                    usage=_usage_from_dict(item.get("usage")),
                 )
                 for item in phases if isinstance(item, dict)
             ]
@@ -622,6 +662,7 @@ class BudgetTracker:
                     "iter_n": item.iter_n,
                     "tokens_used": item.tokens_used,
                     "timestamp": item.timestamp,
+                    "usage": _usage_to_dict(item.usage),
                 }
                 for item in new_phases
             ]
@@ -637,6 +678,7 @@ class BudgetTracker:
                     iter_n=int(item.get("iter_n", 0)),
                     tokens_used=int(item.get("tokens_used", 0)),
                     timestamp=str(item.get("timestamp", "")),
+                    usage=_usage_from_dict(item.get("usage")),
                 )
                 for item in committed_phases
             ]

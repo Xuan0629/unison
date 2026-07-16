@@ -38,6 +38,7 @@ class TestPhaseUsage:
         pu = PhaseUsage(phase="", iter_n=0, tokens_used=0, timestamp="")
         assert pu.phase == ""
         assert pu.tokens_used == 0
+        assert pu.usage.token_provenance == "unavailable"
 
 
 class TestUsageSummary:
@@ -191,6 +192,48 @@ class TestPhaseTracking:
         summary = tracker.get_usage_summary()
         assert summary.phase_breakdown["planning"] == 150
         assert summary.phase_breakdown["dev_active"] == 200
+
+    def test_phase_records_actual_provider_usage_separately_from_budget_reserve(self):
+        from unison.usage import UsageRecord
+
+        tracker = BudgetTracker(daily_limit=1000, per_task_limit=500)
+        actual = UsageRecord(
+            token_provenance="actual",
+            cost_provenance="unavailable",
+            input_tokens=80,
+            output_tokens=10,
+            cache_read_tokens=5,
+            total_tokens=95,
+        )
+
+        tracker.add_usage(95, phase="developer", iter_n=1, usage=actual)
+
+        phase = tracker._phases[0]
+        assert phase.tokens_used == 95
+        assert phase.usage == actual
+
+    def test_persistent_ledger_round_trips_phase_usage_provenance(self, tmp_path):
+        from unison.usage import UsageRecord
+
+        ledger = tmp_path / "budget.json"
+        actual = UsageRecord(
+            token_provenance="actual",
+            cost_provenance="unavailable",
+            input_tokens=80,
+            output_tokens=10,
+            cache_read_tokens=5,
+            total_tokens=95,
+        )
+        tracker = BudgetTracker(
+            daily_limit=1000, per_task_limit=500, persist_path=ledger,
+        )
+        tracker.add_usage(95, phase="developer", iter_n=1, usage=actual)
+
+        reloaded = BudgetTracker(
+            daily_limit=1000, per_task_limit=500, persist_path=ledger,
+        )
+
+        assert reloaded._phases[0].usage == actual
 
 
 class TestGetUsageSummary:

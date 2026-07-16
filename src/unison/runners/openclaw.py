@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 from unison.interfaces import AgentSpec, AgentResult
 from unison.runners.base import BaseRunner
+from unison.usage import UsageRecord
 
 
 @dataclass
@@ -152,6 +154,69 @@ class OpenClawRunner(BaseRunner):
                 if t:
                     texts.append(t)
         return "\n".join(texts)
+
+    # ------------------------------------------------------------------
+    # usage parsing
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def extract_usage(response: dict | None) -> UsageRecord:
+        """Return actual provider tokens only when the reported total verifies."""
+        if not isinstance(response, dict):
+            return UsageRecord.unavailable()
+        meta = response.get("meta")
+        if not isinstance(meta, dict):
+            return UsageRecord.unavailable()
+        agent_meta = meta.get("agentMeta")
+        if not isinstance(agent_meta, dict):
+            return UsageRecord.unavailable()
+        usage = agent_meta.get("usage")
+        if not isinstance(usage, dict):
+            return UsageRecord.unavailable()
+
+        values = (
+            usage.get("input"),
+            usage.get("output"),
+            usage.get("cacheRead"),
+            usage.get("total"),
+        )
+        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values):
+            return UsageRecord.unavailable()
+        try:
+            return UsageRecord(
+                token_provenance="actual",
+                cost_provenance="unavailable",
+                input_tokens=values[0],
+                output_tokens=values[1],
+                cache_read_tokens=values[2],
+                total_tokens=values[3],
+            )
+        except ValueError:
+            return UsageRecord.unavailable()
+
+    # ------------------------------------------------------------------
+    # run
+    # ------------------------------------------------------------------
+
+    def run(
+        self,
+        spec: AgentSpec,
+        prompt: str,
+        workdir: Path,
+        timeout: int,
+        log_path: Path,
+    ) -> AgentResult:
+        """Run OpenClaw and attach only verified structured usage facts."""
+        result = super().run(spec, prompt, workdir, timeout, log_path)
+        try:
+            raw_log = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return result
+        marker = "=== OUTPUT ===\n"
+        if marker not in raw_log:
+            return result
+        response = self.parse_response(raw_log.rsplit(marker, 1)[1])
+        return replace(result, usage=self.extract_usage(response))
 
     # ------------------------------------------------------------------
     # error reporting

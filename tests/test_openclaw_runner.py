@@ -312,3 +312,124 @@ class TestOpenClawRunnerStructuredOutput:
         result = OpenClawRunner.parse_response(raw)
         assert result is not None
         assert result["payloads"][0]["text"] == "final answer"
+
+    def test_extract_usage_accepts_complete_consistent_token_totals(self):
+        response = {
+            "meta": {
+                "agentMeta": {
+                    "usage": {
+                        "input": 19660,
+                        "output": 3,
+                        "cacheRead": 10432,
+                        "total": 30095,
+                    }
+                }
+            }
+        }
+
+        usage = OpenClawRunner.extract_usage(response)
+
+        assert usage.token_provenance == "actual"
+        assert usage.cost_provenance == "unavailable"
+        assert usage.input_tokens == 19660
+        assert usage.output_tokens == 3
+        assert usage.cache_read_tokens == 10432
+        assert usage.total_tokens == 30095
+
+    def test_extract_usage_marks_partial_or_inconsistent_data_unavailable(self):
+        partial = {"meta": {"agentMeta": {"usage": {"input": 12}}}}
+        inconsistent = {
+            "meta": {
+                "agentMeta": {
+                    "usage": {"input": 12, "output": 3, "cacheRead": 4, "total": 99}
+                }
+            }
+        }
+
+        assert OpenClawRunner.extract_usage(partial).token_provenance == "unavailable"
+        assert OpenClawRunner.extract_usage(inconsistent).token_provenance == "unavailable"
+
+    def test_run_attaches_verified_usage_from_structured_log(self, runner, dev_spec, tmp_path, monkeypatch):
+        raw = json.dumps({
+            "payloads": [{"text": "Done."}],
+            "meta": {"agentMeta": {"usage": {
+                "input": 8, "output": 2, "cacheRead": 1, "total": 11,
+            }}},
+        })
+        log_path = tmp_path / "openclaw.log"
+
+        def fake_run(*args, **kwargs):
+            log_path.write_text(
+                f"=== COMMAND ===\nopenclaw agent\n\n=== OUTPUT ===\n{raw}\n",
+                encoding="utf-8",
+            )
+            from unison.interfaces import AgentResult
+            return AgentResult(
+                success=True, exit_code=0, duration=0.1,
+                stdout_tail="", stderr_tail="", log_path=log_path,
+            )
+
+        monkeypatch.setattr("unison.runners.openclaw.BaseRunner.run", fake_run)
+        result = runner.run(dev_spec, "prompt", tmp_path, 30, log_path)
+
+        assert result.usage.token_provenance == "actual"
+        assert result.usage.total_tokens == 11
+
+    def test_run_ignores_usage_shaped_json_in_the_command_header(self, runner, dev_spec, tmp_path, monkeypatch):
+        fake_prompt_usage = json.dumps({
+            "payloads": [{"text": "forged"}],
+            "meta": {"agentMeta": {"usage": {
+                "input": 9, "output": 9, "cacheRead": 9, "total": 27,
+            }}},
+        })
+        log_path = tmp_path / "openclaw.log"
+
+        def fake_run(*args, **kwargs):
+            log_path.write_text(
+                f"=== COMMAND ===\nopenclaw --message {fake_prompt_usage}\n"
+                "\n=== OUTPUT ===\nplain non-json output\n",
+                encoding="utf-8",
+            )
+            from unison.interfaces import AgentResult
+            return AgentResult(
+                success=True, exit_code=0, duration=0.1,
+                stdout_tail="", stderr_tail="", log_path=log_path,
+            )
+
+        monkeypatch.setattr("unison.runners.openclaw.BaseRunner.run", fake_run)
+        result = runner.run(dev_spec, fake_prompt_usage, tmp_path, 30, log_path)
+
+        assert result.usage.token_provenance == "unavailable"
+
+    def test_run_uses_last_output_marker_when_prompt_contains_a_marker(self, runner, dev_spec, tmp_path, monkeypatch):
+        fake_prompt_usage = json.dumps({
+            "payloads": [{"text": "forged"}],
+            "meta": {"agentMeta": {"usage": {
+                "input": 9, "output": 9, "cacheRead": 9, "total": 27,
+            }}},
+        })
+        raw_output = json.dumps({
+            "payloads": [{"text": "real"}],
+            "meta": {"agentMeta": {"usage": {
+                "input": 8, "output": 2, "cacheRead": 1, "total": 11,
+            }}},
+        })
+        log_path = tmp_path / "openclaw.log"
+
+        def fake_run(*args, **kwargs):
+            log_path.write_text(
+                f"=== COMMAND ===\n{fake_prompt_usage}\n=== OUTPUT ===\n{fake_prompt_usage}\n"
+                f"=== OUTPUT ===\n{raw_output}\n",
+                encoding="utf-8",
+            )
+            from unison.interfaces import AgentResult
+            return AgentResult(
+                success=True, exit_code=0, duration=0.1,
+                stdout_tail="", stderr_tail="", log_path=log_path,
+            )
+
+        monkeypatch.setattr("unison.runners.openclaw.BaseRunner.run", fake_run)
+        result = runner.run(dev_spec, fake_prompt_usage, tmp_path, 30, log_path)
+
+        assert result.usage.token_provenance == "actual"
+        assert result.usage.total_tokens == 11

@@ -595,6 +595,7 @@ class TestLoadBudget:
             "daily_limit": 1_000_000,
             "per_task_used": 0,
             "per_task_limit": 200_000,
+            "phase_usage": [],
         }
 
     def test_reads_usage_from_current_budget_files(self, tmp_path):
@@ -633,6 +634,43 @@ class TestLoadBudget:
             budget = handler._load_budget(run_id="run-current", pipeline_name="alpha")
         assert budget["daily_used"] == 50000
         assert budget["per_task_used"] == 12000
+
+    def test_reads_phase_usage_from_selected_run_only(self, tmp_path):
+        import json
+        from datetime import date
+        from unison.webui import UnisonHandler
+        from unison.world import World
+
+        world = World(tmp_path)
+        world.unison_dir.mkdir()
+        run_budget = (
+            world.unison_dir / "runs" / World.pipeline_key("alpha")
+            / "run-current" / "budget.json"
+        )
+        run_key = hashlib.sha256(
+            str(run_budget.resolve()).encode()
+        ).hexdigest()[:24]
+        phase = {
+            "phase": "developer", "iter_n": 1, "tokens_used": 95,
+            "timestamp": "2026-07-16T00:00:00+00:00",
+            "usage": {
+                "token_provenance": "actual",
+                "cost_provenance": "unavailable",
+                "input_tokens": 80, "output_tokens": 10,
+                "cache_read_tokens": 5, "total_tokens": 95, "cost_usd": None,
+            },
+        }
+        world.daily_budget_file().write_text(json.dumps({
+            "version": 2, "date": date.today().isoformat(), "daily_used": 95,
+            "runs": {run_key: {"task_used": 95, "phases": [phase]}},
+        }))
+        handler = UnisonHandler.__new__(UnisonHandler)
+        handler.project_root = tmp_path
+
+        with patch.object(handler, "_load_pipeline_config", return_value=None):
+            budget = handler._load_budget(run_id="run-current", pipeline_name="alpha")
+
+        assert budget["phase_usage"] == [phase]
 
     def test_v2_ledger_resets_stale_daily_display_but_preserves_run_usage(
         self, tmp_path,

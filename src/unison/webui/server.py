@@ -400,6 +400,7 @@ class UnisonHandler(BaseHTTPRequestHandler):
             pipeline = self._load_pipeline_config()
         daily_used = 0
         per_task_used = 0
+        phase_usage: list[dict] = []
         world = World(self.project_root)
         daily_path = world.daily_budget_file()
         daily_data: dict = {}
@@ -434,6 +435,9 @@ class UnisonHandler(BaseHTTPRequestHandler):
                     run_data = runs.get(run_key)
                     if isinstance(run_data, dict):
                         per_task_used = run_data.get("task_used", 0)
+                        phases = run_data.get("phases")
+                        if isinstance(phases, list):
+                            phase_usage = [item for item in phases if isinstance(item, dict)]
             elif budget_path.exists():
                 # Legacy split-file compatibility during migration.
                 try:
@@ -441,6 +445,9 @@ class UnisonHandler(BaseHTTPRequestHandler):
                         legacy_data = json.load(f)
                     if isinstance(legacy_data, dict):
                         per_task_used = legacy_data.get("task_used", 0)
+                        phases = legacy_data.get("phases")
+                        if isinstance(phases, list):
+                            phase_usage = [item for item in phases if isinstance(item, dict)]
                 except (json.JSONDecodeError, OSError):
                     pass
 
@@ -457,6 +464,7 @@ class UnisonHandler(BaseHTTPRequestHandler):
             "daily_limit": daily_limit,
             "per_task_used": per_task_used,
             "per_task_limit": per_task_limit,
+            "phase_usage": phase_usage,
         }
 
     def _load_agents(

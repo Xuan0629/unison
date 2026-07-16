@@ -25,6 +25,7 @@ from typing import Any
 
 from unison.interfaces import AgentResult, AgentSpec, MOA_MODES, MoaConfig, Notification, Operation, PipelineSpec, RedirectControl, ReviewVerdict, VerdictParseError
 from unison.pipeline import PipelineValidationError, VALID_CHAIN_MODES
+from unison.runtime_capabilities import get_runtime_capability
 from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
 # All runtime mode checks derive from PhaseRouter; chain validation uses the
 # single exported set shared with PipelineLoader.
@@ -48,6 +49,7 @@ import yaml
 from unison.verdict import YamlFrontmatterParser
 from unison.context_deflate import assemble_context, extract_top_findings
 from unison.budget import BudgetTracker, estimate_tokens
+from unison.usage import UsageRecord
 from unison.event_bus import get_event_bus
 from unison.runners.base import mask_secrets
 from unison.runners.claude import ClaudeRunner
@@ -1117,9 +1119,11 @@ class Orchestrator:
 
             # Budget tracking
             tracker = self._get_budget_tracker("analyzer")
-            estimated_tokens = estimate_tokens(full_prompt)
-            tracker.add_usage(
-                estimated_tokens,
+            self._record_usage(
+                tracker,
+                prompt=full_prompt,
+                result=result,
+                runtime=spec.runtime,
                 phase=f"moa_analyze_{spec.role}",
                 iter_n=round_n,
             )
@@ -1608,9 +1612,11 @@ class Orchestrator:
 
         # Budget tracking
         tracker = self._get_budget_tracker("synthesizer")
-        estimated_tokens = estimate_tokens(full_prompt)
-        tracker.add_usage(
-            estimated_tokens,
+        self._record_usage(
+            tracker,
+            prompt=full_prompt,
+            result=result,
+            runtime=synth_spec.runtime,
             phase="moa_synthesize",
             iter_n=round_n,
         )
@@ -2399,9 +2405,15 @@ class Orchestrator:
         if not result.success and result.error and "timeout" in result.error.lower():
             self._recover_timeout_work(role, world, iteration, pre_invoke_dirty)
 
-        # 8. Track token usage (estimate from prompt length)
-        estimated_tokens = estimate_tokens(prompt)
-        tracker.add_usage(estimated_tokens, phase=role, iter_n=iteration)
+        # 8. Record provider usage facts and conservative budget reserve.
+        self._record_usage(
+            tracker,
+            prompt=prompt,
+            result=result,
+            runtime=effective_spec.runtime,
+            phase=role,
+            iter_n=iteration,
+        )
 
         # 8. Post-invoke completion detection (§5)
         ctx = getattr(self, "_run_ctx", None)
@@ -3173,9 +3185,12 @@ class Orchestrator:
                 failed_agents.append(spec.role)
             # Budget tracking per agent
             tracker = self._get_budget_tracker(pipeline_role)
-            estimated_tokens = estimate_tokens(prompt)
-            tracker.add_usage(
-                estimated_tokens, phase=f"{pipeline_role}_{spec.role}",
+            self._record_usage(
+                tracker,
+                prompt=prompt,
+                result=result,
+                runtime=spec.runtime,
+                phase=f"{pipeline_role}_{spec.role}",
                 iter_n=iteration,
             )
 
@@ -3294,7 +3309,7 @@ class Orchestrator:
                 ctx=getattr(self, "_run_ctx", None),
             )
 
-            runner.run(
+            result = runner.run(
                 spec=spec,
                 prompt=full_prompt,
                 workdir=world.root,
@@ -3304,9 +3319,13 @@ class Orchestrator:
 
             # Budget tracking
             tracker = self._get_budget_tracker("planner")
-            estimated_tokens = estimate_tokens(full_prompt)
-            tracker.add_usage(
-                estimated_tokens, phase=f"planner_{spec.role}", iter_n=iteration,
+            self._record_usage(
+                tracker,
+                prompt=full_prompt,
+                result=result,
+                runtime=spec.runtime,
+                phase=f"planner_{spec.role}",
+                iter_n=iteration,
             )
 
         with ThreadPoolExecutor(max_workers=len(agent_specs)) as executor:
@@ -3453,9 +3472,13 @@ class Orchestrator:
                 )
                 failed_developers.append(spec.role)
 
-            estimated_tokens = estimate_tokens(full_prompt)
-            tracker.add_usage(
-                estimated_tokens, phase=f"developer_{spec.role}", iter_n=iteration,
+            self._record_usage(
+                tracker,
+                prompt=full_prompt,
+                result=result,
+                runtime=spec.runtime,
+                phase=f"developer_{spec.role}",
+                iter_n=iteration,
             )
 
             # Completion detection
@@ -3597,8 +3620,14 @@ class Orchestrator:
                 break
 
             # Track token usage
-            estimated_tokens = estimate_tokens(full_prompt)
-            tracker.add_usage(estimated_tokens, phase=f"developer_{feature_name}", iter_n=iteration)
+            self._record_usage(
+                tracker,
+                prompt=full_prompt,
+                result=result,
+                runtime=effective_spec.runtime,
+                phase=f"developer_{feature_name}",
+                iter_n=iteration,
+            )
 
             # Completion detection
             detected = self._detector.detect(
@@ -4649,6 +4678,26 @@ class Orchestrator:
         """
         agents = self._resolve_agents(pipeline_role)
         return agents[0] if agents else None
+
+    def _record_usage(
+        self,
+        tracker: BudgetTracker,
+        *,
+        prompt: str,
+        result: AgentResult,
+        runtime: str,
+        phase: str,
+        iter_n: int,
+    ) -> None:
+        """Persist provider facts while keeping budget accounting conservative."""
+        usage = result.usage
+        if usage.token_provenance == "actual" and usage.total_tokens is not None:
+            reserve = usage.total_tokens
+        else:
+            reserve = estimate_tokens(prompt)
+            if get_runtime_capability(runtime).usage_provenance == "estimated":
+                usage = UsageRecord.estimated(reserve)
+        tracker.add_usage(reserve, phase=phase, iter_n=iter_n, usage=usage)
 
     def _get_budget_tracker(self, role: str = "") -> BudgetTracker:
         """Return the shared BudgetTracker, creating it lazily.

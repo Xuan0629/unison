@@ -1458,6 +1458,85 @@ budget:
         tracker = orch._get_budget_tracker("developer")
         assert tracker.per_task_limit == 50000
 
+    def test_record_usage_prefers_verified_actual_total(self, tmp_path):
+        from unison.interfaces import AgentResult
+        from unison.pipeline import PipelineLoader
+        from unison.usage import UsageRecord
+
+        root = tmp_path / "project"
+        root.mkdir()
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(f"""
+version: "1.0"
+project_root: "{root}"
+agents:
+  developer:
+    role: developer
+    runtime: openclaw
+    model: default
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: openclaw
+    model: default
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        orch = Orchestrator(spec=PipelineLoader().load(pipeline))
+        tracker = orch._get_budget_tracker("developer")
+        result = AgentResult(
+            success=True, exit_code=0, duration=0, stdout_tail="", stderr_tail="",
+            log_path=tmp_path / "agent.log",
+            usage=UsageRecord(
+                token_provenance="actual", cost_provenance="unavailable",
+                input_tokens=8, output_tokens=2, cache_read_tokens=1, total_tokens=11,
+            ),
+        )
+
+        orch._record_usage(
+            tracker, prompt="a much longer prompt than eleven tokens would allow",
+            result=result, runtime="openclaw", phase="developer", iter_n=1,
+        )
+
+        assert tracker.current_usage == 11
+        assert tracker._phases[0].usage.token_provenance == "actual"
+
+    def test_record_usage_keeps_missing_actual_callback_unavailable(self, tmp_path):
+        from unison.interfaces import AgentResult
+        from unison.pipeline import PipelineLoader
+
+        root = tmp_path / "project"
+        root.mkdir()
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(f"""
+version: "1.0"
+project_root: "{root}"
+agents:
+  developer:
+    role: developer
+    runtime: openclaw
+    model: default
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: openclaw
+    model: default
+    system_prompt_path: "prompts/reviewer.md"
+""")
+        orch = Orchestrator(spec=PipelineLoader().load(pipeline))
+        tracker = orch._get_budget_tracker("developer")
+        result = AgentResult(
+            success=True, exit_code=0, duration=0, stdout_tail="", stderr_tail="",
+            log_path=tmp_path / "agent.log",
+        )
+
+        orch._record_usage(
+            tracker, prompt="reserve this prompt", result=result,
+            runtime="openclaw", phase="developer", iter_n=1,
+        )
+
+        assert tracker.current_usage > 0
+        assert tracker._phases[0].usage.token_provenance == "unavailable"
+
     def test_per_agent_context_budget_none_falls_back_to_global(self, tmp_path):
         """None context_budget falls back to BudgetConfig.per_task_limit."""
         world_root = tmp_path / "project"

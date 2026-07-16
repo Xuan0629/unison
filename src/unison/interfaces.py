@@ -27,6 +27,7 @@ from typing import Literal, Protocol, TypeAlias, Iterator, TypedDict
 from enum import Enum
 
 from unison.runtime_capabilities import get_runtime_capability
+from unison.usage import UsageRecord
 from unison.world import World
 
 # ============================================================================
@@ -486,6 +487,7 @@ class AgentResult:
     commit: str | None = None     # git log -1 --format=%H
     verdict: Verdict | None = None  # Reviewer only
     error: str | None = None
+    usage: UsageRecord = field(default_factory=UsageRecord.unavailable)
 
 # ============================================================================
 # Completion Detection — 替代 .unison/done-N 文件
