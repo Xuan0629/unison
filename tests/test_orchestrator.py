@@ -66,6 +66,7 @@ agents:
         monkeypatch.setattr(orchestrator, "_get_budget_tracker", lambda role: tracker)
         monkeypatch.setattr(orchestrator, "_build_prompt", lambda *args, **kwargs: "first task")
         monkeypatch.setattr(orchestrator._detector, "_get_commit", lambda root: "baseline")
+        monkeypatch.setattr(orchestrator, "_observe_foreground_liveness", lambda _iteration: None)
         monkeypatch.setattr(
             orchestrator,
             "_save_checkpoint",
@@ -99,6 +100,7 @@ agents:
         monkeypatch.setattr(orchestrator, "_get_budget_tracker", lambda role: tracker)
         monkeypatch.setattr(orchestrator, "_build_prompt", lambda *args, **kwargs: "first task")
         monkeypatch.setattr(orchestrator._detector, "_get_commit", lambda root: "baseline")
+        monkeypatch.setattr(orchestrator, "_observe_foreground_liveness", lambda _iteration: None)
         monkeypatch.setattr(
             orchestrator,
             "_resolve_agents",
@@ -586,6 +588,120 @@ class TestForegroundReconcile:
 
         with pytest.raises(ValueError, match="changed away from foreground"):
             resumed.load_reconcile_state(orchestrator.state())
+
+    def test_foreground_dispatch_supervises_wrapper_until_result_is_observed(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        effective_spec = orchestrator.spec.agents["developer"]
+        invocation = MagicMock()
+        invocation.invocation_id = "foreground-id"
+        invocation.directory = tmp_path / "artifact"
+        invocation.directory.mkdir()
+        invocation.result_path = invocation.directory / "result.json"
+        invocation.output_path = invocation.directory / "output.log"
+        invocation.read_request.return_value = {"launched_at": "2026-07-16T00:00:00Z"}
+        invocation.read_verified_result.return_value = {
+            "invocation_id": "foreground-id", "exit_code": 0,
+        }
+        snapshots = []
+        monkeypatch.setattr("unison.orchestrator.prepare_foreground_invocation", lambda **_kwargs: invocation)
+        monkeypatch.setattr("unison.orchestrator.launch_linux_terminal", lambda _invocation: 4321)
+        monkeypatch.setattr(orchestrator, "_observe_foreground_liveness", lambda _iteration: snapshots.append(True))
+
+        orchestrator._dispatch_foreground_invocation(
+            effective_spec=effective_spec,
+            prompt="task",
+            baseline_commit="baseline",
+            iteration=1,
+        )
+
+        assert snapshots == [True]
+        pending = orchestrator.state().active_foreground_invocation
+        assert pending is not None
+        assert pending.launcher_pid == 4321
+
+    def test_foreground_supervision_halts_after_stale_heartbeat_without_process_control(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        invocation = MagicMock()
+        invocation.invocation_id = "pending-id"
+        invocation.directory = tmp_path / "artifact"
+        invocation.directory.mkdir(parents=True)
+        invocation.result_path = invocation.directory / "result.json"
+        invocation.output_path = invocation.directory / "output.log"
+        invocation.read_verified_result.return_value = None
+        invocation.heartbeat_path = invocation.directory / "heartbeat.json"
+        pending = ForegroundInvocationState(
+            invocation_id=invocation.invocation_id,
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            wrapper_pid=None,
+            wrapper_start_identity=None,
+            launcher_pid=4321,
+            artifact_dir=str(invocation.directory),
+            result_path=str(invocation.result_path),
+            output_path=str(invocation.output_path),
+            started_at="2026-07-15T00:00:00Z",
+            last_heartbeat_observed_at=None,
+        )
+        orchestrator._state.active_foreground_invocation = pending
+        ticks = iter([0.0, 91.0, 91.0])
+        monkeypatch.setattr("unison.orchestrator.time.monotonic", lambda: next(ticks))
+        monkeypatch.setattr("unison.orchestrator.time.sleep", lambda _seconds: None)
+        monkeypatch.setattr("unison.orchestrator.ForegroundInvocation", lambda *_args, **_kwargs: invocation)
+
+        orchestrator._observe_foreground_liveness(iteration=1)
+
+        assert orchestrator.state().halt_signal is True
+        assert "interrupted_unverified" in (orchestrator.state().halt_reason or "")
+        assert orchestrator.state().active_foreground_invocation == pending
+
+    def test_foreground_supervision_records_verified_heartbeat_with_local_monotonic_time(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        invocation = MagicMock()
+        invocation.invocation_id = "pending-id"
+        invocation.directory = tmp_path / "artifact"
+        invocation.directory.mkdir(parents=True)
+        invocation.result_path = invocation.directory / "result.json"
+        invocation.output_path = invocation.directory / "output.log"
+        invocation.read_verified_result.return_value = None
+        invocation.heartbeat_path = invocation.directory / "heartbeat.json"
+        pending = ForegroundInvocationState(
+            invocation_id=invocation.invocation_id,
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            wrapper_pid=None,
+            wrapper_start_identity=None,
+            launcher_pid=4321,
+            artifact_dir=str(invocation.directory),
+            result_path=str(invocation.result_path),
+            output_path=str(invocation.output_path),
+            started_at="2026-07-15T00:00:00Z",
+            last_heartbeat_observed_at=None,
+        )
+        orchestrator._state.active_foreground_invocation = pending
+        wrapper = ProcessIdentity(pid=111, start_identity="linux:222")
+        ticks = iter([0.0, 1.0, 2.0])
+        monkeypatch.setattr("unison.orchestrator.time.monotonic", lambda: next(ticks))
+        monkeypatch.setattr("unison.orchestrator.time.sleep", lambda _seconds: None)
+        monkeypatch.setattr(
+            "unison.orchestrator.atomic_read_json",
+            lambda _path: {"wrapper_pid": 111, "wrapper_start_identity": "linux:222"},
+        )
+        monkeypatch.setattr(invocation, "read_verified_result", lambda: None)
+        monkeypatch.setattr(invocation, "read_verified_heartbeat", lambda identity: {"observed_at": "future"} if identity == wrapper else None)
+        monkeypatch.setattr("unison.orchestrator.read_process_identity", lambda _pid: wrapper)
+        monkeypatch.setattr("unison.orchestrator.ForegroundInvocation", lambda *_args, **_kwargs: invocation)
+        monkeypatch.setattr(orchestrator, "halt", lambda *_args, **_kwargs: pytest.fail("must not halt on a verified heartbeat"))
+
+        with pytest.raises(StopIteration):
+            orchestrator._observe_foreground_liveness(iteration=1)
+
+        current = orchestrator.state().active_foreground_invocation
+        assert current is not None
+        assert current.wrapper_pid == 111
+        assert current.wrapper_start_identity == "linux:222"
+        assert current.last_heartbeat_observed_at == "2.000000"
 
     def test_nonzero_foreground_result_halts_without_self_heal(self, tmp_path, monkeypatch):
         orchestrator = self._make_orchestrator(tmp_path)

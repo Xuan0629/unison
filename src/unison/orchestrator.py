@@ -32,8 +32,10 @@ _KNOWN_MODES = VALID_CHAIN_MODES
 from unison.prompt_registry import PromptRegistry
 from unison.foreground import (
     ForegroundInvocation,
+    ProcessIdentity,
     launch_linux_terminal,
     prepare_foreground_invocation,
+    read_process_identity,
 )
 from unison.state import ForegroundInvocationState, ForegroundReconcileState, State
 from unison.lock import FileLockManager
@@ -2468,6 +2470,73 @@ class Orchestrator:
             launcher_pid=launcher_pid,
         )
         self._save_checkpoint(iteration)
+        self._observe_foreground_liveness(iteration)
+
+    def _observe_foreground_liveness(self, iteration: int) -> None:
+        """Block on a foreground wrapper without interacting with it.
+
+        The launcher only proves a terminal handoff.  This loop observes
+        verified wrapper heartbeats and terminal result evidence using local
+        monotonic time.  It never sends input, grants approval, kills, attaches
+        to, retries, or reconciles the foreground process.
+        """
+        poll_interval = 15.0
+        stale_after = 90.0
+        started = time.monotonic()
+        last_verified = started
+
+        while not self._state.halt_signal:
+            pending = self._state.active_foreground_invocation
+            if pending is None:
+                return
+            invocation = ForegroundInvocation(
+                pending.invocation_id, Path(pending.artifact_dir),
+            )
+            if invocation.read_verified_result() is not None:
+                return
+
+            wrapper: ProcessIdentity | None = None
+            if pending.wrapper_pid is not None and pending.wrapper_start_identity is not None:
+                current = read_process_identity(pending.wrapper_pid)
+                expected = ProcessIdentity(pending.wrapper_pid, pending.wrapper_start_identity)
+                if current == expected:
+                    wrapper = current
+            else:
+                heartbeat = atomic_read_json(invocation.heartbeat_path)
+                if isinstance(heartbeat, dict):
+                    pid = heartbeat.get("wrapper_pid")
+                    identity = heartbeat.get("wrapper_start_identity")
+                    if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 and isinstance(identity, str) and identity:
+                        current = read_process_identity(pid)
+                        candidate = ProcessIdentity(pid, identity)
+                        if current == candidate:
+                            wrapper = current
+
+            if wrapper is not None and invocation.read_verified_heartbeat(wrapper) is not None:
+                now = time.monotonic()
+                observed = f"{now:.6f}"
+                last_verified = now
+                if (
+                    pending.wrapper_pid != wrapper.pid
+                    or pending.wrapper_start_identity != wrapper.start_identity
+                    or pending.last_heartbeat_observed_at != observed
+                ):
+                    self._state.active_foreground_invocation = replace(
+                        pending,
+                        wrapper_pid=wrapper.pid,
+                        wrapper_start_identity=wrapper.start_identity,
+                        last_heartbeat_observed_at=observed,
+                    )
+                    self._save_checkpoint(iteration)
+            elif time.monotonic() - last_verified >= stale_after:
+                self.halt(
+                    "foreground interrupted_unverified: no verified heartbeat for 90 seconds",
+                    category="external",
+                )
+                self._save_checkpoint(iteration)
+                return
+
+            time.sleep(poll_interval)
 
     def reconcile_foreground(self) -> bool:
         """Persist exactly-once evidence for the active foreground result.
