@@ -16,6 +16,7 @@ from unison.foreground import (
     ForegroundInvocation,
     ProcessIdentity,
     build_foreground_command,
+    foreground_child_and_group_status,
     launch_linux_terminal,
     main as foreground_main,
     prepare_foreground_invocation,
@@ -412,6 +413,24 @@ class TestForegroundInvocationArtifacts:
         monkeypatch.setattr("unison.foreground.Path.read_text", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("missing")))
 
         assert read_process_identity(12345) is None
+
+
+class TestForegroundInvocation:
+    def test_child_and_group_status_rejects_missing_evidence(self, tmp_path):
+        invocation = ForegroundInvocation("missing", tmp_path / "artifact")
+        invocation.directory.mkdir()
+
+        assert foreground_child_and_group_status(invocation) == "unknown"
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux /proc liveness is required")
+    def test_child_and_group_status_reports_live_matching_child(self, tmp_path):
+        invocation = ForegroundInvocation("live", tmp_path / "artifact")
+        invocation.directory.mkdir()
+        identity = read_process_identity(os.getpid())
+        assert identity is not None
+        invocation.write_child(identity, process_group_id=os.getpgrp())
+
+        assert foreground_child_and_group_status(invocation) == "live"
 
 
 class TestForegroundCommandBuilder:

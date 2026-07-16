@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from unison.cli import main, _cmd_reconcile, _cmd_run, _cmd_webui
+from unison.cli import main, _cmd_reconcile, _cmd_resume, _cmd_run, _cmd_webui
 from unison.interfaces import AgentSpec, PipelineSpec, ProjectConfig, World
 from unison.state import State
 
@@ -469,6 +469,47 @@ class TestForegroundReconcileCli:
         pipeline = tmp_path / "pipeline.yaml"
 
         assert main(["reconcile", "--pipeline", str(pipeline)]) == 0
+        assert called == [pipeline]
+
+
+    def test_resume_loads_canonical_run_before_replacement(self, tmp_path, monkeypatch):
+        import unison.cli as cli
+        from unison.state import ForegroundInvocationState
+
+        spec = self._spec(tmp_path)
+        state = State(
+            phase="dev_active", run_id="resume-run", pipeline_name=spec.pipeline_name,
+            halt_signal=True,
+            halt_reason="foreground interrupted_unverified: heartbeat stale",
+            active_foreground_invocation=ForegroundInvocationState(
+                invocation_id="foreground-id", phase="dev_active", role="developer",
+                runtime="claude", wrapper_pid=None, wrapper_start_identity=None,
+                launcher_pid=1, artifact_dir=str(tmp_path / "artifact"),
+                result_path=str(tmp_path / "artifact" / "result.json"),
+                output_path=str(tmp_path / "artifact" / "output.log"),
+                started_at="2026-07-15T00:00:00Z", last_heartbeat_observed_at=None,
+            ),
+        )
+        self._write_states(spec, state)
+        monkeypatch.setattr(cli, "_load", lambda _path: (spec, MagicMock()))
+        runner = MagicMock()
+        runner.run.return_value = State(phase="done")
+        monkeypatch.setattr(cli, "Orchestrator", lambda **_kwargs: runner)
+
+        assert _cmd_resume(SimpleNamespace(pipeline=tmp_path / "pipeline.yaml", json=False)) == 0
+        runner.load_resume_state.assert_called_once()
+        assert runner.load_resume_state.call_args.args[0].run_id == "resume-run"
+        runner.run.assert_called_once()
+
+    def test_main_routes_resume_command(self, tmp_path, monkeypatch):
+        import unison.cli as cli
+
+        called = []
+        monkeypatch.setattr(cli, "_cmd_resume", lambda args: called.append(args.pipeline) or 0)
+        monkeypatch.setitem(cli._HANDLERS, "resume", cli._cmd_resume)
+        pipeline = tmp_path / "pipeline.yaml"
+
+        assert main(["resume", "--pipeline", str(pipeline)]) == 0
         assert called == [pipeline]
 
 

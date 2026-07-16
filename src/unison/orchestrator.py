@@ -33,6 +33,7 @@ from unison.prompt_registry import PromptRegistry
 from unison.foreground import (
     ForegroundInvocation,
     ProcessIdentity,
+    foreground_child_and_group_status,
     launch_linux_terminal,
     prepare_foreground_invocation,
     read_process_identity,
@@ -280,6 +281,47 @@ class Orchestrator:
             raise ValueError("foreground reconcile phase does not match persisted State")
         self._state = state
         self._reconcile_resume = True
+        self._run_ctx = RunContext(
+            project_id=self.spec.world.project_id,
+            pipeline_key=self.spec.world.pipeline_key(state.pipeline_name),
+            run_id=state.run_id,
+            pipeline_name=state.pipeline_name,
+        )
+        self._run_id = state.run_id
+        self.spec.world.ensure_run_directories(self._run_ctx)
+
+    def load_resume_state(self, state: State) -> None:
+        """Authorize one explicit replacement after a verified interruption.
+
+        Only a halted foreground invocation without a valid result may enter
+        this path.  The replacement is launched later by the regular state
+        machine, after a second liveness check immediately before handoff.
+        """
+        pending = state.active_foreground_invocation
+        if (
+            pending is None
+            or not state.run_id
+            or state.pipeline_name != self.spec.pipeline_name
+            or not state.halt_signal
+            or not isinstance(state.halt_reason, str)
+            or not state.halt_reason.startswith("foreground interrupted_unverified:")
+        ):
+            raise ValueError("foreground resume requires an interrupted persisted foreground run")
+        if self.spec.execution.resolve_phase(pending.phase) != "foreground_manual":
+            raise ValueError("foreground resume refuses a pipeline policy changed away from foreground")
+        invocation = ForegroundInvocation(pending.invocation_id, Path(pending.artifact_dir))
+        if invocation.read_verified_result() is not None:
+            raise ValueError("foreground resume refuses a completed invocation; use reconcile")
+        status = foreground_child_and_group_status(invocation)
+        if status == "live":
+            raise ValueError("foreground resume refused: child process or group remains live")
+        if status != "dead":
+            raise ValueError("foreground resume refused: child process or group liveness is unverified")
+        self._state = state
+        self._state.halt_signal = False
+        self._state.halt_reason = None
+        self._reconcile_resume = True
+        self._resume_replacement_from = pending.invocation_id
         self._run_ctx = RunContext(
             project_id=self.spec.world.project_id,
             pipeline_key=self.spec.world.pipeline_key(state.pipeline_name),
@@ -2407,8 +2449,10 @@ class Orchestrator:
     ) -> None:
         """Persist and hand off one foreground invocation without completion claims."""
         marker = self._state.foreground_reconcile
+        replacement_from = getattr(self, "_resume_replacement_from", None)
         if self._state.active_foreground_invocation is not None and (
-            marker is None or marker.status != "reconciled"
+            (marker is None or marker.status != "reconciled")
+            and replacement_from != self._state.active_foreground_invocation.invocation_id
         ):
             self.halt(
                 "foreground invocation is already active; refusing duplicate dispatch",
@@ -2420,6 +2464,21 @@ class Orchestrator:
             self._state.active_foreground_invocation = None
 
         world = self.spec.world
+        if replacement_from is not None:
+            old = self._state.active_foreground_invocation
+            if old is None or old.invocation_id != replacement_from:
+                self.halt("foreground resume replacement state is inconsistent", category="external")
+                self._save_checkpoint(iteration)
+                return
+            old_invocation = ForegroundInvocation(old.invocation_id, Path(old.artifact_dir))
+            status = foreground_child_and_group_status(old_invocation)
+            if status != "dead":
+                self.halt(
+                    "foreground resume refused: child process or group is no longer verified dead",
+                    category="external",
+                )
+                self._save_checkpoint(iteration)
+                return
         invocation = prepare_foreground_invocation(
             run_dir=world.unison_run_dir_for(self._run_ctx),
             phase=self._state.phase,
@@ -2435,7 +2494,7 @@ class Orchestrator:
             self._save_checkpoint(iteration)
             return
 
-        self._state.active_foreground_invocation = ForegroundInvocationState(
+        new_pending = ForegroundInvocationState(
             invocation_id=invocation.invocation_id,
             phase=self._state.phase,
             role=effective_spec.role,
@@ -2450,6 +2509,15 @@ class Orchestrator:
             last_heartbeat_observed_at=None,
             snapshot_ids=tuple(snapshot_ids or ()),
         )
+        if replacement_from is not None:
+            self._state.transition(
+                self._state.phase,
+                "orchestrator",
+                iter_n=iteration,
+                note=f"foreground resume replacement {replacement_from} -> {new_pending.invocation_id}",
+            )
+            del self._resume_replacement_from
+        self._state.active_foreground_invocation = new_pending
         self._state.foreground_reconcile = None
         self._save_checkpoint(iteration)
 

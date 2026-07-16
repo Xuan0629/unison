@@ -109,6 +109,59 @@ def read_process_identity(pid: int) -> ProcessIdentity | None:
     return ProcessIdentity(pid=pid, start_identity=f"linux:{starttime}")
 
 
+def foreground_child_and_group_status(invocation: "ForegroundInvocation") -> str:
+    """Return ``dead``, ``live``, or ``unknown`` for a recorded child group.
+
+    This is deliberately Linux-only.  Missing/malformed child evidence and any
+    unsupported or unverifiable process identity are ``unknown``; callers must
+    refuse replacement rather than infer that the invocation ended.
+    """
+    if sys.platform != "linux":
+        return "unknown"
+    child = atomic_read_json(invocation.child_path)
+    if not isinstance(child, dict) or not invocation._matches_invocation(child):
+        return "unknown"
+    pid = child.get("child_pid")
+    identity = child.get("child_start_identity")
+    group_id = child.get("child_process_group_id")
+    if (
+        isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0
+        or not isinstance(identity, str) or not identity
+        or isinstance(group_id, bool) or not isinstance(group_id, int) or group_id <= 0
+    ):
+        return "unknown"
+    current = read_process_identity(pid)
+    if current is None:
+        process_exists = Path(f"/proc/{pid}").exists()
+        if process_exists:
+            return "unknown"
+    elif current.start_identity == identity:
+        return "live"
+    else:
+        return "unknown"
+    try:
+        members = [
+            int(entry.name)
+            for entry in Path("/proc").iterdir()
+            if entry.name.isdigit()
+            and _linux_process_group_id(int(entry.name)) == group_id
+        ]
+    except OSError:
+        return "unknown"
+    return "dead" if not members else "live"
+
+
+def _linux_process_group_id(pid: int) -> int | None:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        closing_paren = stat.rfind(")")
+        fields_after_comm = stat[closing_paren + 2 :].split()
+        process_group_id = fields_after_comm[2]
+    except (IndexError, OSError, UnicodeError):
+        return None
+    return int(process_group_id) if process_group_id.isdigit() else None
+
+
 @dataclass(frozen=True)
 class ForegroundInvocation:
     """Paths and validated artifact access for one foreground invocation."""

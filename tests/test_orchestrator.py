@@ -703,6 +703,119 @@ class TestForegroundReconcile:
         assert current.wrapper_start_identity == "linux:222"
         assert current.last_heartbeat_observed_at == "2.000000"
 
+    def test_resume_rejects_live_or_unverifiable_child_without_mutating_state(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        invocation = self._attach_invocation(orchestrator, tmp_path)
+        invocation.result_path.unlink()
+        invocation.child_path.write_text(
+            '{"schema_version": 1, "invocation_id": "reconcile-id", "child_pid": 123, "child_start_identity": "linux:456", "child_process_group_id": 123}',
+            encoding="utf-8",
+        )
+        orchestrator._state.halt_signal = True
+        orchestrator._state.halt_reason = "foreground interrupted_unverified: heartbeat stale"
+        orchestrator._state.run_id = "resume-run"
+        orchestrator._state.pipeline_name = orchestrator.spec.pipeline_name
+        before = orchestrator.state().to_dict()
+        statuses = iter(["live", "unknown"])
+        monkeypatch.setattr(
+            "unison.orchestrator.foreground_child_and_group_status",
+            lambda _invocation: next(statuses),
+        )
+
+        resumed = Orchestrator(spec=orchestrator.spec)
+        with pytest.raises(ValueError, match="child process or group remains live"):
+            resumed.load_resume_state(orchestrator.state())
+        with pytest.raises(ValueError, match="liveness is unverified"):
+            resumed.load_resume_state(orchestrator.state())
+
+        assert orchestrator.state().to_dict() == before
+
+    def test_resume_refuses_completed_invocation_and_requires_reconcile(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        self._attach_invocation(orchestrator, tmp_path)
+        orchestrator._state.halt_signal = True
+        orchestrator._state.halt_reason = "foreground interrupted_unverified: heartbeat stale"
+        orchestrator._state.run_id = "resume-run"
+        orchestrator._state.pipeline_name = orchestrator.spec.pipeline_name
+        monkeypatch.setattr(
+            "unison.orchestrator.foreground_child_and_group_status",
+            lambda _invocation: pytest.fail("completed invocation must not check replacement liveness"),
+        )
+
+        resumed = Orchestrator(spec=orchestrator.spec)
+        with pytest.raises(ValueError, match="use reconcile"):
+            resumed.load_resume_state(orchestrator.state())
+
+    def test_resume_refuses_missing_halt_or_policy_drift(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        invocation = self._attach_invocation(orchestrator, tmp_path)
+        invocation.result_path.unlink()
+        orchestrator._state.run_id = "resume-run"
+        orchestrator._state.pipeline_name = orchestrator.spec.pipeline_name
+        monkeypatch.setattr("unison.orchestrator.foreground_child_and_group_status", lambda _invocation: "dead")
+
+        resumed = Orchestrator(spec=orchestrator.spec)
+        with pytest.raises(ValueError, match="requires an interrupted"):
+            resumed.load_resume_state(orchestrator.state())
+
+        orchestrator._state.halt_signal = True
+        orchestrator._state.halt_reason = "unrelated halt"
+        with pytest.raises(ValueError, match="requires an interrupted"):
+            resumed.load_resume_state(orchestrator.state())
+
+        changed = replace(
+            orchestrator.spec,
+            execution=replace(orchestrator.spec.execution, selected_policy="automatic"),
+        )
+        orchestrator._state.halt_reason = "foreground interrupted_unverified: heartbeat stale"
+        with pytest.raises(ValueError, match="changed away from foreground"):
+            Orchestrator(spec=changed).load_resume_state(orchestrator.state())
+
+    def test_resume_replaces_verified_dead_interrupted_invocation_once(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        old = self._attach_invocation(orchestrator, tmp_path)
+        old.result_path.unlink()
+        old.child_path.write_text(
+            '{"schema_version": 1, "invocation_id": "reconcile-id", "child_pid": 123, "child_start_identity": "linux:456", "child_process_group_id": 123}',
+            encoding="utf-8",
+        )
+        orchestrator._state.halt_signal = True
+        orchestrator._state.halt_reason = "foreground interrupted_unverified: heartbeat stale"
+        orchestrator._state.run_id = "resume-run"
+        orchestrator._state.pipeline_name = orchestrator.spec.pipeline_name
+        monkeypatch.setattr("unison.orchestrator.foreground_child_and_group_status", lambda _invocation: "dead")
+        resumed = Orchestrator(spec=orchestrator.spec)
+        resumed.load_resume_state(orchestrator.state())
+
+        effective_spec = resumed.spec.agents["developer"]
+        replacement = MagicMock()
+        replacement.invocation_id = "replacement-id"
+        replacement.directory = tmp_path / "replacement"
+        replacement.directory.mkdir()
+        replacement.result_path = replacement.directory / "result.json"
+        replacement.output_path = replacement.directory / "output.log"
+        replacement.read_request.return_value = {"launched_at": "2026-07-16T00:00:00Z"}
+        monkeypatch.setattr("unison.orchestrator.prepare_foreground_invocation", lambda **_kwargs: replacement)
+        monkeypatch.setattr("unison.orchestrator.launch_linux_terminal", lambda _invocation: 4321)
+        monkeypatch.setattr(resumed, "_observe_foreground_liveness", lambda _iteration: None)
+
+        resumed._dispatch_foreground_invocation(
+            effective_spec=effective_spec,
+            prompt="replacement task",
+            baseline_commit="baseline",
+            iteration=1,
+        )
+
+        active = resumed.state().active_foreground_invocation
+        assert active is not None
+        assert active.invocation_id != "reconcile-id"
+        assert active.invocation_id == "replacement-id"
+        assert resumed.state().halt_signal is False
+        assert any(
+            "reconcile-id -> replacement-id" in transition.note
+            for transition in resumed.state().history
+        )
+
     def test_nonzero_foreground_result_halts_without_self_heal(self, tmp_path, monkeypatch):
         orchestrator = self._make_orchestrator(tmp_path)
         self._attach_invocation(orchestrator, tmp_path, exit_code=7)

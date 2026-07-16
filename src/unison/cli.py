@@ -108,6 +108,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print final state as JSON (instead of human summary)",
     )
 
+    # --- resume ------------------------------------------------------
+    resume = sub.add_parser(
+        "resume",
+        help="Replace a verified-dead interrupted foreground invocation",
+    )
+    resume.add_argument(
+        "--pipeline", required=True, type=Path,
+        help="Path to the original pipeline.yaml",
+    )
+    resume.add_argument(
+        "--json", action="store_true",
+        help="Print final state as JSON (instead of human summary)",
+    )
+
     # --- dry-run -----------------------------------------------------
     dr = sub.add_parser("dry-run", help="Validate pipeline.yaml without running")
     dr.add_argument("--pipeline", required=True, type=Path)
@@ -511,6 +525,38 @@ def _cmd_reconcile(args: argparse.Namespace) -> int:
     return 0 if final_state.phase == "done" else 1
 
 
+def _cmd_resume(args: argparse.Namespace) -> int:
+    _load_api_keys()
+    spec, _ = _load(args.pipeline)
+    try:
+        state = _load_reconcile_state(spec)
+    except ValueError as error:
+        print(f"RESUME ERROR: {error}", file=sys.stderr)
+        return 1
+    if not authorize_run(spec, TRUSTED_LOCAL_PRINCIPAL):
+        print(
+            "AUTHORIZATION ERROR: local CLI is not allowed by who_can_run",
+            file=sys.stderr,
+        )
+        return 3
+    if not _check_tools(spec):
+        return 1
+    orchestrator = Orchestrator(spec=spec)
+    try:
+        orchestrator.load_resume_state(state)
+    except ValueError as error:
+        print(f"RESUME ERROR: {error}", file=sys.stderr)
+        return 1
+    final_state = orchestrator.run()
+    if args.json:
+        print(json.dumps(_state_to_dict(final_state), indent=2, default=str))
+    else:
+        _print_human_summary(final_state)
+    if final_state.halt_signal:
+        return 2
+    return 0 if final_state.phase == "done" else 1
+
+
 def _cmd_dry_run(args: argparse.Namespace) -> int:
     spec, loader = _load(args.pipeline)
     mode = loader.mode(spec)
@@ -603,6 +649,7 @@ def _cmd_observe(args: argparse.Namespace) -> int:
 _HANDLERS = {
     "run": _cmd_run,
     "reconcile": _cmd_reconcile,
+    "resume": _cmd_resume,
     "dry-run": _cmd_dry_run,
     "mode": _cmd_mode,
     "init": _cmd_init,
