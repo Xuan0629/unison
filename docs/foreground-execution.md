@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved target contract, not a statement of current implementation status. The implementation slices below make this contract true. Herdr is excluded: Unison neither installs nor integrates it.
+Foreground heartbeat supervision, verified `unison reconcile`, and explicit dead-only `unison resume` are implemented. This document remains the normative contract; release validation is incomplete until real Linux GUI approval E2E and external macOS evidence are recorded. Herdr is excluded: Unison neither installs nor integrates it.
 
 ## Goal
 
