@@ -94,6 +94,8 @@ class AgentSpec:
     pipeline_role: AgentRole | None = None  # Phase 11: maps custom role to built-in slot
     context_budget: int | None = None  # V2: per-agent token budget override
     reasoning_effort: str | None = None  # P12c: reasoning effort level (low/medium/high/xhigh/max)
+    skills: tuple[str, ...] = ()  # Hermes-only profile-scoped skill preload.
+    toolsets: tuple[str, ...] = ()  # Hermes-only profile-scoped tool allowlist.
 
     @property
     def effective_role(self) -> AgentRole:

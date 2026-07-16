@@ -214,7 +214,7 @@ class PipelineLoader:
             if not agents_raw or not isinstance(agents_raw, dict):
                 raise PipelineValidationError("Missing required field: agents")
             self._validate_required_agents(agents_raw)
-        agents = self._build_agents(agents_raw)
+        agents = self._build_agents(agents_raw, raw.get("profiles"))
 
         # ---- world (resolve project_root relative to pipeline file) ----
         pipeline_dir = pipeline_file.parent.resolve()
@@ -631,10 +631,50 @@ class PipelineLoader:
 
     # -- builders ------------------------------------------------------
 
+    @staticmethod
+    def _build_execution_profiles(raw: Any) -> dict[str, dict[str, Any]]:
+        """Validate bounded reusable execution profiles before agent resolution."""
+        if raw is None:
+            return {}
+        if not isinstance(raw, dict):
+            raise PipelineValidationError("profiles must be a mapping")
+
+        allowed = {
+            "system_prompt_path", "model", "reasoning_effort", "skills", "toolsets",
+        }
+        profiles: dict[str, dict[str, Any]] = {}
+        for name, profile in raw.items():
+            if not isinstance(name, str) or not name or len(name) > 100:
+                raise PipelineValidationError("profile name must be a 1..100 character string")
+            if not isinstance(profile, dict) or not profile:
+                raise PipelineValidationError(f"profile {name!r} must be a non-empty mapping")
+            unknown = set(profile) - allowed
+            if unknown:
+                raise PipelineValidationError(
+                    f"profile {name!r} contains unknown fields: "
+                    + ", ".join(sorted(unknown))
+                )
+            for field in ("system_prompt_path", "model", "reasoning_effort"):
+                if field in profile and not isinstance(profile[field], str):
+                    raise PipelineValidationError(
+                        f"profile {name!r} field {field!r} must be a string"
+                    )
+            for field in ("skills", "toolsets"):
+                value = profile.get(field, [])
+                if not isinstance(value, list) or any(
+                    not isinstance(item, str) or not item for item in value
+                ):
+                    raise PipelineValidationError(
+                        f"profile {name!r} field {field!r} must be a list of non-empty strings"
+                    )
+            profiles[name] = profile
+        return profiles
+
     def _build_agents(
-        self, agents_raw: dict[str, Any]
+        self, agents_raw: dict[str, Any], profiles_raw: Any = None,
     ) -> dict[str, AgentSpec]:
         """Build AgentSpec dict from raw YAML agent definitions."""
+        profiles = self._build_execution_profiles(profiles_raw)
         result: dict[str, AgentSpec] = {}
         for key, ad in agents_raw.items():
             if not isinstance(ad, dict):
@@ -654,15 +694,54 @@ class PipelineLoader:
                     f"Invalid runtime '{runtime}' for agent '{key}'"
                 )
 
+            if "skills" in ad or "toolsets" in ad:
+                raise PipelineValidationError(
+                    f"Agent '{key}' skills/toolsets must be declared through a profile"
+                )
+            profile_name = ad.get("profile")
+            if profile_name is not None and not isinstance(profile_name, str):
+                raise PipelineValidationError(f"Agent '{key}' profile must be a string")
+            if profile_name and profile_name not in profiles:
+                raise PipelineValidationError(
+                    f"Agent '{key}' references unknown profile '{profile_name}'"
+                )
+            profile = profiles.get(profile_name or "", {})
+            conflicting = set(profile) & set(ad) & {
+                "system_prompt_path", "model", "reasoning_effort", "skills", "toolsets",
+            }
+            if conflicting:
+                raise PipelineValidationError(
+                    "profile conflicts with agent field: " + ", ".join(sorted(conflicting))
+                )
+            if runtime != "hermes" and (profile.get("skills") or profile.get("toolsets")):
+                raise PipelineValidationError(
+                    "profile scopes skills/toolsets are only supported by runtime "
+                    f"'hermes' (agent '{key}')"
+                )
+
+            model = profile.get("model", ad.get("model", ""))
+            reasoning_effort = profile.get("reasoning_effort", ad.get("reasoning_effort"))
+            capability = get_runtime_capability(runtime)
+            if reasoning_effort is not None and not capability.supports_reasoning_effort:
+                raise PipelineValidationError(
+                    f"Runtime '{runtime}' for agent '{key}' does not support reasoning_effort"
+                )
+            if model and not capability.supports_model_override:
+                raise PipelineValidationError(
+                    f"Runtime '{runtime}' for agent '{key}' does not support model override"
+                )
+
             result[key] = AgentSpec(
                 role=role,
                 runtime=runtime,
-                model=ad.get("model", ""),
-                system_prompt_path=Path(ad.get("system_prompt_path", "")),
+                model=model,
+                system_prompt_path=Path(profile.get("system_prompt_path", ad.get("system_prompt_path", ""))),
                 task_instruction=ad.get("task_instruction"),
                 pipeline_role=ad.get("pipeline_role"),
                 context_budget=ad.get("context_budget"),
-                reasoning_effort=ad.get("reasoning_effort"),
+                reasoning_effort=reasoning_effort,
+                skills=tuple(profile.get("skills", ())),
+                toolsets=tuple(profile.get("toolsets", ())),
             )
 
         # Bug 3: Require explicit pipeline_role on every agent.
