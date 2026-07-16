@@ -273,7 +273,9 @@ Unison 1.0 composes bounded roles, models, phases, artifacts, and review loops a
 2. explicit Runner capability metadata;
 3. per-Agent execution profiles for isolated prompts, models, and supported skills/tools/memory scopes;
 4. a constrained Runtime adapter framework, validated first with Crush;
-5. truthful usage reporting (`actual`, `estimated`, or `unavailable`), deferred if a Runtime cannot expose reliable per-call usage.
+5. truthful usage reporting (`actual`, `estimated`, or `unavailable`), deferred if a Runtime cannot expose reliable per-call usage;
+6. planned foreground-recovery completion: heartbeat-interruption detection, a new explicit replacement `resume` command, real Linux native-approval E2E, and macOS validation, while retaining no automatic approval/retry/headless fallback;
+7. planned mode-specific LLM Observer: fully/partially automated runs will be able to explicitly enable an isolated, auditable Observer invocation; user-interactive foreground will default to no LLM Observer. When enabled, it will observe/report and will only be permitted to halt or write bounded redirect controls for explicit goal deviation or safety evidence; any rerun/replacement will require user confirmation.
 
 Until these contracts are implemented and tested, v1.0 intentionally rejects arbitrary Runtime keys rather than pretending that YAML alone creates a working integration. SQLiteChannel remains an evidence-gated possibility: it may be proposed only after reproducible FileChannel limitations and requires separate maintainer approval before design or implementation. Unison remains local-first and single-operator; SaaS/multi-user WebUI, identity federation, and a separate Unison plugin ecosystem are not planned.
 
