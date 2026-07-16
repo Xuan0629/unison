@@ -41,6 +41,11 @@ class _NonWaitingThreadPoolExecutor(ThreadPoolExecutor):
 import yaml
 
 from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
+from unison.runtime_capabilities import (
+    BUILTIN_RUNTIME_KEYS,
+    get_runtime_capability,
+    is_registered_runtime,
+)
 from unison.interfaces import (
     AgentSpec,
     BootstrapConfig,
@@ -105,10 +110,8 @@ class PipelineLoader:
             print("Ready to run")
     """
 
-    # Valid runtime values (matches interfaces.Runtime)
-    VALID_RUNTIMES: frozenset[str] = frozenset(
-        {"claude", "codex", "hermes", "openclaw"}
-    )
+    # Valid runtime values (from the canonical built-in capability registry).
+    VALID_RUNTIMES: frozenset[str] = frozenset(BUILTIN_RUNTIME_KEYS)
 
     # Valid agent roles (matches interfaces.AgentRole — now str, no longer restricted)
     VALID_ROLES: frozenset[str] = frozenset()
@@ -465,7 +468,11 @@ class PipelineLoader:
             raise PipelineValidationError("foreground execution does not support DAG")
         if spec.parallel_dev is not None and spec.parallel_dev.enabled:
             raise PipelineValidationError("foreground execution does not support parallel_dev")
-        unsupported = sorted({agent.runtime for agent in spec.agents.values()} - {"claude", "codex"})
+        unsupported = sorted(
+            agent.runtime
+            for agent in spec.agents.values()
+            if not get_runtime_capability(agent.runtime).preserves_interactive_tty
+        )
         if unsupported:
             raise PipelineValidationError(
                 "foreground execution only supports claude and codex; unsupported runtime(s): "
@@ -604,7 +611,7 @@ class PipelineLoader:
                 )
 
             runtime = ad.get("runtime", "")
-            if runtime not in self.VALID_RUNTIMES:
+            if not isinstance(runtime, str) or not is_registered_runtime(runtime):
                 raise PipelineValidationError(
                     f"Invalid runtime '{runtime}' for agent '{key}'"
                 )

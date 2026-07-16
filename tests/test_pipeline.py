@@ -394,6 +394,50 @@ agents:
         with pytest.raises(PipelineValidationError, match="runtime"):
             loader.load(pipeline_file)
 
+    def test_runtime_validation_uses_capability_registry(self, tmp_path):
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: crush
+    model: default
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: gpt-5.5
+    system_prompt_path: "prompts/reviewer.md"
+""")
+
+        with pytest.raises(PipelineValidationError, match="Invalid runtime 'crush'"):
+            PipelineLoader().load(pipeline_file)
+
+    def test_foreground_validation_uses_runtime_capability(self, tmp_path):
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+execution:
+  selected_policy: interactive
+agents:
+  developer:
+    role: developer
+    runtime: openclaw
+    model: default
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: default
+    system_prompt_path: "prompts/reviewer.md"
+""")
+
+        with pytest.raises(PipelineValidationError, match="only supports claude and codex"):
+            PipelineLoader().load(pipeline_file)
+
 
 class TestPipelineDryRun:
     """Pipeline dry-run tests."""

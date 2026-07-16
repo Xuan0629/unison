@@ -21,6 +21,7 @@ import yaml
 
 from unison.interfaces import PipelineMode
 from unison.prompt_registry import PromptRegistry
+from unison.runtime_capabilities import BUILTIN_RUNTIME_KEYS
 
 # ────────────────────────────────────────────────────────────────
 # Keyword patterns for auto-detecting pipeline mode
@@ -136,7 +137,7 @@ _MODE_AGENT_TEMPLATES: dict[PipelineMode, dict] = {
 }
 
 # Valid runtime / model suggestions
-_VALID_RUNTIMES = ("claude", "codex", "hermes", "openclaw")
+_VALID_RUNTIMES = BUILTIN_RUNTIME_KEYS
 
 _DEFAULT_TEST_COMMAND = "pytest tests/ -v"
 _DEFAULT_MAX_ITERATIONS = 5

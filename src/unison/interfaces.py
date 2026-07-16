@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Literal, Protocol, TypeAlias, Iterator, TypedDict
 from enum import Enum
 
+from unison.runtime_capabilities import get_runtime_capability
 from unison.world import World
 
 # ============================================================================
@@ -40,7 +41,7 @@ Phase: TypeAlias = Literal[
     "moa_synthesize",
 ]
 AgentRole: TypeAlias = str
-Runtime: TypeAlias = Literal["claude", "codex", "hermes", "openclaw"]
+Runtime: TypeAlias = str
 ExecutionMode: TypeAlias = Literal["headless_bypass", "foreground_manual"]
 EXECUTION_POLICY_PHASES: frozenset[str] = frozenset({
     "planning_active", "planning_review", "discuss_active", "discuss_review",
@@ -100,14 +101,8 @@ class AgentSpec:
 
     @property
     def cli_flags(self) -> list[str]:
-        """v1 强约束：runtime 特定的安全 flag。"""
-        _map: dict[Runtime, list[str]] = {
-            "claude":   ["-p", "--dangerously-skip-permissions"],
-            "codex":    ["exec", "--dangerously-bypass-approvals-and-sandbox"],
-            "hermes":   ["chat", "--yolo", "-q"],
-            "openclaw": [],  # v1.1: HTTP API, not subprocess
-        }
-        return _map[self.runtime]
+        """Runtime-specific headless flags from the shared capability registry."""
+        return list(get_runtime_capability(self.runtime).cli_flags)
 
 # ============================================================================
 # PipelineSpec — 一次 pipeline 运行的全部配置

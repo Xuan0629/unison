@@ -89,6 +89,51 @@ class TestAgentSpec:
 
 
 # ============================================================================
+# Runtime capability metadata
+# ============================================================================
+
+
+class TestRuntimeCapabilities:
+    def test_builtin_runtime_capabilities_are_immutable_and_complete(self):
+        from unison.runtime_capabilities import (
+            BUILTIN_RUNTIME_KEYS,
+            get_runtime_capability,
+            list_runtime_capabilities,
+        )
+
+        capabilities = list_runtime_capabilities()
+
+        assert tuple(capability.runtime_key for capability in capabilities) == BUILTIN_RUNTIME_KEYS
+        assert tuple(get_runtime_capability(key).runtime_key for key in BUILTIN_RUNTIME_KEYS) == BUILTIN_RUNTIME_KEYS
+        assert get_runtime_capability("claude").preserves_interactive_tty is True
+        assert get_runtime_capability("openclaw").preserves_interactive_tty is False
+        with pytest.raises(AttributeError):
+            capabilities[0].supports_model_override = False
+
+    def test_unknown_runtime_capability_fails_closed(self):
+        from unison.runtime_capabilities import get_runtime_capability
+
+        with pytest.raises(KeyError, match="unknown runtime"):
+            get_runtime_capability("crush")
+
+    def test_agent_spec_cli_flags_come_from_runtime_capability(self):
+        spec = AgentSpec(
+            role="developer",
+            runtime="claude",
+            model="default",
+            system_prompt_path=Path("prompts/developer.md"),
+        )
+
+        assert spec.cli_flags == ["-p", "--dangerously-skip-permissions"]
+
+    def test_pipeline_generator_uses_capability_registry_runtime_keys(self):
+        from unison.pipeline_generator import _VALID_RUNTIMES
+        from unison.runtime_capabilities import BUILTIN_RUNTIME_KEYS
+
+        assert _VALID_RUNTIMES is BUILTIN_RUNTIME_KEYS
+
+
+# ============================================================================
 # ChainConfig / ChainStage
 # ============================================================================
 

@@ -25,6 +25,7 @@ from unison.auth import RunAuthorizationError, authorize_run
 from unison.interfaces import EXECUTION_POLICY_PHASES, TRUSTED_LOCAL_PRINCIPAL
 from unison.orchestrator import Orchestrator
 from unison.pipeline import PipelineLoader, PipelineValidationError
+from unison.runtime_capabilities import get_runtime_capability, is_registered_runtime
 from unison.state import State
 from unison.world import RunContext
 
@@ -203,7 +204,7 @@ def _apply_agent_overrides(
 
     invalid_runtimes = {
         runtime for runtime in switches.values()
-        if runtime not in PipelineLoader.VALID_RUNTIMES
+        if not is_registered_runtime(runtime)
     }
     if invalid_runtimes:
         raise ValueError(
@@ -322,8 +323,10 @@ def _check_tools(spec) -> bool:
     needed: dict[str, list[str]] = {}
     for agent_key, agent in spec.agents.items():
         runtime = getattr(agent, "runtime", "")
-        if runtime and runtime != "openclaw":
-            needed.setdefault(runtime, []).append(agent_key)
+        if runtime:
+            capability = get_runtime_capability(runtime)
+            if capability.executable:
+                needed.setdefault(capability.executable, []).append(agent_key)
 
     # Also check git
     missing: list[str] = []

@@ -347,10 +347,10 @@ class TestAgentOverrides:
         orchestrator = MagicMock()
         monkeypatch.setattr(cli, "Orchestrator", orchestrator)
 
-        result = _cmd_run(self._args(tmp_path, switch="reviewer:custom"))
+        result = _cmd_run(self._args(tmp_path, switch="reviewer:crush"))
 
         assert result == 1
-        assert "invalid runtime" in capsys.readouterr().err
+        assert "invalid runtime(s): crush" in capsys.readouterr().err
         orchestrator.assert_not_called()
 
     def test_save_pref_write_failure_does_not_start_or_replace_pipeline(
