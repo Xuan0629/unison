@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -12,7 +14,33 @@ from unison.state import State
 from unison.world import RunContext, World
 
 
-AuditEvent = Literal["manifest_created", "observation_skipped", "action_rejected"]
+AuditEvent = Literal[
+    "manifest_created",
+    "observation_skipped",
+    "observation_started",
+    "observation_succeeded",
+    "observation_failed",
+    "action_rejected",
+]
+
+
+@dataclass(frozen=True)
+class ObservationResult:
+    """A bounded LLM observation; never a pipeline control decision."""
+
+    status: Literal["observed", "failed"]
+    summary: str
+
+
+_OBSERVATION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "status": {"const": "observed"},
+        "summary": {"type": "string", "maxLength": 240},
+    },
+    "required": ["status", "summary"],
+}
 
 
 def llm_observer_dir(world: World, ctx: RunContext) -> Path:
@@ -25,6 +53,10 @@ def llm_observer_manifest_path(world: World, ctx: RunContext) -> Path:
 
 def llm_observer_audit_path(world: World, ctx: RunContext) -> Path:
     return llm_observer_dir(world, ctx) / "audit.jsonl"
+
+
+def llm_observation_path(world: World, ctx: RunContext) -> Path:
+    return llm_observer_dir(world, ctx) / "observation.json"
 
 
 def build_manifest(state: State, ctx: RunContext) -> dict:
@@ -46,11 +78,86 @@ def build_manifest(state: State, ctx: RunContext) -> dict:
 
 def write_manifest(world: World, ctx: RunContext, state: State) -> tuple[Path, str]:
     manifest = build_manifest(state, ctx)
-    encoded = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
-    digest = hashlib.sha256(encoded).hexdigest()
     path = llm_observer_manifest_path(world, ctx)
     atomic_write_json(path, manifest)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return path, digest
+
+
+def run_claude_observation(
+    world: World,
+    ctx: RunContext,
+    manifest_path: Path,
+    manifest_sha256: str,
+    model: str,
+    timeout: int,
+) -> ObservationResult:
+    """Run the verified no-tool Claude observer and persist its bounded report only."""
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+        if hashlib.sha256(manifest_bytes).hexdigest() != manifest_sha256:
+            return ObservationResult("failed", "manifest digest mismatch")
+        manifest = json.loads(manifest_bytes)
+    except (OSError, json.JSONDecodeError):
+        return ObservationResult("failed", "manifest unavailable")
+
+    prompt = (
+        "You are a read-only pipeline observer. Analyze only this allowlisted JSON "
+        "manifest and return the required schema result. Do not request tools, actions, "
+        "reruns, redirects, or a halt. Manifest: "
+        + json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    )
+    command = [
+        "claude",
+        "-p",
+        "--bare",
+        "--no-session-persistence",
+        "--permission-mode",
+        "plan",
+        "--tools",
+        "",
+        "--output-format",
+        "json",
+        "--json-schema",
+        json.dumps(_OBSERVATION_SCHEMA, sort_keys=True, separators=(",", ":")),
+        "--max-budget-usd",
+        "0.05",
+    ]
+    if model:
+        command.extend(["--model", model])
+    command.append(prompt)
+
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(manifest_path.parent),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ObservationResult("failed", "observer invocation failed")
+    if completed.returncode != 0:
+        return ObservationResult("failed", "observer invocation failed")
+
+    try:
+        payload = json.loads(completed.stdout)
+        observation = payload["structured_output"]
+        status = observation["status"]
+        summary = observation["summary"]
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return ObservationResult("failed", "invalid structured observation output")
+    if (
+        status != "observed"
+        or not isinstance(summary, str)
+        or len(summary) > 240
+        or set(observation) != {"status", "summary"}
+    ):
+        return ObservationResult("failed", "invalid structured observation output")
+
+    atomic_write_json(llm_observation_path(world, ctx), {"status": status, "summary": summary})
+    return ObservationResult("observed", summary)
 
 
 def append_audit(

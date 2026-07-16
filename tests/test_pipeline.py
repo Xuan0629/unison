@@ -1869,27 +1869,39 @@ agents:
         assert spec.llm_observer.allow_halt is False
         assert spec.llm_observer.allow_redirect is False
 
-    def test_enabled_requires_registered_runtime(self, tmp_path):
+    def test_enabled_requires_verified_read_only_runtime(self, tmp_path):
         path = self._write_pipeline(
             tmp_path,
             """llm_observer:
   enabled: true
-  runtime: crush
+  runtime: codex
 """,
         )
 
-        with pytest.raises(PipelineValidationError, match="registered runtime"):
+        with pytest.raises(PipelineValidationError, match="must be claude"):
             PipelineLoader().load(path)
+
+    def test_enabled_accepts_claude_read_only_runtime(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: claude
+  model: deepseek-v4-pro
+""",
+        )
+
+        assert PipelineLoader().load(path).llm_observer.runtime == "claude"
 
     def test_enabled_policy_is_explicit_and_disabled_for_foreground(self, tmp_path):
         path = self._write_pipeline(
             tmp_path,
             """llm_observer:
   enabled: true
-  runtime: codex
-  model: gpt-5.6-sol
-  allow_halt: true
-  allow_redirect: true
+  runtime: claude
+  model: deepseek-v4-pro
+  allow_halt: false
+  allow_redirect: false
 execution:
   selected_policy: interactive
 """,
@@ -1903,12 +1915,25 @@ execution:
             tmp_path,
             """llm_observer:
   enabled: true
-  runtime: codex
+  runtime: claude
   allow_halt: "yes"
 """,
         )
 
         with pytest.raises(PipelineValidationError, match="allow_halt"):
+            PipelineLoader().load(path)
+
+    def test_control_authority_remains_rejected_until_implemented(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: claude
+  allow_halt: true
+""",
+        )
+
+        with pytest.raises(PipelineValidationError, match="authority.*not implemented"):
             PipelineLoader().load(path)
 
     def test_pipeline_name_from_project(self, tmp_path):

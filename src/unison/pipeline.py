@@ -461,6 +461,10 @@ class PipelineLoader:
         runtime = raw.get("runtime")
         if not isinstance(runtime, str) or not is_registered_runtime(runtime):
             raise PipelineValidationError("llm_observer.runtime must be a registered runtime")
+        if runtime != "claude":
+            raise PipelineValidationError(
+                "llm_observer.runtime must be claude until another read-only binding is verified"
+            )
         model = raw.get("model", "")
         if not isinstance(model, str):
             raise PipelineValidationError("llm_observer.model must be a string")
@@ -470,6 +474,10 @@ class PipelineLoader:
             raise PipelineValidationError("llm_observer.allow_halt must be a boolean")
         if not isinstance(allow_redirect, bool):
             raise PipelineValidationError("llm_observer.allow_redirect must be a boolean")
+        if allow_halt or allow_redirect:
+            raise PipelineValidationError(
+                "llm_observer halt and redirect authority are not implemented"
+            )
         return LlmObserverConfig(
             enabled=True,
             runtime=runtime,

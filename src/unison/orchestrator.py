@@ -45,7 +45,7 @@ from unison.checkpoint import FileCheckpointManager
 from unison.completion import GitCompletionDetector
 from unison.checklist import ChecklistItem, ChecklistStatus
 from unison.io import atomic_read_json, atomic_write_json
-from unison.llm_observer import append_audit, write_manifest
+from unison.llm_observer import append_audit, run_claude_observation, write_manifest
 import yaml
 from unison.verdict import YamlFrontmatterParser
 from unison.context_deflate import assemble_context, extract_top_findings
@@ -594,11 +594,11 @@ class Orchestrator:
         return self._state
 
     def _start_llm_observer_audit(self) -> None:
-        """Persist opt-in observer identity, then fail closed without a read-only runner."""
+        """Run the bounded Claude observer for an explicit automated opt-in."""
         config = self.spec.llm_observer
         if not config.enabled:
             return
-        _, digest = write_manifest(self.spec.world, self._run_ctx, self._state)
+        manifest_path, digest = write_manifest(self.spec.world, self._run_ctx, self._state)
         append_audit(
             self.spec.world,
             self._run_ctx,
@@ -611,11 +611,28 @@ class Orchestrator:
         append_audit(
             self.spec.world,
             self._run_ctx,
-            event="observation_skipped",
+            event="observation_started",
             manifest_sha256=digest,
             runtime=config.runtime,
             model=config.model,
-            detail="no verified read-only runtime binding",
+            detail="no-tool independent Claude observation started",
+        )
+        result = run_claude_observation(
+            self.spec.world,
+            self._run_ctx,
+            manifest_path,
+            digest,
+            config.model,
+            min(self.spec.per_agent_timeout, 120),
+        )
+        append_audit(
+            self.spec.world,
+            self._run_ctx,
+            event=("observation_succeeded" if result.status == "observed" else "observation_failed"),
+            manifest_sha256=digest,
+            runtime=config.runtime,
+            model=config.model,
+            detail=result.summary,
         )
 
     # ==================================================================
