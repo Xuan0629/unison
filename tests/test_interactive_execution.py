@@ -1,5 +1,8 @@
 """Phase A tests for the opt-in interactive execution contract."""
 import json
+import os
+import pty
+import sys
 
 from dataclasses import replace
 from pathlib import Path
@@ -13,8 +16,11 @@ from unison.foreground import (
     ForegroundInvocation,
     ProcessIdentity,
     build_foreground_command,
+    prepare_foreground_invocation,
     read_process_identity,
+    run_foreground_wrapper,
 )
+from unison.io import atomic_write_json
 from unison.interfaces import AgentSpec, PipelineSpec, ProjectConfig, World
 from unison.pipeline import PipelineLoader, PipelineValidationError
 
@@ -416,6 +422,10 @@ class TestForegroundCommandBuilder:
 
         assert command == ["claude", "--permission-mode", "manual", "task"]
 
+    def test_prompt_starting_with_option_marker_is_rejected(self):
+        with pytest.raises(ValueError, match="must not begin"):
+            build_foreground_command(self._spec("claude"), "--help")
+
     def test_unsupported_runtime_fails_closed(self):
         with pytest.raises(ValueError, match="only supports claude and codex"):
             build_foreground_command(self._spec("hermes"), "task")
@@ -433,3 +443,186 @@ class TestForegroundCommandBuilder:
     def test_codex_reasoning_effort_fails_closed_until_interactive_flag_is_verified(self):
         with pytest.raises(ValueError, match="reasoning_effort"):
             build_foreground_command(self._spec("codex", reasoning_effort="high"), "task")
+
+
+class TestForegroundWrapper:
+    def test_prepare_writes_utf8_prompt_and_argv_request(self, tmp_path):
+        spec = AgentSpec(
+            role="developer",
+            pipeline_role="developer",
+            runtime="claude",
+            model="default",
+            system_prompt_path=Path("prompts/developer.md"),
+        )
+
+        invocation = prepare_foreground_invocation(
+            run_dir=tmp_path / "run",
+            phase="dev_active",
+            spec=spec,
+            prompt="Review the UTF-8 task: 中文",
+            workdir=tmp_path,
+            baseline_commit="abc123",
+        )
+
+        prompt_path = invocation.directory / "prompt.txt"
+        assert prompt_path.read_text(encoding="utf-8") == "Review the UTF-8 task: 中文"
+        request = invocation.read_request()
+        assert request["prompt_path"] == str(prompt_path)
+        assert request["command"] == ["claude", "--permission-mode", "manual"]
+        assert "Review the UTF-8 task: 中文" not in request["command"]
+
+    def test_wrapper_requires_linux_identity_before_spawning(self, tmp_path, monkeypatch):
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path,
+            command=[sys.executable, "-c", "raise SystemExit(0)"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        monkeypatch.setattr("unison.foreground.read_process_identity", lambda _pid: None)
+        spawn = MagicMock()
+        monkeypatch.setattr("unison.foreground.pty.fork", spawn)
+
+        stdin_master, stdin_slave = pty.openpty()
+        stdout_master, stdout_slave = pty.openpty()
+        try:
+            with pytest.raises(RuntimeError, match="wrapper identity"):
+                run_foreground_wrapper(
+                    invocation, stdin_fd=stdin_slave, stdout_fd=stdout_slave,
+                )
+        finally:
+            os.close(stdin_master)
+            os.close(stdin_slave)
+            os.close(stdout_master)
+            os.close(stdout_slave)
+
+        spawn.assert_not_called()
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux process identity is required")
+    def test_wrapper_writes_verified_child_result_and_output_for_pty_child(self, tmp_path):
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path,
+            command=[sys.executable, "-c", "print('foreground output')"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+
+        prompt_path = invocation.directory / "prompt.txt"
+        prompt_path.write_text("first task", encoding="utf-8")
+        request = invocation.read_request()
+        request["prompt_path"] = str(prompt_path)
+        atomic_write_json(invocation.request_path, request)
+
+        stdin_master, stdin_slave = pty.openpty()
+        stdout_master, stdout_slave = pty.openpty()
+        try:
+            exit_code = run_foreground_wrapper(
+                invocation,
+                stdin_fd=stdin_slave,
+                stdout_fd=stdout_slave,
+                heartbeat_interval=0.01,
+            )
+        finally:
+            os.close(stdin_master)
+            os.close(stdin_slave)
+            os.close(stdout_master)
+            os.close(stdout_slave)
+
+        assert exit_code == 0
+        assert invocation.read_verified_result()["exit_code"] == 0
+        assert invocation.output_path.read_text(encoding="utf-8").replace("\r\n", "\n") == "foreground output\n"
+        assert invocation.heartbeat_path.exists()
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux process identity is required")
+    def test_wrapper_records_exact_nonzero_child_exit(self, tmp_path):
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path,
+            command=[sys.executable, "-c", "raise SystemExit(7)"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        prompt_path = invocation.directory / "prompt.txt"
+        prompt_path.write_text("first task", encoding="utf-8")
+        request = invocation.read_request()
+        request["prompt_path"] = str(prompt_path)
+        atomic_write_json(invocation.request_path, request)
+
+        stdin_master, stdin_slave = pty.openpty()
+        stdout_master, stdout_slave = pty.openpty()
+        try:
+            exit_code = run_foreground_wrapper(
+                invocation, stdin_fd=stdin_slave, stdout_fd=stdout_slave,
+            )
+        finally:
+            os.close(stdin_master)
+            os.close(stdin_slave)
+            os.close(stdout_master)
+            os.close(stdout_slave)
+
+        assert exit_code == 7
+        assert invocation.read_verified_result()["exit_code"] == 7
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux process identity is required")
+    def test_wrapper_does_not_write_result_when_output_masking_fails(self, tmp_path, monkeypatch):
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path,
+            command=[sys.executable, "-c", "raise SystemExit(0)"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        prompt_path = invocation.directory / "prompt.txt"
+        prompt_path.write_text("first task", encoding="utf-8")
+        request = invocation.read_request()
+        request["prompt_path"] = str(prompt_path)
+        atomic_write_json(invocation.request_path, request)
+        monkeypatch.setattr("unison.runners.base.mask_secrets", lambda _text: (_ for _ in ()).throw(RuntimeError("mask failed")))
+
+        stdin_master, stdin_slave = pty.openpty()
+        stdout_master, stdout_slave = pty.openpty()
+        try:
+            with pytest.raises(RuntimeError, match="mask failed"):
+                run_foreground_wrapper(
+                    invocation, stdin_fd=stdin_slave, stdout_fd=stdout_slave,
+                )
+        finally:
+            os.close(stdin_master)
+            os.close(stdin_slave)
+            os.close(stdout_master)
+            os.close(stdout_slave)
+
+        assert invocation.read_verified_result() is None
+
+    def test_wrapper_rejects_non_tty_without_spawning(self, tmp_path, monkeypatch):
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path,
+            command=[sys.executable, "-c", "raise SystemExit(0)"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        monkeypatch.setattr("unison.foreground.os.isatty", lambda _fd: False)
+        spawn = MagicMock()
+        monkeypatch.setattr("unison.foreground.pty.fork", spawn)
+
+        with pytest.raises(RuntimeError, match="TTY"):
+            run_foreground_wrapper(invocation)
+
+        spawn.assert_not_called()

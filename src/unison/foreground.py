@@ -7,7 +7,14 @@ produce and verify before treating foreground work as complete.
 
 from __future__ import annotations
 
+import os
+import pty
+import select
+import signal
 import sys
+import termios
+import time
+import tty
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -21,20 +28,14 @@ from unison.io import atomic_read_json, atomic_write_json
 ARTIFACT_SCHEMA_VERSION = 1
 
 
-def build_foreground_command(spec: AgentSpec, prompt: str) -> list[str]:
-    """Build one native interactive Claude/Codex argv without headless flags.
-
-    The caller's approved prompt-delivery policy is represented by the final
-    positional token.  It starts the first native user turn but does not grant
-    Unison any authority to answer later prompts or approvals.
-    """
+def _build_foreground_base_command(spec: AgentSpec) -> list[str]:
     if spec.runtime == "claude":
         command = ["claude", "--permission-mode", "manual"]
         if spec.model and spec.model != "default":
             command += ["--model", spec.model]
         if spec.reasoning_effort:
             command += ["--effort", spec.reasoning_effort]
-        return [*command, prompt]
+        return command
 
     if spec.runtime == "codex":
         if spec.reasoning_effort:
@@ -46,9 +47,25 @@ def build_foreground_command(spec: AgentSpec, prompt: str) -> list[str]:
         ]
         if spec.model and spec.model != "default":
             command += ["--model", spec.model]
-        return [*command, prompt]
+        return command
 
     raise ValueError("foreground execution only supports claude and codex")
+
+
+def _foreground_command_with_prompt(command: list[str], prompt: str) -> list[str]:
+    if prompt.startswith("-"):
+        raise ValueError("foreground prompt must not begin with '-'" )
+    return [*command, prompt]
+
+
+def build_foreground_command(spec: AgentSpec, prompt: str) -> list[str]:
+    """Build one native interactive Claude/Codex argv without headless flags.
+
+    The caller's approved prompt-delivery policy is represented by the final
+    positional token.  It starts the first native user turn but does not grant
+    Unison any authority to answer later prompts or approvals.
+    """
+    return _foreground_command_with_prompt(_build_foreground_base_command(spec), prompt)
 
 
 def _utc_now() -> str:
@@ -238,3 +255,180 @@ class ForegroundInvocation:
             and artifact.get("schema_version") == ARTIFACT_SCHEMA_VERSION
             and artifact.get("invocation_id") == self.invocation_id
         )
+
+
+def prepare_foreground_invocation(
+    *,
+    run_dir: Path,
+    phase: str,
+    spec: AgentSpec,
+    prompt: str,
+    workdir: Path,
+    baseline_commit: str | None,
+) -> ForegroundInvocation:
+    """Create request/prompt artifacts for one approved native first turn."""
+    command = _build_foreground_base_command(spec)
+    # Validate prompt before creating artifacts; wrapper appends it only at exec.
+    _foreground_command_with_prompt(command, prompt)
+    invocation_id = str(uuid.uuid4())
+    directory = Path(run_dir) / "foreground" / invocation_id
+    prompt_path = directory / "prompt.txt"
+    directory.mkdir(parents=True, exist_ok=False)
+    prompt_path.write_text(prompt, encoding="utf-8")
+    os.chmod(prompt_path, 0o600)
+    invocation = ForegroundInvocation(invocation_id=invocation_id, directory=directory)
+    atomic_write_json(
+        invocation.request_path,
+        {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "invocation_id": invocation_id,
+            "phase": phase,
+            "role": spec.role,
+            "runtime": spec.runtime,
+            "launched_at": _utc_now(),
+            "workdir": str(Path(workdir)),
+            "command": command,
+            "prompt_path": str(prompt_path),
+            "baseline_commit": baseline_commit,
+        },
+    )
+    return invocation
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    while data:
+        written = os.write(fd, data)
+        data = data[written:]
+
+
+def _wrapper_request(invocation: ForegroundInvocation) -> tuple[list[str], Path, str]:
+    request = invocation.read_request()
+    command = request.get("command")
+    workdir = request.get("workdir")
+    prompt_value = request.get("prompt_path")
+    if (
+        not isinstance(command, list)
+        or not command
+        or any(not isinstance(arg, str) or not arg for arg in command)
+        or not isinstance(workdir, str)
+        or not isinstance(prompt_value, str)
+    ):
+        raise RuntimeError("foreground request has invalid wrapper fields")
+
+    root = invocation.directory.resolve()
+    prompt_path = Path(prompt_value).resolve()
+    if prompt_path != root / "prompt.txt":
+        raise RuntimeError("foreground prompt path escapes invocation directory")
+    try:
+        prompt = prompt_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError("foreground prompt file is unreadable") from exc
+    try:
+        command = _foreground_command_with_prompt(command, prompt)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    return command, Path(workdir), _utc_now()
+
+
+def run_foreground_wrapper(
+    invocation: ForegroundInvocation,
+    *,
+    stdin_fd: int = 0,
+    stdout_fd: int = 1,
+    heartbeat_interval: float = 30.0,
+) -> int:
+    """Relay a native CLI through a PTY and write durable evidence.
+
+    The wrapper copies user bytes and child output verbatim. It never sends
+    later input, approves requests, retries a child, or invokes a shell.
+    """
+    if not os.isatty(stdin_fd) or not os.isatty(stdout_fd):
+        raise RuntimeError("foreground wrapper requires a visible TTY")
+    wrapper = read_process_identity(os.getpid())
+    if wrapper is None:
+        raise RuntimeError("foreground wrapper identity is unverifiable")
+    if heartbeat_interval <= 0:
+        raise ValueError("foreground heartbeat_interval must be positive")
+
+    command, workdir, started_at = _wrapper_request(invocation)
+    original_terminal = termios.tcgetattr(stdin_fd)
+    raw_output = invocation.directory / ".output.raw"
+    input_open = True
+    next_heartbeat = time.monotonic() + heartbeat_interval
+    child_pid: int | None = None
+    master_fd = -1
+    try:
+        tty.setraw(stdin_fd)
+        child_pid, master_fd = pty.fork()
+        if child_pid == 0:
+            try:
+                os.chdir(workdir)
+                os.execvpe(command[0], command, os.environ.copy())
+            except BaseException:
+                os._exit(127)
+        child = read_process_identity(child_pid)
+        if child is None:
+            os.kill(child_pid, signal.SIGTERM)
+            os.waitpid(child_pid, 0)
+            raise RuntimeError("foreground child identity is unverifiable")
+        invocation.write_child(child, process_group_id=child_pid)
+        invocation.write_heartbeat(wrapper, observed_at=_utc_now())
+
+        with raw_output.open("wb") as output:
+            while True:
+                now = time.monotonic()
+                if now >= next_heartbeat:
+                    invocation.write_heartbeat(wrapper, observed_at=_utc_now())
+                    next_heartbeat = now + heartbeat_interval
+
+                read_fds = [master_fd]
+                if input_open:
+                    read_fds.append(stdin_fd)
+                ready, _, _ = select.select(read_fds, [], [], 0.1)
+                if master_fd in ready:
+                    try:
+                        data = os.read(master_fd, 65536)
+                    except OSError:
+                        data = b""
+                    if data:
+                        output.write(data)
+                        output.flush()
+                        _write_all(stdout_fd, data)
+                if input_open and stdin_fd in ready:
+                    try:
+                        data = os.read(stdin_fd, 65536)
+                    except OSError:
+                        input_open = False
+                    else:
+                        if data:
+                            _write_all(master_fd, data)
+                        else:
+                            input_open = False
+
+                try:
+                    waited_pid, status = os.waitpid(child_pid, os.WNOHANG)
+                except ChildProcessError as exc:
+                    raise RuntimeError("foreground child exit status is unverifiable") from exc
+                if waited_pid == child_pid:
+                    while True:
+                        try:
+                            data = os.read(master_fd, 65536)
+                        except OSError:
+                            break
+                        if not data:
+                            break
+                        output.write(data)
+                        _write_all(stdout_fd, data)
+                    exit_code = os.waitstatus_to_exitcode(status)
+                    break
+
+        raw_text = raw_output.read_text(encoding="utf-8", errors="replace")
+        from unison.runners.base import mask_secrets
+        invocation.output_path.write_text(mask_secrets(raw_text), encoding="utf-8")
+        invocation.write_result(child, exit_code=exit_code, started_at=started_at)
+        return exit_code
+    finally:
+        termios.tcsetattr(stdin_fd, termios.TCSADRAIN, original_terminal)
+        if master_fd >= 0:
+            os.close(master_fd)
+        raw_output.unlink(missing_ok=True)
