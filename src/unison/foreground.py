@@ -10,7 +10,10 @@ from __future__ import annotations
 import os
 import pty
 import select
+import argparse
 import signal
+import shutil
+import subprocess
 import sys
 import termios
 import time
@@ -23,6 +26,7 @@ from typing import Any
 
 from unison.interfaces import AgentSpec
 from unison.io import atomic_read_json, atomic_write_json
+from unison.runners.base import mask_secrets
 
 
 ARTIFACT_SCHEMA_VERSION = 1
@@ -342,23 +346,26 @@ def run_foreground_wrapper(
     The wrapper copies user bytes and child output verbatim. It never sends
     later input, approves requests, retries a child, or invokes a shell.
     """
-    if not os.isatty(stdin_fd) or not os.isatty(stdout_fd):
-        raise RuntimeError("foreground wrapper requires a visible TTY")
-    wrapper = read_process_identity(os.getpid())
-    if wrapper is None:
-        raise RuntimeError("foreground wrapper identity is unverifiable")
-    if heartbeat_interval <= 0:
-        raise ValueError("foreground heartbeat_interval must be positive")
-
-    command, workdir, started_at = _wrapper_request(invocation)
-    original_terminal = termios.tcgetattr(stdin_fd)
-    raw_output = invocation.directory / ".output.raw"
-    input_open = True
-    next_heartbeat = time.monotonic() + heartbeat_interval
-    child_pid: int | None = None
+    original_terminal: list[Any] | None = None
+    raw_output: Path | None = None
     master_fd = -1
+    raw_mode_enabled = False
     try:
+        if not os.isatty(stdin_fd) or not os.isatty(stdout_fd):
+            raise RuntimeError("foreground wrapper requires a visible TTY")
+        wrapper = read_process_identity(os.getpid())
+        if wrapper is None:
+            raise RuntimeError("foreground wrapper identity is unverifiable")
+        if heartbeat_interval <= 0:
+            raise ValueError("foreground heartbeat_interval must be positive")
+
+        command, workdir, started_at = _wrapper_request(invocation)
+        original_terminal = termios.tcgetattr(stdin_fd)
+        raw_output = invocation.directory / ".output.raw"
+        input_open = True
+        next_heartbeat = time.monotonic() + heartbeat_interval
         tty.setraw(stdin_fd)
+        raw_mode_enabled = True
         child_pid, master_fd = pty.fork()
         if child_pid == 0:
             try:
@@ -423,12 +430,70 @@ def run_foreground_wrapper(
                     break
 
         raw_text = raw_output.read_text(encoding="utf-8", errors="replace")
-        from unison.runners.base import mask_secrets
         invocation.output_path.write_text(mask_secrets(raw_text), encoding="utf-8")
         invocation.write_result(child, exit_code=exit_code, started_at=started_at)
         return exit_code
     finally:
-        termios.tcsetattr(stdin_fd, termios.TCSADRAIN, original_terminal)
+        if raw_mode_enabled and original_terminal is not None:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, original_terminal)
         if master_fd >= 0:
             os.close(master_fd)
-        raw_output.unlink(missing_ok=True)
+        if raw_output is not None:
+            raw_output.unlink(missing_ok=True)
+
+
+def launch_linux_terminal(invocation: ForegroundInvocation) -> int:
+    """Open a visible GNOME Terminal for one wrapper invocation.
+
+    The returned PID belongs to the terminal handoff process, not the wrapper.
+    Callers must obtain wrapper identity only from a verified heartbeat.
+    """
+    if sys.platform != "linux":
+        raise RuntimeError("foreground terminal launcher only supports Linux")
+    terminal = shutil.which("gnome-terminal")
+    if terminal is None:
+        raise RuntimeError("foreground execution requires GNOME Terminal")
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        raise RuntimeError("foreground execution requires a GUI session")
+
+    request = invocation.read_request()
+    workdir = request.get("workdir")
+    if not isinstance(workdir, str):
+        raise RuntimeError("foreground request has invalid workdir")
+    command = [
+        terminal,
+        "--window",
+        "--title", f"Unison foreground {invocation.invocation_id}",
+        "--working-directory", workdir,
+        "--",
+        sys.executable,
+        "-m", "unison.foreground", "wrapper",
+        "--invocation-dir", str(invocation.directory),
+    ]
+    return subprocess.Popen(command, start_new_session=True).pid
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the internal foreground wrapper entrypoint."""
+    parser = argparse.ArgumentParser(prog="python -m unison.foreground")
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    wrapper = subcommands.add_parser("wrapper")
+    wrapper.add_argument("--invocation-dir", type=Path, required=True)
+    args = parser.parse_args(argv)
+    if args.command != "wrapper":
+        parser.error("unsupported foreground command")
+
+    directory = args.invocation_dir.resolve()
+    request = atomic_read_json(directory / "request.json")
+    if not isinstance(request, dict):
+        parser.error("foreground invocation request is missing or invalid")
+    invocation_id = request.get("invocation_id")
+    if not isinstance(invocation_id, str) or not invocation_id:
+        parser.error("foreground invocation request has invalid identity")
+    return run_foreground_wrapper(
+        ForegroundInvocation(invocation_id=invocation_id, directory=directory),
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

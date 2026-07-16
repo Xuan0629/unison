@@ -16,6 +16,8 @@ from unison.foreground import (
     ForegroundInvocation,
     ProcessIdentity,
     build_foreground_command,
+    launch_linux_terminal,
+    main as foreground_main,
     prepare_foreground_invocation,
     read_process_identity,
     run_foreground_wrapper,
@@ -590,7 +592,7 @@ class TestForegroundWrapper:
         request = invocation.read_request()
         request["prompt_path"] = str(prompt_path)
         atomic_write_json(invocation.request_path, request)
-        monkeypatch.setattr("unison.runners.base.mask_secrets", lambda _text: (_ for _ in ()).throw(RuntimeError("mask failed")))
+        monkeypatch.setattr("unison.foreground.mask_secrets", lambda _text: (_ for _ in ()).throw(RuntimeError("mask failed")))
 
         stdin_master, stdin_slave = pty.openpty()
         stdout_master, stdout_slave = pty.openpty()
@@ -626,3 +628,108 @@ class TestForegroundWrapper:
             run_foreground_wrapper(invocation)
 
         spawn.assert_not_called()
+
+
+class TestLinuxForegroundLauncher:
+    def _invocation(self, tmp_path: Path) -> ForegroundInvocation:
+        return ForegroundInvocation.create(
+            run_dir=tmp_path / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path,
+            command=["claude", "--permission-mode", "manual"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+
+    def test_launches_gnome_terminal_with_wrapper_argv_and_returns_handoff_pid(self, tmp_path, monkeypatch):
+        invocation = self._invocation(tmp_path)
+        monkeypatch.setattr("unison.foreground.sys.platform", "linux")
+        monkeypatch.setattr("unison.foreground.shutil.which", lambda name: "/usr/bin/gnome-terminal" if name == "gnome-terminal" else None)
+        monkeypatch.setenv("DISPLAY", ":0")
+        process = MagicMock(pid=4321)
+        spawn = MagicMock(return_value=process)
+        monkeypatch.setattr("unison.foreground.subprocess.Popen", spawn)
+
+        handoff_pid = launch_linux_terminal(invocation)
+
+        assert handoff_pid == 4321
+        assert spawn.call_args.args[0] == [
+            "/usr/bin/gnome-terminal",
+            "--window",
+            "--title", f"Unison foreground {invocation.invocation_id}",
+            "--working-directory", str(tmp_path),
+            "--",
+            sys.executable,
+            "-m", "unison.foreground", "wrapper",
+            "--invocation-dir", str(invocation.directory),
+        ]
+        assert spawn.call_args.kwargs == {"start_new_session": True}
+
+    def test_fails_closed_without_gui_before_spawning(self, tmp_path, monkeypatch):
+        invocation = self._invocation(tmp_path)
+        monkeypatch.setattr("unison.foreground.sys.platform", "linux")
+        monkeypatch.setattr("unison.foreground.shutil.which", lambda _name: "/usr/bin/gnome-terminal")
+        monkeypatch.delenv("DISPLAY", raising=False)
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        spawn = MagicMock()
+        monkeypatch.setattr("unison.foreground.subprocess.Popen", spawn)
+
+        with pytest.raises(RuntimeError, match="GUI session"):
+            launch_linux_terminal(invocation)
+
+        spawn.assert_not_called()
+
+    def test_fails_closed_when_gnome_terminal_is_missing(self, tmp_path, monkeypatch):
+        invocation = self._invocation(tmp_path)
+        monkeypatch.setattr("unison.foreground.sys.platform", "linux")
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr("unison.foreground.shutil.which", lambda _name: None)
+
+        with pytest.raises(RuntimeError, match="GNOME Terminal"):
+            launch_linux_terminal(invocation)
+
+    def test_fails_closed_on_non_linux_before_spawning(self, tmp_path, monkeypatch):
+        invocation = self._invocation(tmp_path)
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        spawn = MagicMock()
+        monkeypatch.setattr("unison.foreground.subprocess.Popen", spawn)
+
+        with pytest.raises(RuntimeError, match="only supports Linux"):
+            launch_linux_terminal(invocation)
+
+        spawn.assert_not_called()
+
+
+class TestForegroundWrapperEntry:
+    def test_wrapper_entry_delegates_to_invocation_wrapper(self, tmp_path, monkeypatch):
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            workdir=tmp_path,
+            command=["claude", "--permission-mode", "manual"],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        wrapper = MagicMock(return_value=7)
+        monkeypatch.setattr("unison.foreground.run_foreground_wrapper", wrapper)
+
+        exit_code = foreground_main([
+            "wrapper", "--invocation-dir", str(invocation.directory),
+        ])
+
+        assert exit_code == 7
+        called_invocation = wrapper.call_args.args[0]
+        assert called_invocation.invocation_id == invocation.invocation_id
+        assert called_invocation.directory == invocation.directory
+
+    def test_wrapper_entry_rejects_missing_request(self, tmp_path):
+        missing = tmp_path / "missing"
+
+        with pytest.raises(SystemExit) as exc:
+            foreground_main(["wrapper", "--invocation-dir", str(missing)])
+
+        assert exc.value.code == 2

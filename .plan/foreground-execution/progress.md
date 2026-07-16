@@ -1,7 +1,7 @@
 # Foreground Execution Progress
 
 **Last updated:** 2026-07-15
-**Current step:** Step 4 foreground invocation foundation is in progress; native argv and Linux PTY wrapper are complete, while GUI launchers and Orchestrator integration remain next.
+**Current step:** Step 4 foreground invocation foundation is in progress; native argv, Linux PTY wrapper, and Linux GNOME Terminal launcher are complete. macOS adapter and Orchestrator integration remain next.
 
 ## Completed
 
@@ -22,8 +22,9 @@
 - [x] Step 8 documentation slice: added the macOS external foreground-execution validation pack. It truthfully marks launcher/reconcile/resume cases blocked until their backend slices exist, requires manual native approval and redacted evidence, and prohibits input injection, headless fallback, automatic retry, PTY installation, and Terminal settings changes. Targeted policy/artifact/state/Observer regression: `192 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`. External macOS execution remains pending a collaborator and an implemented backend.
 - [x] Step 4b-argv: implemented isolated native interactive argv construction. The approved A policy supplies exactly the first task prompt as one positional argv token; it does not authorize subsequent input or approval automation. Claude uses verified `--permission-mode manual` and supports `--effort`; Codex uses verified `--sandbox workspace-write --ask-for-approval on-request` and rejects unverified interactive `reasoning_effort` fail-closed. No headless runner or `cc-switch` TTY path changed. Targeted interactive/headless-runner regression: `52 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`.
 - [x] Step 4b-wrapper: added invocation-local UTF-8 `prompt.txt` (0600) and an isolated Linux stdlib PTY wrapper. The wrapper preserves native terminal behavior, relays only human input bytes, captures and masks output, writes child/heartbeat/result evidence, retains exact non-zero exits, and fails closed on no TTY, unverified wrapper/child identity, unreadable/escaped prompt, option-marker prompt, unrecoverable exit status, or output masking failure. It uses `pty.fork()` plus argv `execvpe`, never shell interpolation or `cc-switch`. Claude review found and verified the exit-status P1 fix; terminal SIGTERM restoration remains a P2 launcher-process-model decision. Targeted interactive/headless-runner regression: `59 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`.
-- [ ] Step 4b-launchers: add Linux GNOME Terminal and macOS Terminal.app adapters around the wrapper, including signal ownership; fail closed until macOS process identity exists.
-- [ ] Step 4c-orchestrator: integrate verified foreground invocation completion only after Step 4b launchers are implemented.
+- [x] Step 4b-launcher-linux: added a Linux GNOME Terminal adapter and `python -m unison.foreground wrapper --invocation-dir` entry. It launches only the internal wrapper by argv in a visible GUI session, reports only terminal handoff PID, and requires future callers to prove wrapper identity through heartbeat evidence. Missing GUI, terminal, or non-Linux platforms fail closed before spawn. Host GUI smoke ran an immediate Python child through GNOME Terminal and verified child/heartbeat/output/result artifacts; no Claude/Codex or terminal input was used. Targeted interactive/headless-runner regression: `65 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`.
+- [ ] Step 4b-launcher-macos: implement/verify Terminal.app adapter and macOS process-start identity; remain fail closed until real macOS evidence exists.
+- [ ] Step 4c-orchestrator: integrate verified foreground invocation completion only after supported launcher coverage is finalized.
 
 ## Decision Needed
 
