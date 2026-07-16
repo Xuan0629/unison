@@ -338,6 +338,197 @@ class TestForegroundInvocationState:
 
         assert restored.active_foreground_invocation == active
 
+    def test_pending_wrapper_identity_roundtrips_for_prelaunch_duplicate_guard(self):
+        active = ForegroundInvocationState(
+            invocation_id="pending-id",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            wrapper_pid=None,
+            wrapper_start_identity=None,
+            launcher_pid=1200,
+            artifact_dir="/artifacts",
+            result_path="/artifacts/result.json",
+            output_path="/artifacts/output.log",
+            started_at="2026-07-15T00:00:00Z",
+            last_heartbeat_observed_at=None,
+        )
+
+        restored = State.from_dict(State(active_foreground_invocation=active).to_dict())
+
+        assert restored.active_foreground_invocation == active
+
+    @pytest.mark.parametrize(
+        ("wrapper_pid", "wrapper_start_identity"),
+        [
+            (1234, None),
+            (None, "linux:999"),
+            (True, "linux:999"),
+            (0, "linux:999"),
+            (-1, "linux:999"),
+            (1234, ""),
+            (1234, "   "),
+            (1234, 0),
+            (False, "linux:999"),
+        ],
+    )
+    def test_partial_or_invalid_wrapper_identity_is_rejected(self, wrapper_pid, wrapper_start_identity):
+        state = State.from_dict({
+            "version": "2.0",
+            "phase": "dev_active",
+            "iteration": 1,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": None,
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": None,
+            "active_foreground_invocation": {
+                "invocation_id": "id",
+                "phase": "dev_active",
+                "role": "developer",
+                "runtime": "claude",
+                "wrapper_pid": wrapper_pid,
+                "wrapper_start_identity": wrapper_start_identity,
+                "launcher_pid": None,
+                "artifact_dir": "/artifacts",
+                "result_path": "/artifacts/result.json",
+                "output_path": "/artifacts/output.log",
+                "started_at": "2026-07-15T00:00:00Z",
+                "last_heartbeat_observed_at": None,
+            },
+        })
+
+        assert state.active_foreground_invocation is None
+
+    def test_missing_both_wrapper_identity_keys_is_rejected_without_error(self):
+        state = State.from_dict({
+            "version": "2.0",
+            "phase": "dev_active",
+            "iteration": 1,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": None,
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": None,
+            "active_foreground_invocation": {
+                "invocation_id": "id",
+                "phase": "dev_active",
+                "role": "developer",
+                "runtime": "claude",
+                "launcher_pid": None,
+                "artifact_dir": "/artifacts",
+                "result_path": "/artifacts/result.json",
+                "output_path": "/artifacts/output.log",
+                "started_at": "2026-07-15T00:00:00Z",
+                "last_heartbeat_observed_at": None,
+            },
+        })
+
+        assert state.active_foreground_invocation is None
+
+    def test_direct_construction_rejects_partial_wrapper_identity(self):
+        with pytest.raises(ValueError, match="fully pending or fully verified"):
+            ForegroundInvocationState(
+                invocation_id="id",
+                phase="dev_active",
+                role="developer",
+                runtime="claude",
+                wrapper_pid=1234,
+                wrapper_start_identity=None,
+                launcher_pid=None,
+                artifact_dir="/artifacts",
+                result_path="/artifacts/result.json",
+                output_path="/artifacts/output.log",
+                started_at="2026-07-15T00:00:00Z",
+                last_heartbeat_observed_at=None,
+            )
+
+    @pytest.mark.parametrize(
+        ("wrapper_pid", "wrapper_start_identity"),
+        [(1234, None), (0, "linux:999"), (1234, "   ")],
+    )
+    def test_direct_construction_rejects_invalid_wrapper_identity(
+        self, wrapper_pid, wrapper_start_identity,
+    ):
+        with pytest.raises(ValueError):
+            ForegroundInvocationState(
+                invocation_id="id",
+                phase="dev_active",
+                role="developer",
+                runtime="claude",
+                wrapper_pid=wrapper_pid,
+                wrapper_start_identity=wrapper_start_identity,
+                launcher_pid=None,
+                artifact_dir="/artifacts",
+                result_path="/artifacts/result.json",
+                output_path="/artifacts/output.log",
+                started_at="2026-07-15T00:00:00Z",
+                last_heartbeat_observed_at=None,
+            )
+
+    @pytest.mark.parametrize(
+        ("launcher_pid", "heartbeat"),
+        [(True, None), (0, None), (-1, None), (None, 1)],
+    )
+    def test_direct_construction_rejects_invalid_launcher_or_heartbeat(
+        self, launcher_pid, heartbeat,
+    ):
+        with pytest.raises(ValueError):
+            ForegroundInvocationState(
+                invocation_id="id",
+                phase="dev_active",
+                role="developer",
+                runtime="claude",
+                wrapper_pid=None,
+                wrapper_start_identity=None,
+                launcher_pid=launcher_pid,
+                artifact_dir="/artifacts",
+                result_path="/artifacts/result.json",
+                output_path="/artifacts/output.log",
+                started_at="2026-07-15T00:00:00Z",
+                last_heartbeat_observed_at=heartbeat,
+            )
+
+    @pytest.mark.parametrize(
+        ("launcher_pid", "heartbeat"),
+        [(True, None), (0, None), (-1, None), (None, 1)],
+    )
+    def test_from_dict_rejects_invalid_launcher_or_heartbeat(
+        self, launcher_pid, heartbeat,
+    ):
+        state = State.from_dict({
+            "version": "2.0",
+            "phase": "dev_active",
+            "iteration": 1,
+            "history": [],
+            "halt_signal": False,
+            "halt_reason": None,
+            "last_dev_commit": None,
+            "last_review_verdict": None,
+            "last_review_path": None,
+            "last_activity": None,
+            "active_foreground_invocation": {
+                "invocation_id": "id",
+                "phase": "dev_active",
+                "role": "developer",
+                "runtime": "claude",
+                "wrapper_pid": None,
+                "wrapper_start_identity": None,
+                "launcher_pid": launcher_pid,
+                "artifact_dir": "/artifacts",
+                "result_path": "/artifacts/result.json",
+                "output_path": "/artifacts/output.log",
+                "started_at": "2026-07-15T00:00:00Z",
+                "last_heartbeat_observed_at": heartbeat,
+            },
+        })
+
+        assert state.active_foreground_invocation is None
+
     def test_existing_current_schema_state_defaults_to_no_active_foreground_invocation(self):
         state = State.from_dict({
             "version": "2.0",

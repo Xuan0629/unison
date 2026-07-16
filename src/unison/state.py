@@ -96,14 +96,39 @@ class ForegroundInvocationState:
     phase: str
     role: str
     runtime: str
-    wrapper_pid: int
-    wrapper_start_identity: str
+    wrapper_pid: int | None
+    wrapper_start_identity: str | None
     launcher_pid: int | None
     artifact_dir: str
     result_path: str
     output_path: str
     started_at: str
     last_heartbeat_observed_at: str | None
+
+    def __post_init__(self) -> None:
+        if (self.wrapper_pid is None) != (self.wrapper_start_identity is None):
+            raise ValueError("wrapper identity must be fully pending or fully verified")
+        if self.wrapper_pid is not None and (
+            isinstance(self.wrapper_pid, bool)
+            or not isinstance(self.wrapper_pid, int)
+            or self.wrapper_pid <= 0
+        ):
+            raise ValueError("wrapper_pid must be a positive integer")
+        if self.wrapper_start_identity is not None and (
+            not isinstance(self.wrapper_start_identity, str)
+            or not self.wrapper_start_identity.strip()
+        ):
+            raise ValueError("wrapper_start_identity must be a non-empty string")
+        if self.launcher_pid is not None and (
+            isinstance(self.launcher_pid, bool)
+            or not isinstance(self.launcher_pid, int)
+            or self.launcher_pid <= 0
+        ):
+            raise ValueError("launcher_pid must be a positive integer")
+        if self.last_heartbeat_observed_at is not None and not isinstance(
+            self.last_heartbeat_observed_at, str,
+        ):
+            raise ValueError("last_heartbeat_observed_at must be a string")
 
     def to_dict(self) -> dict:
         return {
@@ -126,18 +151,25 @@ class ForegroundInvocationState:
         if not isinstance(data, dict):
             return None
         required_strings = (
-            "invocation_id", "phase", "role", "runtime", "wrapper_start_identity",
+            "invocation_id", "phase", "role", "runtime",
             "artifact_dir", "result_path", "output_path", "started_at",
         )
         if any(not isinstance(data.get(key), str) or not data[key] for key in required_strings):
             return None
         wrapper_pid = data.get("wrapper_pid")
+        wrapper_start_identity = data.get("wrapper_start_identity")
+        if "wrapper_pid" not in data or "wrapper_start_identity" not in data:
+            return None
         launcher_pid = data.get("launcher_pid")
         heartbeat = data.get("last_heartbeat_observed_at")
         if (
-            isinstance(wrapper_pid, bool)
-            or not isinstance(wrapper_pid, int)
-            or wrapper_pid <= 0
+            (wrapper_pid is None) != (wrapper_start_identity is None)
+            or (wrapper_pid is not None and (
+                isinstance(wrapper_pid, bool) or not isinstance(wrapper_pid, int) or wrapper_pid <= 0
+            ))
+            or (wrapper_start_identity is not None and (
+                not isinstance(wrapper_start_identity, str) or not wrapper_start_identity.strip()
+            ))
             or (launcher_pid is not None and (isinstance(launcher_pid, bool) or not isinstance(launcher_pid, int) or launcher_pid <= 0))
             or (heartbeat is not None and not isinstance(heartbeat, str))
         ):
@@ -148,7 +180,7 @@ class ForegroundInvocationState:
             role=data["role"],
             runtime=data["runtime"],
             wrapper_pid=wrapper_pid,
-            wrapper_start_identity=data["wrapper_start_identity"],
+            wrapper_start_identity=wrapper_start_identity,
             launcher_pid=launcher_pid,
             artifact_dir=data["artifact_dir"],
             result_path=data["result_path"],
