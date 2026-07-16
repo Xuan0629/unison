@@ -373,16 +373,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"EXECUTION ERROR: {error}", file=sys.stderr)
         return 1
     print(f"Effective execution policy: {spec.execution.selected_policy}")
-    if any(
-        spec.execution.resolve_phase(phase) == "foreground_manual"
-        for phase in EXECUTION_POLICY_PHASES
-    ):
-        print(
-            "EXECUTION ERROR: foreground execution is configured but the "
-            "foreground backend is not implemented yet",
-            file=sys.stderr,
-        )
-        return 1
 
     if not authorize_run(spec, TRUSTED_LOCAL_PRINCIPAL):
         print(

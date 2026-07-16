@@ -6,10 +6,344 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from unison.orchestrator import Orchestrator
-from unison.state import State
+from unison.state import ForegroundInvocationState, State
 from unison.world import World
 from unison.pipeline import PipelineLoader
-from unison.interfaces import AgentResult, PipelineSpec
+from unison.interfaces import AgentResult, ChainConfig, ChainStage, PipelineSpec
+
+
+class TestForegroundDispatch:
+    """Foreground manual dispatch persists pending evidence before handoff."""
+
+    def _make_orchestrator(self, tmp_path):
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        (project_root / "prd").mkdir()
+        (project_root / "reviews").mkdir()
+        (project_root / "prompts").mkdir()
+        (project_root / "prd" / "PRD.md").write_text("# PRD")
+        (project_root / "prd" / "tech-design.md").write_text("# Design")
+        (project_root / "prompts" / "developer.md").write_text("Developer")
+        (project_root / "prompts" / "reviewer.md").write_text("Reviewer")
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f"""
+version: "2.0"
+project_root: "{project_root}"
+mode: dev:quick
+snapshots:
+  enabled: false
+execution:
+  selected_policy: interactive
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test-model
+    system_prompt_path: prompts/developer.md
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: test-model
+    system_prompt_path: prompts/reviewer.md
+"""
+        )
+        orchestrator = Orchestrator(spec=PipelineLoader().load(pipeline_file))
+        orchestrator._state.transition("dev_active", "orchestrator", iter_n=1)
+        return orchestrator
+
+    def test_foreground_dispatch_checkpoints_pending_state_before_terminal_handoff(
+        self, tmp_path, monkeypatch,
+    ):
+        orchestrator = self._make_orchestrator(tmp_path)
+        effective_spec = orchestrator.spec.agents["developer"]
+        tracker = MagicMock()
+        tracker.check_budget.return_value = True
+        checkpoints = []
+        monkeypatch.setattr(
+            orchestrator, "_select_runner", lambda role: (MagicMock(), effective_spec),
+        )
+        monkeypatch.setattr(orchestrator, "_get_budget_tracker", lambda role: tracker)
+        monkeypatch.setattr(orchestrator, "_build_prompt", lambda *args, **kwargs: "first task")
+        monkeypatch.setattr(orchestrator._detector, "_get_commit", lambda root: "baseline")
+        monkeypatch.setattr(
+            orchestrator,
+            "_save_checkpoint",
+            lambda iteration=None: checkpoints.append(orchestrator._state.active_foreground_invocation),
+        )
+
+        with patch("unison.orchestrator.launch_linux_terminal", return_value=4321) as launch:
+            orchestrator._invoke_agent_for_role("developer", 1)
+
+        assert launch.call_count == 1
+        assert len(checkpoints) == 2
+        pending, launched = checkpoints
+        assert isinstance(pending, ForegroundInvocationState)
+        assert pending.wrapper_pid is None
+        assert pending.wrapper_start_identity is None
+        assert pending.launcher_pid is None
+        assert launched is not None
+        assert launched.invocation_id == pending.invocation_id
+        assert launched.launcher_pid == 4321
+        assert orchestrator._foreground_invocation_pending() is True
+
+    def test_foreground_dispatch_real_loop_stops_before_reviewer(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        effective_spec = orchestrator.spec.agents["developer"]
+        tracker = MagicMock()
+        tracker.check_budget.return_value = True
+        reviewer_calls = []
+        monkeypatch.setattr(
+            orchestrator, "_select_runner", lambda role: (MagicMock(), effective_spec),
+        )
+        monkeypatch.setattr(orchestrator, "_get_budget_tracker", lambda role: tracker)
+        monkeypatch.setattr(orchestrator, "_build_prompt", lambda *args, **kwargs: "first task")
+        monkeypatch.setattr(orchestrator._detector, "_get_commit", lambda root: "baseline")
+        monkeypatch.setattr(
+            orchestrator,
+            "_resolve_agents",
+            lambda role: [effective_spec] if role == "developer" else reviewer_calls.append(role) or [],
+        )
+
+        with patch("unison.orchestrator.launch_linux_terminal", return_value=4321):
+            orchestrator._run_loop("dev_active", "dev_review", "code + tests", role="developer")
+
+        assert reviewer_calls == []
+        assert orchestrator.state().active_foreground_invocation is not None
+        assert orchestrator.state().phase == "dev_active"
+
+    def test_persisted_foreground_invocation_stops_loop_before_reviewer(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        invocation = ForegroundInvocationState(
+            invocation_id="persisted",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            wrapper_pid=None,
+            wrapper_start_identity=None,
+            launcher_pid=4321,
+            artifact_dir=str(tmp_path / "artifact"),
+            result_path=str(tmp_path / "artifact" / "result.json"),
+            output_path=str(tmp_path / "artifact" / "output.log"),
+            started_at="2026-07-15T00:00:00Z",
+            last_heartbeat_observed_at=None,
+        )
+        orchestrator._state = State.from_dict({
+            **orchestrator._state.to_dict(),
+            "active_foreground_invocation": invocation.to_dict(),
+        })
+        reviewer_calls = []
+        monkeypatch.setattr(
+            orchestrator,
+            "_resolve_agents",
+            lambda role: reviewer_calls.append(role) or [],
+        )
+
+        orchestrator._run_loop("dev_active", "dev_review", "code + tests", role="developer")
+
+        assert reviewer_calls == []
+        assert orchestrator.state().phase == "dev_active"
+
+    def test_planning_foreground_pending_does_not_emit_phase_done(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        events = []
+        monkeypatch.setattr(orchestrator, "_save_checkpoint", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            orchestrator,
+            "_publish_phase_event",
+            lambda *args, **kwargs: events.append((args, kwargs)),
+        )
+        monkeypatch.setattr(orchestrator, "_invoke_agent_for_role", lambda *args, **kwargs: setattr(
+            orchestrator._state,
+            "active_foreground_invocation",
+            ForegroundInvocationState(
+                invocation_id="planning-pending",
+                phase="planning_active",
+                role="planner",
+                runtime="claude",
+                wrapper_pid=None,
+                wrapper_start_identity=None,
+                launcher_pid=4321,
+                artifact_dir=str(tmp_path / "artifact"),
+                result_path=str(tmp_path / "artifact" / "result.json"),
+                output_path=str(tmp_path / "artifact" / "output.log"),
+                started_at="2026-07-15T00:00:00Z",
+                last_heartbeat_observed_at=None,
+            ),
+        ))
+
+        orchestrator._run_planning_phase()
+
+        assert not any(kwargs.get("event") == "phase_done" for _args, kwargs in events)
+
+    def test_discussion_foreground_pending_does_not_invoke_planner(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        calls = []
+        monkeypatch.setattr(orchestrator, "_save_checkpoint", lambda *args, **kwargs: None)
+        monkeypatch.setattr(orchestrator, "_publish_phase_event", lambda *args, **kwargs: None)
+        monkeypatch.setattr(orchestrator, "_check_pipeline_timeout", lambda: None)
+        monkeypatch.setattr(orchestrator, "_check_control_files", lambda: [])
+        monkeypatch.setattr(orchestrator, "_check_redirect_file", lambda: None)
+        monkeypatch.setattr(
+            orchestrator,
+            "_invoke_discussion_agent",
+            lambda role, *args: calls.append(role) or setattr(
+                orchestrator._state,
+                "active_foreground_invocation",
+                ForegroundInvocationState(
+                    invocation_id="discussion-pending",
+                    phase="discuss_active",
+                    role="developer",
+                    runtime="claude",
+                    wrapper_pid=None,
+                    wrapper_start_identity=None,
+                    launcher_pid=4321,
+                    artifact_dir=str(tmp_path / "artifact"),
+                    result_path=str(tmp_path / "artifact" / "result.json"),
+                    output_path=str(tmp_path / "artifact" / "output.log"),
+                    started_at="2026-07-15T00:00:00Z",
+                    last_heartbeat_observed_at=None,
+                ),
+            ),
+        )
+
+        orchestrator._run_discussion_loop()
+
+        assert calls == ["developer"]
+
+    def test_review_only_pending_foreground_does_not_resolve_reviewer(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        monkeypatch.setattr(orchestrator, "_foreground_invocation_pending", lambda: True)
+        monkeypatch.setattr(
+            orchestrator,
+            "_resolve_agents",
+            lambda role: pytest.fail("reviewer must not be resolved while foreground is pending"),
+        )
+
+        orchestrator._run_review_only()
+
+        assert orchestrator.state().phase == "dev_active"
+
+    def test_dag_pending_foreground_does_not_transition_or_schedule(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        monkeypatch.setattr(orchestrator, "_foreground_invocation_pending", lambda: True)
+        monkeypatch.setattr(
+            orchestrator._state,
+            "transition",
+            lambda *args, **kwargs: pytest.fail("DAG must not transition while foreground is pending"),
+        )
+
+        orchestrator._run_dag_development()
+
+    def test_chain_stops_before_output_mapping_or_next_stage_when_foreground_is_pending(
+        self, tmp_path, monkeypatch,
+    ):
+        orchestrator = self._make_orchestrator(tmp_path)
+        orchestrator.spec = replace(
+            orchestrator.spec,
+            mode="chain",
+            chain=ChainConfig(stages=[
+                ChainStage(mode="dev:quick", output_map={"upstream": "downstream"}),
+                ChainStage(mode="dev:quick"),
+            ]),
+        )
+        started_modes = []
+        copied_outputs = []
+        monkeypatch.setattr(
+            orchestrator,
+            "_run_state_machine",
+            lambda: started_modes.append(orchestrator.spec.mode) or setattr(
+                orchestrator._state,
+                "active_foreground_invocation",
+                ForegroundInvocationState(
+                    invocation_id="chain-pending",
+                    phase="dev_active",
+                    role="developer",
+                    runtime="claude",
+                    wrapper_pid=None,
+                    wrapper_start_identity=None,
+                    launcher_pid=4321,
+                    artifact_dir=str(tmp_path / "artifact"),
+                    result_path=str(tmp_path / "artifact" / "result.json"),
+                    output_path=str(tmp_path / "artifact" / "output.log"),
+                    started_at="2026-07-15T00:00:00Z",
+                    last_heartbeat_observed_at=None,
+                ),
+            ),
+        )
+        monkeypatch.setattr(
+            orchestrator, "_copy_chain_outputs", lambda *args, **kwargs: copied_outputs.append(True),
+        )
+        monkeypatch.setattr(orchestrator, "_save_checkpoint", lambda *args, **kwargs: None)
+
+        orchestrator._run_chain()
+
+        assert started_modes == ["dev:quick"]
+        assert copied_outputs == []
+        assert orchestrator.state().phase != "done"
+
+    def test_foreground_dispatch_stops_loop_before_reviewer(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        monkeypatch.setattr(orchestrator, "_invoke_agent_for_role", lambda *args, **kwargs: setattr(
+            orchestrator._state,
+            "active_foreground_invocation",
+            ForegroundInvocationState(
+                invocation_id="in-process",
+                phase="dev_active",
+                role="developer",
+                runtime="claude",
+                wrapper_pid=None,
+                wrapper_start_identity=None,
+                launcher_pid=4321,
+                artifact_dir=str(tmp_path / "artifact"),
+                result_path=str(tmp_path / "artifact" / "result.json"),
+                output_path=str(tmp_path / "artifact" / "output.log"),
+                started_at="2026-07-15T00:00:00Z",
+                last_heartbeat_observed_at=None,
+            ),
+        ))
+        reviewer_calls = []
+        monkeypatch.setattr(
+            orchestrator,
+            "_resolve_agents",
+            lambda role: [orchestrator.spec.agents["developer"]] if role == "developer" else reviewer_calls.append(role) or [],
+        )
+
+        orchestrator._run_loop("dev_active", "dev_review", "code + tests", role="developer")
+
+        assert reviewer_calls == []
+        assert orchestrator.state().phase == "dev_active"
+
+    def test_foreground_dispatch_refuses_duplicate_active_invocation(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        orchestrator._state.active_foreground_invocation = ForegroundInvocationState(
+            invocation_id="existing",
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            wrapper_pid=None,
+            wrapper_start_identity=None,
+            launcher_pid=None,
+            artifact_dir=str(tmp_path / "artifact"),
+            result_path=str(tmp_path / "artifact" / "result.json"),
+            output_path=str(tmp_path / "artifact" / "output.log"),
+            started_at="2026-07-15T00:00:00Z",
+            last_heartbeat_observed_at=None,
+        )
+        effective_spec = orchestrator.spec.agents["developer"]
+        tracker = MagicMock()
+        tracker.check_budget.return_value = True
+        monkeypatch.setattr(
+            orchestrator, "_select_runner", lambda role: (MagicMock(), effective_spec),
+        )
+        monkeypatch.setattr(orchestrator, "_get_budget_tracker", lambda role: tracker)
+        monkeypatch.setattr(orchestrator, "_build_prompt", lambda *args, **kwargs: "first task")
+
+        with patch("unison.orchestrator.launch_linux_terminal") as launch:
+            orchestrator._invoke_agent_for_role("developer", 1)
+
+        launch.assert_not_called()
+        assert orchestrator.state().halt_signal is True
+        assert "already active" in (orchestrator.state().halt_reason or "")
 
 
 class TestSelfHealHaltIsolation:

@@ -25,6 +25,7 @@ from unison.foreground import (
 from unison.io import atomic_write_json
 from unison.interfaces import AgentSpec, PipelineSpec, ProjectConfig, World
 from unison.pipeline import PipelineLoader, PipelineValidationError
+from unison.state import State
 
 
 def _pipeline_data(**overrides):
@@ -129,6 +130,30 @@ class TestExecutionPolicyLoader:
 
         with pytest.raises(PipelineValidationError, match=message):
             _load(tmp_path, **overrides)
+    def test_foreground_policy_rejects_multiple_agents_for_foreground_role(self, tmp_path):
+        agents = _pipeline_data()["agents"]
+        agents["developer_second"] = {
+            "role": "developer-two",
+            "pipeline_role": "developer",
+            "runtime": "claude",
+            "model": "default",
+            "system_prompt_path": "prompts/developer.md",
+        }
+
+        with pytest.raises(PipelineValidationError, match="exactly one 'developer' agent; found 2"):
+            _load(
+                tmp_path,
+                agents=agents,
+                execution={
+                    "selected_policy": "manual-dev",
+                    "policies": {
+                        "manual-dev": {
+                            "default": "headless_bypass",
+                            "phases": {"dev_active": "foreground_manual"},
+                        },
+                    },
+                },
+            )
 
 
 class TestExecutionPolicyCli:
@@ -156,7 +181,9 @@ class TestExecutionPolicyCli:
         pipeline.write_text(original, encoding="utf-8")
         spec = self._spec(tmp_path)
         monkeypatch.setattr(cli, "_load", lambda path: (spec, MagicMock()))
+        monkeypatch.setattr(cli, "_check_tools", lambda spec: True)
         orchestrator = MagicMock()
+        orchestrator.return_value.run.return_value = State(phase="done")
         monkeypatch.setattr(cli, "Orchestrator", orchestrator)
         args = SimpleNamespace(
             pipeline=pipeline, project=None, dry_run=False, json=False,
@@ -164,10 +191,10 @@ class TestExecutionPolicyCli:
             execution_policy="interactive", save_execution_policy=None,
         )
 
-        assert cli._cmd_run(args) == 1
+        assert cli._cmd_run(args) == 0
         assert pipeline.read_text(encoding="utf-8") == original
         assert "Effective execution policy: interactive" in capsys.readouterr().out
-        orchestrator.assert_not_called()
+        orchestrator.assert_called_once()
 
     def test_policy_override_revalidates_effective_spec(self, tmp_path, monkeypatch, capsys):
         import unison.cli as cli

@@ -471,6 +471,36 @@ class PipelineLoader:
                 "foreground execution only supports claude and codex; unsupported runtime(s): "
                 + ", ".join(unsupported)
             )
+        role_for_phase = {
+            "planning_active": "planner",
+            "planning_review": "reviewer",
+            "discuss_active": "developer",
+            "discuss_review": "reviewer",
+            "dev_active": "developer",
+            "dev_review": "reviewer",
+        }
+        routed_phases = (
+            PhaseRouter.custom_phases(spec.custom_phases)
+            if spec.mode == "custom"
+            else PhaseRouter.get_phases(spec.mode or "code-dev")
+        )
+        active_foreground_phases = {
+            phase
+            for definition in routed_phases
+            for phase in (definition.active_phase, definition.review_phase)
+            if phase in EXECUTION_POLICY_PHASES
+            and spec.execution.resolve_phase(phase) == "foreground_manual"
+        }
+        foreground_roles = {
+            role_for_phase[phase]
+            for phase in active_foreground_phases
+        }
+        for role in foreground_roles:
+            count = sum(agent.effective_role == role for agent in spec.agents.values())
+            if count != 1:
+                raise PipelineValidationError(
+                    f"foreground execution requires exactly one {role!r} agent; found {count}"
+                )
 
     # ==================================================================
     # Private helpers

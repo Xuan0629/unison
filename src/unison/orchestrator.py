@@ -30,7 +30,8 @@ from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
 # single exported set shared with PipelineLoader.
 _KNOWN_MODES = VALID_CHAIN_MODES
 from unison.prompt_registry import PromptRegistry
-from unison.state import State
+from unison.foreground import launch_linux_terminal, prepare_foreground_invocation
+from unison.state import ForegroundInvocationState, State
 from unison.lock import FileLockManager
 from unison.checkpoint import FileCheckpointManager
 from unison.completion import GitCompletionDetector
@@ -589,6 +590,8 @@ class Orchestrator:
                     self._save_checkpoint()
                 self._run_loop(pd.active_phase, pd.review_phase,
                                pd.review_of, role=pd.role)
+            if self._foreground_invocation_pending():
+                return
 
         if not self._state.halt_signal:
             # P0.6: When running inside _run_chain(), suppress per-stage
@@ -615,7 +618,7 @@ class Orchestrator:
 
     def _run_review_only(self) -> None:
         """inspect-only mode: Reviewer(s) → report (no planner, no dev)."""
-        if self._state.halt_signal:
+        if self._state.halt_signal or self._foreground_invocation_pending():
             return
         self._state.transition("dev_review", "orchestrator",
                                iter_n=1, note="starting review-only")
@@ -1137,7 +1140,7 @@ class Orchestrator:
                     return
 
             for i, stage in enumerate(self.spec.chain.stages):
-                if self._state.halt_signal:
+                if self._state.halt_signal or self._foreground_invocation_pending():
                     return
 
                 # P8 P1.3: saved_spec / saved_mode are initialised early so
@@ -1251,7 +1254,7 @@ class Orchestrator:
                     # A stage owns its output_map: copy only after successful
                     # completion so downstream stages never consume stale or
                     # partial artifacts.
-                    if not self._state.halt_signal and stage.output_map:
+                    if not self._state.halt_signal and not self._foreground_invocation_pending() and stage.output_map:
                         try:
                             self._copy_chain_outputs(
                                 stage, i, root, moa_config=stage_moa_config
@@ -1298,7 +1301,7 @@ class Orchestrator:
 
             # P0.6: Chain complete — emit one terminal "done" transition
             # and archive reviews once for the entire chain.
-            if not self._state.halt_signal:
+            if not self._state.halt_signal and not self._foreground_invocation_pending():
                 # P10: Emit pipeline_done (event bus + canonical JSONL)
                 commits = self._count_commits()
                 self._publish_phase_event(
@@ -1539,7 +1542,7 @@ class Orchestrator:
                 note=f"implementation proposal {iteration}/{max_iter}",
             )
             self._invoke_discussion_agent("developer", iteration, convergence)
-            if self._state.halt_signal:
+            if self._state.halt_signal or self._foreground_invocation_pending():
                 return
 
             self._state.transition(
@@ -1581,7 +1584,7 @@ class Orchestrator:
         self._publish_phase_event("planning_active", note="drafting initial specification")
         self._save_checkpoint(1)
         self._invoke_agent_for_role("planner", 1, review_phase="")
-        if not self._state.halt_signal:
+        if not self._state.halt_signal and not self._foreground_invocation_pending():
             self._publish_phase_event(
                 "planning_active", note="initial specification drafted",
                 event="phase_done",
@@ -1722,6 +1725,8 @@ class Orchestrator:
 
     def _run_dag_development(self) -> None:
         """Run development via DAGScheduler when spec.dag is configured."""
+        if self._state.halt_signal or self._foreground_invocation_pending():
+            return
         from unison.pipeline import DAGScheduler
 
         self._state.transition("dev_active", "orchestrator",
@@ -1818,7 +1823,7 @@ class Orchestrator:
             agent_role = role_for_phase[active_phase]
 
         for iteration in range(1, max_iter + 1):
-            if self._state.halt_signal:
+            if self._state.halt_signal or self._foreground_invocation_pending():
                 return
 
             # ---- Pipeline timeout check (P8 S16) -----------------------------
@@ -1863,7 +1868,7 @@ class Orchestrator:
             else:
                 self._invoke_agent_for_role(agent_role, iteration, review_phase=review_phase)
 
-            if self._state.halt_signal:
+            if self._state.halt_signal or self._foreground_invocation_pending():
                 return
 
             if active_phase == "dev_active" and not self._verify_frozen_specification():
@@ -2182,6 +2187,15 @@ class Orchestrator:
             pass
 
         # 6. Run agent subprocess
+        if self.spec.execution.resolve_phase(self._state.phase) == "foreground_manual":
+            self._dispatch_foreground_invocation(
+                effective_spec=effective_spec,
+                prompt=prompt,
+                baseline_commit=pre_commit,
+                iteration=iteration,
+            )
+            return
+
         risk_halted = False
         try:
             result = runner.run(
@@ -2249,6 +2263,77 @@ class Orchestrator:
             self._attempt_self_heal(role, iteration, review_phase, result,
                                     detected.success)
             return  # self-heal handles retry internally
+
+    def _dispatch_foreground_invocation(
+        self,
+        *,
+        effective_spec: AgentSpec,
+        prompt: str,
+        baseline_commit: str | None,
+        iteration: int,
+    ) -> None:
+        """Persist and hand off one foreground invocation without completion claims."""
+        if self._state.active_foreground_invocation is not None:
+            self.halt(
+                "foreground invocation is already active; refusing duplicate dispatch",
+                category="external",
+            )
+            self._save_checkpoint(iteration)
+            return
+
+        world = self.spec.world
+        invocation = prepare_foreground_invocation(
+            run_dir=world.unison_run_dir_for(self._run_ctx),
+            phase=self._state.phase,
+            spec=effective_spec,
+            prompt=prompt,
+            workdir=world.root,
+            baseline_commit=baseline_commit,
+        )
+        request = invocation.read_request()
+        started_at = request.get("launched_at")
+        if not isinstance(started_at, str) or not started_at:
+            self.halt("foreground invocation request has invalid launch time", category="external")
+            self._save_checkpoint(iteration)
+            return
+
+        self._state.active_foreground_invocation = ForegroundInvocationState(
+            invocation_id=invocation.invocation_id,
+            phase=self._state.phase,
+            role=effective_spec.role,
+            runtime=effective_spec.runtime,
+            wrapper_pid=None,
+            wrapper_start_identity=None,
+            launcher_pid=None,
+            artifact_dir=str(invocation.directory),
+            result_path=str(invocation.result_path),
+            output_path=str(invocation.output_path),
+            started_at=started_at,
+            last_heartbeat_observed_at=None,
+        )
+        self._save_checkpoint(iteration)
+
+        try:
+            launcher_pid = launch_linux_terminal(invocation)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.halt(f"foreground terminal launch failed: {exc}", category="external")
+            self._save_checkpoint(iteration)
+            return
+
+        pending = self._state.active_foreground_invocation
+        if pending is None:
+            self.halt("foreground pending invocation disappeared before handoff", category="external")
+            self._save_checkpoint(iteration)
+            return
+        self._state.active_foreground_invocation = replace(
+            pending,
+            launcher_pid=launcher_pid,
+        )
+        self._save_checkpoint(iteration)
+
+    def _foreground_invocation_pending(self) -> bool:
+        """Return whether durable State still requires foreground reconciliation."""
+        return self._state.active_foreground_invocation is not None
 
     def _attempt_self_heal(self, role: str, iteration: int,
                            review_phase: str, result: AgentResult,
