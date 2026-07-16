@@ -30,8 +30,12 @@ from unison.phase_router import PhaseRouter, _DEPRECATED_MODE_ALIASES
 # single exported set shared with PipelineLoader.
 _KNOWN_MODES = VALID_CHAIN_MODES
 from unison.prompt_registry import PromptRegistry
-from unison.foreground import launch_linux_terminal, prepare_foreground_invocation
-from unison.state import ForegroundInvocationState, State
+from unison.foreground import (
+    ForegroundInvocation,
+    launch_linux_terminal,
+    prepare_foreground_invocation,
+)
+from unison.state import ForegroundInvocationState, ForegroundReconcileState, State
 from unison.lock import FileLockManager
 from unison.checkpoint import FileCheckpointManager
 from unison.completion import GitCompletionDetector
@@ -2330,6 +2334,50 @@ class Orchestrator:
             launcher_pid=launcher_pid,
         )
         self._save_checkpoint(iteration)
+
+    def reconcile_foreground(self) -> bool:
+        """Persist exactly-once evidence for the active foreground result.
+
+        This method never launches an agent.  Continuation is deliberately
+        separate so a crash after this checkpoint can resume from the same
+        verified result without dispatching the completed role again.
+        """
+        pending = self._state.active_foreground_invocation
+        if pending is None:
+            self.halt("foreground reconcile requires an active invocation", category="external")
+            self._save_checkpoint()
+            return False
+        invocation = ForegroundInvocation(
+            invocation_id=pending.invocation_id,
+            directory=Path(pending.artifact_dir),
+        )
+        verified = invocation.read_verified_result_evidence()
+        if verified is None:
+            self.halt(
+                "foreground interrupted_unverified: result evidence is missing or invalid",
+                category="external",
+            )
+            self._save_checkpoint()
+            return False
+        _result, evidence = verified
+        digest = hashlib.sha256(evidence).hexdigest()
+        marker = self._state.foreground_reconcile
+        if marker is not None:
+            if marker.invocation_id != pending.invocation_id or marker.result_digest != digest:
+                self.halt(
+                    "foreground interrupted_unverified: reconciliation evidence changed",
+                    category="external",
+                )
+                self._save_checkpoint()
+                return False
+            return marker.status == "reconcile_started"
+        self._state.foreground_reconcile = ForegroundReconcileState(
+            invocation_id=pending.invocation_id,
+            result_digest=digest,
+            status="reconcile_started",
+        )
+        self._save_checkpoint()
+        return True
 
     def _foreground_invocation_pending(self) -> bool:
         """Return whether durable State still requires foreground reconciliation."""

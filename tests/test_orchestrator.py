@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 
+from unison.foreground import ForegroundInvocation, ProcessIdentity
 from unison.orchestrator import Orchestrator
 from unison.state import ForegroundInvocationState, State
 from unison.world import World
@@ -344,6 +345,115 @@ agents:
         launch.assert_not_called()
         assert orchestrator.state().halt_signal is True
         assert "already active" in (orchestrator.state().halt_reason or "")
+
+
+class TestForegroundReconcile:
+    """Foreground results are consumed exactly once before continuation."""
+
+    def _make_orchestrator(self, tmp_path):
+        return TestForegroundDispatch()._make_orchestrator(tmp_path)
+
+    def _attach_invocation(self, orchestrator, tmp_path, *, exit_code=0):
+        invocation = ForegroundInvocation("reconcile-id", tmp_path / "artifact")
+        invocation.directory.mkdir(parents=True)
+        child = ProcessIdentity(pid=123, start_identity="child-start")
+        invocation.write_child(child, process_group_id=123)
+        invocation.write_result(
+            child,
+            exit_code=exit_code,
+            started_at="2026-07-15T00:00:00Z",
+        )
+        orchestrator._state.active_foreground_invocation = ForegroundInvocationState(
+            invocation_id=invocation.invocation_id,
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            wrapper_pid=None,
+            wrapper_start_identity=None,
+            launcher_pid=4321,
+            artifact_dir=str(invocation.directory),
+            result_path=str(invocation.result_path),
+            output_path=str(invocation.output_path),
+            started_at="2026-07-15T00:00:00Z",
+            last_heartbeat_observed_at=None,
+        )
+        return invocation
+
+    def test_reconcile_marks_verified_result_before_continuation(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        self._attach_invocation(orchestrator, tmp_path)
+        checkpoints = []
+        monkeypatch.setattr(
+            orchestrator,
+            "_save_checkpoint",
+            lambda *args, **kwargs: checkpoints.append(orchestrator._state.foreground_reconcile),
+        )
+
+        assert orchestrator.reconcile_foreground() is True
+        marker = orchestrator.state().foreground_reconcile
+        assert marker is not None
+        assert marker.status == "reconcile_started"
+        assert marker.invocation_id == "reconcile-id"
+        assert len(checkpoints) == 1
+        assert orchestrator.reconcile_foreground() is True
+        assert len(checkpoints) == 1
+
+    def test_reconcile_rejects_changed_verified_evidence(self, tmp_path):
+        orchestrator = self._make_orchestrator(tmp_path)
+        invocation = self._attach_invocation(orchestrator, tmp_path)
+
+        assert orchestrator.reconcile_foreground() is True
+        child = ProcessIdentity(pid=456, start_identity="replacement-child")
+        invocation.write_child(child, process_group_id=456)
+        invocation.write_result(
+            child,
+            exit_code=0,
+            started_at="2026-07-15T00:00:00Z",
+        )
+
+        assert orchestrator.reconcile_foreground() is False
+        assert orchestrator.state().halt_signal is True
+        assert "evidence changed" in (orchestrator.state().halt_reason or "")
+
+    def test_reconcile_without_active_invocation_checkpoints_halt(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        checkpoints = []
+        monkeypatch.setattr(
+            orchestrator,
+            "_save_checkpoint",
+            lambda *args, **kwargs: checkpoints.append(orchestrator.state().halt_reason),
+        )
+
+        assert orchestrator.reconcile_foreground() is False
+        assert checkpoints == ["foreground reconcile requires an active invocation"]
+
+    def test_reconcile_rejects_missing_or_invalid_result_without_dispatch(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        invocation = ForegroundInvocation("reconcile-id", tmp_path / "artifact")
+        invocation.directory.mkdir(parents=True)
+        orchestrator._state.active_foreground_invocation = ForegroundInvocationState(
+            invocation_id=invocation.invocation_id,
+            phase="dev_active",
+            role="developer",
+            runtime="claude",
+            wrapper_pid=None,
+            wrapper_start_identity=None,
+            launcher_pid=4321,
+            artifact_dir=str(invocation.directory),
+            result_path=str(invocation.result_path),
+            output_path=str(invocation.output_path),
+            started_at="2026-07-15T00:00:00Z",
+            last_heartbeat_observed_at=None,
+        )
+        monkeypatch.setattr(
+            orchestrator,
+            "_invoke_agent_for_role",
+            lambda *args, **kwargs: pytest.fail("reconcile must not dispatch without verified result"),
+        )
+
+        assert orchestrator.reconcile_foreground() is False
+        assert orchestrator.state().halt_signal is True
+        assert "interrupted_unverified" in (orchestrator.state().halt_reason or "")
 
 
 class TestSelfHealHaltIsolation:

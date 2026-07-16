@@ -34,9 +34,11 @@
 - The target design says the task prompt is written to an invocation-local file, while the guardrail prohibits Unison input injection. Supplying the prompt as a positional CLI argument would automatically submit it to the native session and is therefore input injection; omitting it requires a human to open/read/paste the prompt file before work starts.
 - Existing headless Claude provider routing uses `cc-switch`, but its current public help does not prove interactive TTY argv forwarding. Interactive `cc-switch` provider routing remains unimplemented and must fail closed until separately evidenced.
 
+- [x] Step 4d evidence foundation: added read-once result/child verification, corruption-detection digest, durable `reconcile_started` marker, and fail-closed checkpointing for invalid/missing/changed evidence. Targeted foreground/state regression: `106 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`. State-machine continuation remains the next slice.
+
 ## Next
 
-- [ ] Step 4c: integrate verified foreground invocation completion with Orchestrator and state metadata.
+- [ ] Step 4e: restore the persisted run context, evaluate verified foreground completion, and resume the state machine without redispatching the completed role.
 - [ ] Step 5: recovery and Observer detection-only behavior.
 
 ## Guardrails

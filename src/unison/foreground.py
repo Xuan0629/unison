@@ -7,6 +7,7 @@ produce and verify before treating foreground work as complete.
 
 from __future__ import annotations
 
+import json
 import os
 import pty
 import select
@@ -222,8 +223,23 @@ class ForegroundInvocation:
         )
 
     def read_verified_result(self) -> dict[str, Any] | None:
-        result = atomic_read_json(self.result_path)
-        child = atomic_read_json(self.child_path)
+        verified = self.read_verified_result_evidence()
+        return verified[0] if verified is not None else None
+
+    def read_verified_result_evidence(self) -> tuple[dict[str, Any], bytes] | None:
+        """Return verified result plus immutable evidence bytes from one read.
+
+        The returned bytes contain the exact result/child payloads used for
+        validation, so callers can derive a corruption-detection digest without
+        re-reading either mutable artifact.
+        """
+        try:
+            result_bytes = self.result_path.read_bytes()
+            child_bytes = self.child_path.read_bytes()
+            result = json.loads(result_bytes)
+            child = json.loads(child_bytes)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return None
         if (
             not isinstance(result, dict)
             or not isinstance(child, dict)
@@ -237,7 +253,7 @@ class ForegroundInvocation:
             return None
         if result.get("child_start_identity") != child.get("child_start_identity"):
             return None
-        return result
+        return result, result_bytes + b"\0" + child_bytes
 
     def read_verified_heartbeat(
         self, wrapper: ProcessIdentity,

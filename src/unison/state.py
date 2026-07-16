@@ -190,6 +190,43 @@ class ForegroundInvocationState:
         )
 
 
+@dataclass(frozen=True)
+class ForegroundReconcileState:
+    """Crash-idempotency marker for one verified foreground result."""
+
+    invocation_id: str
+    result_digest: str
+    status: Literal["reconcile_started", "reconciled"]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.invocation_id, str) or not self.invocation_id:
+            raise ValueError("foreground reconcile invocation_id is required")
+        if not isinstance(self.result_digest, str) or len(self.result_digest) != 64:
+            raise ValueError("foreground reconcile result_digest must be a SHA-256 hex digest")
+        if self.status not in {"reconcile_started", "reconciled"}:
+            raise ValueError("foreground reconcile status is invalid")
+
+    def to_dict(self) -> dict:
+        return {
+            "invocation_id": self.invocation_id,
+            "result_digest": self.result_digest,
+            "status": self.status,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ForegroundReconcileState | None":
+        if not isinstance(data, dict):
+            return None
+        try:
+            return cls(
+                invocation_id=data["invocation_id"],
+                result_digest=data["result_digest"],
+                status=data["status"],
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+
 # ============================================================================
 # State
 # ============================================================================
@@ -216,6 +253,7 @@ class State:
     pipeline_name: str = ""        # P10: Human-readable pipeline name
     run_id: str = ""               # Canonical execution identity
     active_foreground_invocation: ForegroundInvocationState | None = None
+    foreground_reconcile: ForegroundReconcileState | None = None
 
     def __post_init__(self) -> None:
         if self.phase not in VALID_PHASES:
@@ -252,6 +290,11 @@ class State:
             "active_foreground_invocation": (
                 self.active_foreground_invocation.to_dict()
                 if self.active_foreground_invocation is not None
+                else None
+            ),
+            "foreground_reconcile": (
+                self.foreground_reconcile.to_dict()
+                if self.foreground_reconcile is not None
                 else None
             ),
         }
@@ -291,6 +334,9 @@ class State:
             run_id=d.get("run_id", ""),
             active_foreground_invocation=ForegroundInvocationState.from_dict(
                 d.get("active_foreground_invocation")
+            ),
+            foreground_reconcile=ForegroundReconcileState.from_dict(
+                d.get("foreground_reconcile")
             ),
         )
 
