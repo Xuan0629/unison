@@ -12,6 +12,7 @@ import yaml
 from unison.foreground import (
     ForegroundInvocation,
     ProcessIdentity,
+    build_foreground_command,
     read_process_identity,
 )
 from unison.interfaces import AgentSpec, PipelineSpec, ProjectConfig, World
@@ -369,8 +370,66 @@ class TestForegroundInvocationArtifacts:
             ProcessIdentity(pid=999, start_identity="linux:other")
         ) is None
 
+
+
     def test_linux_process_identity_is_unverifiable_when_proc_stat_is_missing(self, monkeypatch):
         monkeypatch.setattr("unison.foreground.sys.platform", "linux")
         monkeypatch.setattr("unison.foreground.Path.read_text", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("missing")))
 
         assert read_process_identity(12345) is None
+
+
+class TestForegroundCommandBuilder:
+    def _spec(self, runtime: str, **overrides) -> AgentSpec:
+        return AgentSpec(
+            role="developer",
+            pipeline_role="developer",
+            runtime=runtime,
+            model=overrides.pop("model", "model-id"),
+            system_prompt_path=Path("prompts/developer.md"),
+            **overrides,
+        )
+
+    def test_claude_uses_native_manual_mode_and_submits_prompt_as_one_argv_token(self):
+        prompt = "Implement the task\nwithout shell interpolation."
+
+        command = build_foreground_command(self._spec("claude"), prompt)
+
+        assert command == [
+            "claude", "--permission-mode", "manual", "--model", "model-id", prompt,
+        ]
+        assert not {"-p", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"}.intersection(command)
+
+    def test_codex_uses_native_approval_mode_and_submits_prompt_as_one_argv_token(self):
+        prompt = "Implement the task\nwithout shell interpolation."
+
+        command = build_foreground_command(self._spec("codex"), prompt)
+
+        assert command == [
+            "codex", "--sandbox", "workspace-write", "--ask-for-approval", "on-request",
+            "--model", "model-id", prompt,
+        ]
+        assert not {"exec", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"}.intersection(command)
+
+    def test_default_model_is_not_forwarded(self):
+        command = build_foreground_command(self._spec("claude", model="default"), "task")
+
+        assert command == ["claude", "--permission-mode", "manual", "task"]
+
+    def test_unsupported_runtime_fails_closed(self):
+        with pytest.raises(ValueError, match="only supports claude and codex"):
+            build_foreground_command(self._spec("hermes"), "task")
+
+    def test_claude_forwards_verified_interactive_reasoning_effort(self):
+        command = build_foreground_command(
+            self._spec("claude", reasoning_effort="high"), "task",
+        )
+
+        assert command == [
+            "claude", "--permission-mode", "manual", "--model", "model-id",
+            "--effort", "high", "task",
+        ]
+
+    def test_codex_reasoning_effort_fails_closed_until_interactive_flag_is_verified(self):
+        with pytest.raises(ValueError, match="reasoning_effort"):
+            build_foreground_command(self._spec("codex", reasoning_effort="high"), "task")

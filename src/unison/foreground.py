@@ -14,10 +14,41 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from unison.interfaces import AgentSpec
 from unison.io import atomic_read_json, atomic_write_json
 
 
 ARTIFACT_SCHEMA_VERSION = 1
+
+
+def build_foreground_command(spec: AgentSpec, prompt: str) -> list[str]:
+    """Build one native interactive Claude/Codex argv without headless flags.
+
+    The caller's approved prompt-delivery policy is represented by the final
+    positional token.  It starts the first native user turn but does not grant
+    Unison any authority to answer later prompts or approvals.
+    """
+    if spec.runtime == "claude":
+        command = ["claude", "--permission-mode", "manual"]
+        if spec.model and spec.model != "default":
+            command += ["--model", spec.model]
+        if spec.reasoning_effort:
+            command += ["--effort", spec.reasoning_effort]
+        return [*command, prompt]
+
+    if spec.runtime == "codex":
+        if spec.reasoning_effort:
+            raise ValueError(
+                "foreground Codex reasoning_effort is unsupported until its interactive flag is verified"
+            )
+        command = [
+            "codex", "--sandbox", "workspace-write", "--ask-for-approval", "on-request",
+        ]
+        if spec.model and spec.model != "default":
+            command += ["--model", spec.model]
+        return [*command, prompt]
+
+    raise ValueError("foreground execution only supports claude and codex")
 
 
 def _utc_now() -> str:

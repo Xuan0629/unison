@@ -1,7 +1,7 @@
 # Foreground Execution Progress
 
 **Last updated:** 2026-07-15
-**Current step:** Step 4 foreground invocation foundation is in progress.
+**Current step:** Step 4 foreground invocation foundation is in progress; native argv construction is complete and wrapper/launcher remains next.
 
 ## Completed
 
@@ -20,6 +20,8 @@
 - [x] Step 4c-state: added durable, read-only `active_foreground_invocation` State metadata with backward-compatible v2.0 loading and strict malformed-record rejection. Targeted state/checkpoint regression: `48 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`.
 - [x] Step 5a: added Observer foreground detection-only notifications for verified result availability, artifact evidence mismatch, and unverifiable wrapper identity. The Observer never evaluates a cross-process heartbeat timeout because Orchestrator monotonic timestamps are not portable across processes; 90-second timeout remains a future Orchestrator concern. Targeted Observer/state/checkpoint regression: `181 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`.
 - [x] Step 8 documentation slice: added the macOS external foreground-execution validation pack. It truthfully marks launcher/reconcile/resume cases blocked until their backend slices exist, requires manual native approval and redacted evidence, and prohibits input injection, headless fallback, automatic retry, PTY installation, and Terminal settings changes. Targeted policy/artifact/state/Observer regression: `192 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`. External macOS execution remains pending a collaborator and an implemented backend.
+- [x] Step 4b-argv: implemented isolated native interactive argv construction. The approved A policy supplies exactly the first task prompt as one positional argv token; it does not authorize subsequent input or approval automation. Claude uses verified `--permission-mode manual` and supports `--effort`; Codex uses verified `--sandbox workspace-write --ask-for-approval on-request` and rejects unverified interactive `reasoning_effort` fail-closed. No headless runner or `cc-switch` TTY path changed. Targeted interactive/headless-runner regression: `52 passed`; compile and diff checks clean; Claude five-axis review `APPROVE`.
+- [ ] Step 4b-wrapper/launcher: write prompt artifact, run wrapper evidence loop, and provide terminal adapters; no Orchestrator dispatch/reconcile yet.
 - [ ] Step 4c-orchestrator: integrate verified foreground invocation completion only after Step 4b has an approved native-launch/prompt protocol.
 
 ## Decision Needed
