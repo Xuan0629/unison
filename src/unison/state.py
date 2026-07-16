@@ -104,6 +104,7 @@ class ForegroundInvocationState:
     output_path: str
     started_at: str
     last_heartbeat_observed_at: str | None
+    snapshot_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (self.wrapper_pid is None) != (self.wrapper_start_identity is None):
@@ -129,6 +130,11 @@ class ForegroundInvocationState:
             self.last_heartbeat_observed_at, str,
         ):
             raise ValueError("last_heartbeat_observed_at must be a string")
+        if not isinstance(self.snapshot_ids, tuple) or any(
+            not isinstance(snapshot_id, str) or not snapshot_id
+            for snapshot_id in self.snapshot_ids
+        ):
+            raise ValueError("snapshot_ids elements must be non-empty strings")
 
     def to_dict(self) -> dict:
         return {
@@ -144,6 +150,7 @@ class ForegroundInvocationState:
             "output_path": self.output_path,
             "started_at": self.started_at,
             "last_heartbeat_observed_at": self.last_heartbeat_observed_at,
+            "snapshot_ids": list(self.snapshot_ids),
         }
 
     @classmethod
@@ -162,6 +169,7 @@ class ForegroundInvocationState:
             return None
         launcher_pid = data.get("launcher_pid")
         heartbeat = data.get("last_heartbeat_observed_at")
+        snapshot_ids = data.get("snapshot_ids", [])
         if (
             (wrapper_pid is None) != (wrapper_start_identity is None)
             or (wrapper_pid is not None and (
@@ -172,6 +180,8 @@ class ForegroundInvocationState:
             ))
             or (launcher_pid is not None and (isinstance(launcher_pid, bool) or not isinstance(launcher_pid, int) or launcher_pid <= 0))
             or (heartbeat is not None and not isinstance(heartbeat, str))
+            or not isinstance(snapshot_ids, list)
+            or any(not isinstance(snapshot_id, str) or not snapshot_id for snapshot_id in snapshot_ids)
         ):
             return None
         return cls(
@@ -187,16 +197,19 @@ class ForegroundInvocationState:
             output_path=data["output_path"],
             started_at=data["started_at"],
             last_heartbeat_observed_at=heartbeat,
+            snapshot_ids=tuple(snapshot_ids),
         )
 
 
 @dataclass(frozen=True)
 class ForegroundReconcileState:
-    """Crash-idempotency marker for one verified foreground result."""
+    """Crash-idempotency marker and resume cursor for one foreground result."""
 
     invocation_id: str
     result_digest: str
     status: Literal["reconcile_started", "reconciled"]
+    phase: str | None = None
+    role: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.invocation_id, str) or not self.invocation_id:
@@ -205,12 +218,20 @@ class ForegroundReconcileState:
             raise ValueError("foreground reconcile result_digest must be a SHA-256 hex digest")
         if self.status not in {"reconcile_started", "reconciled"}:
             raise ValueError("foreground reconcile status is invalid")
+        if (self.phase is None) != (self.role is None):
+            raise ValueError("foreground reconcile phase and role must be both present or absent")
+        if self.phase is not None and (not isinstance(self.phase, str) or not self.phase):
+            raise ValueError("foreground reconcile phase must be a non-empty string")
+        if self.role is not None and (not isinstance(self.role, str) or not self.role):
+            raise ValueError("foreground reconcile role must be a non-empty string")
 
     def to_dict(self) -> dict:
         return {
             "invocation_id": self.invocation_id,
             "result_digest": self.result_digest,
             "status": self.status,
+            "phase": self.phase,
+            "role": self.role,
         }
 
     @classmethod
@@ -222,6 +243,8 @@ class ForegroundReconcileState:
                 invocation_id=data["invocation_id"],
                 result_digest=data["result_digest"],
                 status=data["status"],
+                phase=data.get("phase"),
+                role=data.get("role"),
             )
         except (KeyError, TypeError, ValueError):
             return None

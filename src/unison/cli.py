@@ -26,6 +26,7 @@ from unison.interfaces import EXECUTION_POLICY_PHASES, TRUSTED_LOCAL_PRINCIPAL
 from unison.orchestrator import Orchestrator
 from unison.pipeline import PipelineLoader, PipelineValidationError
 from unison.state import State
+from unison.world import RunContext
 
 
 def _load_api_keys() -> None:
@@ -91,6 +92,20 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--save-execution-policy", type=str, default=None,
         help="Persist this execution policy as execution.selected_policy",
+    )
+
+    # --- reconcile ---------------------------------------------------
+    reconcile = sub.add_parser(
+        "reconcile",
+        help="Verify a foreground result and resume its persisted run",
+    )
+    reconcile.add_argument(
+        "--pipeline", required=True, type=Path,
+        help="Path to the original pipeline.yaml",
+    )
+    reconcile.add_argument(
+        "--json", action="store_true",
+        help="Print final state as JSON (instead of human summary)",
     )
 
     # --- dry-run -----------------------------------------------------
@@ -418,6 +433,84 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 1
 
 
+def _load_reconcile_state(spec) -> State:
+    """Load only the canonical state for the projected foreground run."""
+    projected_path = spec.world.state_file
+    if not projected_path.is_file():
+        raise ValueError("no projected state exists for foreground reconciliation")
+    try:
+        projected_raw = json.loads(projected_path.read_text(encoding="utf-8"))
+        projected = State.from_dict(projected_raw)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError, KeyError) as error:
+        raise ValueError("projected foreground state is unreadable or invalid") from error
+    if not projected.run_id or projected.pipeline_name != spec.pipeline_name:
+        raise ValueError("projected state does not identify this pipeline run")
+    ctx = RunContext(
+        project_id=spec.world.project_id,
+        pipeline_key=spec.world.pipeline_key(projected.pipeline_name),
+        run_id=projected.run_id,
+        pipeline_name=projected.pipeline_name,
+    )
+    scoped_path = spec.world.run_state_file(ctx)
+    if not scoped_path.is_file():
+        raise ValueError("canonical run state is missing for projected foreground run")
+    try:
+        scoped_raw = json.loads(scoped_path.read_text(encoding="utf-8"))
+        state = State.from_dict(scoped_raw)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError, KeyError) as error:
+        raise ValueError("canonical foreground run state is unreadable or invalid") from error
+    if (
+        state.run_id != projected.run_id
+        or state.pipeline_name != spec.pipeline_name
+        or (
+            state.active_foreground_invocation is None
+            and not (
+                state.foreground_reconcile is not None
+                and state.foreground_reconcile.status == "reconciled"
+                and state.foreground_reconcile.phase
+                and state.foreground_reconcile.role
+            )
+        )
+    ):
+        raise ValueError("canonical run state does not match the projected foreground run")
+    return state
+
+
+def _cmd_reconcile(args: argparse.Namespace) -> int:
+    _load_api_keys()
+    spec, _ = _load(args.pipeline)
+    try:
+        state = _load_reconcile_state(spec)
+    except ValueError as error:
+        print(f"RECONCILE ERROR: {error}", file=sys.stderr)
+        return 1
+    if not authorize_run(spec, TRUSTED_LOCAL_PRINCIPAL):
+        print(
+            "AUTHORIZATION ERROR: local CLI is not allowed by who_can_run",
+            file=sys.stderr,
+        )
+        return 3
+    if not _check_tools(spec):
+        return 1
+    orchestrator = Orchestrator(spec=spec)
+    try:
+        orchestrator.load_reconcile_state(state)
+    except ValueError as error:
+        print(f"RECONCILE ERROR: {error}", file=sys.stderr)
+        return 1
+    if not orchestrator.reconcile_foreground():
+        final_state = orchestrator.state()
+    else:
+        final_state = orchestrator.run()
+    if args.json:
+        print(json.dumps(_state_to_dict(final_state), indent=2, default=str))
+    else:
+        _print_human_summary(final_state)
+    if final_state.halt_signal:
+        return 2
+    return 0 if final_state.phase == "done" else 1
+
+
 def _cmd_dry_run(args: argparse.Namespace) -> int:
     spec, loader = _load(args.pipeline)
     mode = loader.mode(spec)
@@ -509,6 +602,7 @@ def _cmd_observe(args: argparse.Namespace) -> int:
 
 _HANDLERS = {
     "run": _cmd_run,
+    "reconcile": _cmd_reconcile,
     "dry-run": _cmd_dry_run,
     "mode": _cmd_mode,
     "init": _cmd_init,

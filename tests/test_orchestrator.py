@@ -356,6 +356,15 @@ class TestForegroundReconcile:
     def _attach_invocation(self, orchestrator, tmp_path, *, exit_code=0):
         invocation = ForegroundInvocation("reconcile-id", tmp_path / "artifact")
         invocation.directory.mkdir(parents=True)
+        from unison.io import atomic_write_json
+        atomic_write_json(
+            invocation.request_path,
+            {
+                "schema_version": 1,
+                "invocation_id": invocation.invocation_id,
+                "baseline_commit": "baseline",
+            },
+        )
         child = ProcessIdentity(pid=123, start_identity="child-start")
         invocation.write_child(child, process_group_id=123)
         invocation.write_result(
@@ -454,6 +463,147 @@ class TestForegroundReconcile:
         assert orchestrator.reconcile_foreground() is False
         assert orchestrator.state().halt_signal is True
         assert "interrupted_unverified" in (orchestrator.state().halt_reason or "")
+
+
+    def test_consume_developer_result_without_rebuilding_or_dispatching_developer(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        self._attach_invocation(orchestrator, tmp_path)
+        assert orchestrator.reconcile_foreground() is True
+        consumed = []
+        monkeypatch.setattr(
+            orchestrator,
+            "_consume_reconciled_foreground",
+            lambda **kwargs: consumed.append(kwargs) or True,
+        )
+        monkeypatch.setattr(
+            orchestrator,
+            "_select_runner",
+            lambda *_args: pytest.fail("completed foreground role must not select a runner"),
+        )
+
+        orchestrator._invoke_agent_for_role("developer", 1, "dev_review")
+
+        assert consumed == [{
+            "role": "developer", "iteration": 1, "next_phase": "dev_review",
+        }]
+
+    def test_reconciled_reviewer_resumes_verdict_without_reinvoking_reviewer(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        self._attach_invocation(orchestrator, tmp_path)
+        pending = orchestrator._state.active_foreground_invocation
+        assert pending is not None
+        orchestrator._state.active_foreground_invocation = replace(
+            pending, phase="dev_review", role="reviewer", runtime="codex",
+        )
+        orchestrator._state.transition("dev_review", "orchestrator", iter_n=1)
+        assert orchestrator.reconcile_foreground() is True
+        marker = orchestrator._state.foreground_reconcile
+        assert marker is not None
+        orchestrator._state.foreground_reconcile = replace(
+            marker, status="reconciled", phase="dev_review", role="reviewer",
+        )
+        orchestrator._state.active_foreground_invocation = None
+        reviewer_calls = []
+        monkeypatch.setattr(
+            orchestrator,
+            "_invoke_agent_for_role",
+            lambda *args, **kwargs: reviewer_calls.append((args, kwargs)),
+        )
+        monkeypatch.setattr(orchestrator, "_parse_verdict", lambda *_args: "PASS")
+        monkeypatch.setattr(orchestrator, "_publish_phase_event", lambda *args, **kwargs: None)
+        monkeypatch.setattr(orchestrator, "_write_lifecycle_notification", lambda *args, **kwargs: None)
+        monkeypatch.setattr(orchestrator, "_save_checkpoint", lambda *args, **kwargs: None)
+
+        orchestrator._run_loop(
+            "dev_active", "dev_review", "code + tests",
+            role="developer", resume_at_review=True,
+        )
+
+        assert reviewer_calls == []
+        assert orchestrator.state().halt_signal is False
+
+    def test_reconciled_reviewer_request_changes_restarts_active_phase_next_iteration(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        orchestrator._state.transition("dev_review", "orchestrator", iter_n=1)
+        from unison.state import ForegroundReconcileState
+        orchestrator._state.foreground_reconcile = ForegroundReconcileState(
+            invocation_id="reviewer-id", result_digest="a" * 64,
+            status="reconciled", phase="dev_review", role="reviewer",
+        )
+        calls = []
+        monkeypatch.setattr(
+            orchestrator,
+            "_invoke_agent_for_role",
+            lambda role, iteration, **_kwargs: calls.append((role, iteration)),
+        )
+        verdicts = iter(["REQUEST_CHANGES", "PASS"])
+        monkeypatch.setattr(orchestrator, "_parse_verdict", lambda *_args: next(verdicts))
+        monkeypatch.setattr(orchestrator, "_publish_phase_event", lambda *args, **kwargs: None)
+        monkeypatch.setattr(orchestrator, "_write_lifecycle_notification", lambda *args, **kwargs: None)
+        monkeypatch.setattr(orchestrator, "_save_checkpoint", lambda *args, **kwargs: None)
+        monkeypatch.setattr(orchestrator, "_record_reviewer_stats", lambda *args, **kwargs: None)
+
+        orchestrator._run_loop(
+            "dev_active", "dev_review", "code + tests",
+            role="developer", resume_at_review=True,
+        )
+
+        assert calls == [("developer", 2), ("reviewer", 2)]
+
+    def test_consumed_result_clears_active_invocation_and_persists_cursor(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        self._attach_invocation(orchestrator, tmp_path)
+        assert orchestrator.reconcile_foreground() is True
+        monkeypatch.setattr(
+            orchestrator._detector,
+            "detect",
+            lambda **_kwargs: type("Detection", (), {"success": True, "commit": "after"})(),
+        )
+        monkeypatch.setattr(orchestrator, "_evaluate_post_invoke_risk", lambda *_args: False)
+        monkeypatch.setattr(orchestrator, "_save_checkpoint", lambda *args, **kwargs: None)
+
+        assert orchestrator._consume_reconciled_foreground(
+            role="developer", iteration=1, next_phase="dev_review",
+        ) is True
+
+        marker = orchestrator.state().foreground_reconcile
+        assert orchestrator.state().active_foreground_invocation is None
+        assert marker is not None
+        assert (marker.status, marker.phase, marker.role) == (
+            "reconciled", "dev_active", "developer",
+        )
+
+    def test_reconcile_refuses_policy_changed_to_headless(self, tmp_path):
+        orchestrator = self._make_orchestrator(tmp_path)
+        orchestrator._state.run_id = "resume-run"
+        orchestrator._state.pipeline_name = orchestrator.spec.pipeline_name
+        self._attach_invocation(orchestrator, tmp_path)
+        changed = replace(
+            orchestrator.spec,
+            execution=replace(orchestrator.spec.execution, selected_policy="automatic"),
+        )
+        resumed = Orchestrator(spec=changed)
+
+        with pytest.raises(ValueError, match="changed away from foreground"):
+            resumed.load_reconcile_state(orchestrator.state())
+
+    def test_nonzero_foreground_result_halts_without_self_heal(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        self._attach_invocation(orchestrator, tmp_path, exit_code=7)
+        assert orchestrator.reconcile_foreground() is True
+        monkeypatch.setattr(
+            orchestrator,
+            "_attempt_self_heal",
+            lambda *args, **kwargs: pytest.fail("foreground failure must not self-heal"),
+        )
+        monkeypatch.setattr(orchestrator, "_evaluate_post_invoke_risk", lambda *_args: False)
+
+        assert orchestrator._consume_reconciled_foreground(
+            role="developer", iteration=1, next_phase="dev_review",
+        ) is False
+
+        assert orchestrator.state().halt_signal is True
+        assert "exited with code 7" in (orchestrator.state().halt_reason or "")
 
 
 class TestSelfHealHaltIsolation:

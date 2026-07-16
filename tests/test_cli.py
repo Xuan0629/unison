@@ -7,8 +7,9 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from unison.cli import main, _cmd_run, _cmd_webui
+from unison.cli import main, _cmd_reconcile, _cmd_run, _cmd_webui
 from unison.interfaces import AgentSpec, PipelineSpec, ProjectConfig, World
+from unison.state import State
 
 
 
@@ -390,6 +391,85 @@ class TestAgentOverrides:
         assert pipeline.read_text(encoding="utf-8") == original
         assert list(tmp_path.glob(".pipeline.yaml.*.tmp")) == []
         orchestrator.assert_not_called()
+
+
+class TestForegroundReconcileCli:
+    def _spec(self, tmp_path):
+        return PipelineSpec(
+            version="2.0",
+            world=World(root=tmp_path),
+            agents={},
+            project=ProjectConfig(),
+            mode="moa:analyze",
+            pipeline_name="foreground-test",
+        )
+
+    def _write_states(self, spec, state):
+        state.atomic_write(spec.world.state_file)
+        from unison.world import RunContext
+        ctx = RunContext(
+            project_id=spec.world.project_id,
+            pipeline_key=spec.world.pipeline_key(state.pipeline_name),
+            run_id=state.run_id,
+            pipeline_name=state.pipeline_name,
+        )
+        state.atomic_write(spec.world.run_state_file(ctx))
+
+    def test_reconcile_loads_canonical_run_before_continuation(self, tmp_path, monkeypatch):
+        import unison.cli as cli
+        from unison.state import ForegroundInvocationState
+
+        spec = self._spec(tmp_path)
+        state = State(
+            phase="dev_active", run_id="resume-run", pipeline_name=spec.pipeline_name,
+            active_foreground_invocation=ForegroundInvocationState(
+                invocation_id="foreground-id", phase="dev_active", role="developer",
+                runtime="claude", wrapper_pid=None, wrapper_start_identity=None,
+                launcher_pid=1, artifact_dir=str(tmp_path / "artifact"),
+                result_path=str(tmp_path / "artifact" / "result.json"),
+                output_path=str(tmp_path / "artifact" / "output.log"),
+                started_at="2026-07-15T00:00:00Z", last_heartbeat_observed_at=None,
+            ),
+        )
+        self._write_states(spec, state)
+        monkeypatch.setattr(cli, "_load", lambda _path: (spec, MagicMock()))
+        runner = MagicMock()
+        runner.reconcile_foreground.return_value = True
+        runner.run.return_value = State(phase="done")
+        monkeypatch.setattr(cli, "Orchestrator", lambda **_kwargs: runner)
+
+        assert _cmd_reconcile(SimpleNamespace(pipeline=tmp_path / "pipeline.yaml", json=False)) == 0
+        runner.load_reconcile_state.assert_called_once()
+        loaded = runner.load_reconcile_state.call_args.args[0]
+        assert loaded.run_id == "resume-run"
+        runner.reconcile_foreground.assert_called_once()
+        runner.run.assert_called_once()
+
+    def test_reconcile_refuses_missing_canonical_run_state(self, tmp_path, monkeypatch, capsys):
+        import unison.cli as cli
+
+        spec = self._spec(tmp_path)
+        State(
+            phase="dev_active", run_id="resume-run", pipeline_name=spec.pipeline_name,
+        ).atomic_write(spec.world.state_file)
+        monkeypatch.setattr(cli, "_load", lambda _path: (spec, MagicMock()))
+        orchestrator = MagicMock()
+        monkeypatch.setattr(cli, "Orchestrator", orchestrator)
+
+        assert _cmd_reconcile(SimpleNamespace(pipeline=tmp_path / "pipeline.yaml", json=False)) == 1
+        assert "canonical run state is missing" in capsys.readouterr().err
+        orchestrator.assert_not_called()
+
+    def test_main_routes_reconcile_command(self, tmp_path, monkeypatch):
+        import unison.cli as cli
+
+        called = []
+        monkeypatch.setattr(cli, "_cmd_reconcile", lambda args: called.append(args.pipeline) or 0)
+        monkeypatch.setitem(cli._HANDLERS, "reconcile", cli._cmd_reconcile)
+        pipeline = tmp_path / "pipeline.yaml"
+
+        assert main(["reconcile", "--pipeline", str(pipeline)]) == 0
+        assert called == [pipeline]
 
 
 class TestWebUiTokenTransport:

@@ -54,6 +54,7 @@ from unison.runners.openclaw import OpenClawRunner
 from unison.run_history import RunHistoryStore
 from unison.risk_engine import RuleEngineRiskEvaluator
 from unison.snapshot import FileSnapshotManager, SnapshotBoundaryError
+from unison.world import RunContext
 
 
 # ============================================================================
@@ -195,6 +196,7 @@ class Orchestrator:
         # state, budget, reviews, and snapshots.
         self._run_id = self._run_ctx.run_id
         self._state.run_id = self._run_id
+        self._reconcile_resume = False
         self.spec.world.ensure_run_directories(self._run_ctx)
 
         # P12c: Seed scoped PRD from legacy if scoped doesn't exist yet.
@@ -247,6 +249,43 @@ class Orchestrator:
         Used by Observer for polling (state.json equivalent in memory).
         """
         return self._state
+
+    def load_reconcile_state(self, state: State) -> None:
+        """Bind this instance to one persisted foreground run without creating a new run."""
+        pending = state.active_foreground_invocation
+        marker = state.foreground_reconcile
+        resume_marker = marker if marker is not None and marker.status == "reconciled" else None
+        if (
+            not state.run_id
+            or not state.pipeline_name
+            or (pending is None and resume_marker is None)
+        ):
+            raise ValueError("foreground reconcile requires a persisted run identity")
+        foreground_phase = pending.phase if pending is not None else resume_marker.phase
+        if foreground_phase is None:
+            raise ValueError("foreground reconcile resume cursor is incomplete")
+        if self.spec.execution.resolve_phase(foreground_phase) != "foreground_manual":
+            raise ValueError("foreground reconcile refuses a pipeline policy changed away from foreground")
+        if state.pipeline_name != self.spec.pipeline_name:
+            raise ValueError("foreground reconcile pipeline identity does not match the loaded spec")
+        if pending is not None and marker is not None and marker.invocation_id != pending.invocation_id:
+            raise ValueError("foreground reconcile marker does not match active invocation")
+        if (
+            pending is not None
+            and (marker is None or marker.status == "reconcile_started")
+            and pending.phase != state.phase
+        ):
+            raise ValueError("foreground reconcile phase does not match persisted State")
+        self._state = state
+        self._reconcile_resume = True
+        self._run_ctx = RunContext(
+            project_id=self.spec.world.project_id,
+            pipeline_key=self.spec.world.pipeline_key(state.pipeline_name),
+            run_id=state.run_id,
+            pipeline_name=state.pipeline_name,
+        )
+        self._run_id = state.run_id
+        self.spec.world.ensure_run_directories(self._run_ctx)
 
     def halt(self, reason: str, category: str = "stage") -> None:
         """External halt trigger — sets halt_signal + halt_reason.
@@ -374,6 +413,9 @@ class Orchestrator:
     def _start_run_history(self) -> None:
         if self._run_history_started:
             return
+        if getattr(self, "_reconcile_resume", False):
+            self._run_history_started = True
+            return
         try:
             self._run_history.start(
                 self._run_id,
@@ -472,7 +514,10 @@ class Orchestrator:
             # ------------------------------------------------------------------
             # 4. Bootstrap (§12)
             # ------------------------------------------------------------------
-            self._run_bootstrap()
+            # A reconciler resumes a durable run after its foreground evidence
+            # has been verified; bootstrap belongs only to initial execution.
+            if not getattr(self, "_reconcile_resume", False):
+                self._run_bootstrap()
 
             if self._state.halt_signal:
                 return self._state
@@ -556,9 +601,22 @@ class Orchestrator:
             self.halt(f"Unknown pipeline mode: {mode}", category="external")
             return
 
+        pending = self._state.active_foreground_invocation
+        marker = self._state.foreground_reconcile
+        resume_phase = (
+            self._state.phase
+            if marker is not None and marker.status == "reconciled"
+            else pending.phase if pending is not None else None
+        )
         for pd in phases:
             if self._state.halt_signal:
                 return
+            resuming_phase = resume_phase is not None and (
+                pd.active_phase == resume_phase or pd.review_phase == resume_phase
+            )
+            if resume_phase is not None and not resuming_phase:
+                continue
+            resume_phase = None
 
             if pd.active_phase == "spec-check":
                 self._run_spec_verification()
@@ -573,7 +631,7 @@ class Orchestrator:
             else:
                 # Non-DAG dev phase: freeze acceptance criteria before
                 # entering the active→review loop.
-                if pd.active_phase == "dev_active":
+                if pd.active_phase == "dev_active" and not resuming_phase:
                     if not self._verify_frozen_specification():
                         if not self._review_specification_amendment(1):
                             if not self._state.halt_signal:
@@ -592,8 +650,15 @@ class Orchestrator:
                     )
                     self._freeze_acceptance_criteria()
                     self._save_checkpoint()
-                self._run_loop(pd.active_phase, pd.review_phase,
-                               pd.review_of, role=pd.role)
+                loop_args = (
+                    pd.active_phase,
+                    pd.review_phase,
+                    pd.review_of,
+                )
+                if resuming_phase and self._state.phase == pd.review_phase and self._state.foreground_reconcile is not None:
+                    self._run_loop(*loop_args, role=pd.role, resume_at_review=True)
+                else:
+                    self._run_loop(*loop_args, role=pd.role)
             if self._foreground_invocation_pending():
                 return
 
@@ -1781,6 +1846,7 @@ class Orchestrator:
         review_phase: str,
         review_of: str,
         role: str | None = None,
+        resume_at_review: bool = False,
     ) -> None:
         """Run a single active→review loop.
 
@@ -1826,8 +1892,13 @@ class Orchestrator:
             }
             agent_role = role_for_phase[active_phase]
 
-        for iteration in range(1, max_iter + 1):
-            if self._state.halt_signal or self._foreground_invocation_pending():
+        start_iteration = max(1, self._state.iteration)
+        for iteration in range(start_iteration, max_iter + 1):
+            marker = self._state.foreground_reconcile
+            if self._state.halt_signal or (
+                self._foreground_invocation_pending()
+                and (marker is None or marker.status != "reconcile_started")
+            ):
                 return
 
             # ---- Pipeline timeout check (P8 S16) -----------------------------
@@ -1856,56 +1927,85 @@ class Orchestrator:
             # retries within the same iteration don't reset the counter.
             self._fix_attempts = 0
 
-            self._state.transition(
-                active_phase, "orchestrator",
-                iter_n=iteration,
-                note=f"{active_phase} iter {iteration}/{max_iter}",
+            resumed_review = (iteration == start_iteration and resume_at_review) or (
+                self._state.active_foreground_invocation is not None
+                and self._state.foreground_reconcile is not None
+                and self._state.foreground_reconcile.status == "reconcile_started"
+                and self._state.active_foreground_invocation.phase == review_phase
             )
-            self._publish_phase_event(active_phase,
-                                      note=f"iter {iteration}/{max_iter}")
-            self._save_checkpoint(iteration)
+            if not resumed_review:
+                self._state.transition(
+                    active_phase, "orchestrator",
+                    iter_n=iteration,
+                    note=f"{active_phase} iter {iteration}/{max_iter}",
+                )
+                self._publish_phase_event(active_phase,
+                                          note=f"iter {iteration}/{max_iter}")
+                self._save_checkpoint(iteration)
 
-            # Pipeline B: detect multi-agent parallel group
-            agents = self._resolve_agents(agent_role)
-            if len(agents) > 1:
-                self._invoke_agents_parallel(agents, agent_role, iteration, review_phase=review_phase)
-            else:
-                self._invoke_agent_for_role(agent_role, iteration, review_phase=review_phase)
+                # Pipeline B: detect multi-agent parallel group
+                agents = self._resolve_agents(agent_role)
+                if len(agents) > 1:
+                    self._invoke_agents_parallel(agents, agent_role, iteration, review_phase=review_phase)
+                else:
+                    self._invoke_agent_for_role(agent_role, iteration, review_phase=review_phase)
 
-            if self._state.halt_signal or self._foreground_invocation_pending():
-                return
-
-            if active_phase == "dev_active" and not self._verify_frozen_specification():
-                if not self._review_specification_amendment(iteration):
-                    if not self._state.halt_signal:
-                        self.halt(
-                            "Frozen specification amendment was not approved by both "
-                            "Planner and Reviewer",
-                            category="external",
-                        )
+                if self._state.halt_signal or self._foreground_invocation_pending():
                     return
 
+                if active_phase == "dev_active" and not self._verify_frozen_specification():
+                    if not self._review_specification_amendment(iteration):
+                        if not self._state.halt_signal:
+                            self.halt(
+                                "Frozen specification amendment was not approved by both "
+                                "Planner and Reviewer",
+                                category="external",
+                            )
+                        return
+
             # ---- Review phase -----------------------------------------------
-            self._state.transition(
-                review_phase, "orchestrator",
-                iter_n=iteration,
-                note=f"{review_phase} iter {iteration}/{max_iter}",
-            )
-            self._publish_phase_event(review_phase,
-                                      note=f"iter {iteration}/{max_iter}")
-            self._save_checkpoint(iteration)
+            if self._state.phase != review_phase:
+                self._state.transition(
+                    review_phase, "orchestrator",
+                    iter_n=iteration,
+                    note=f"{review_phase} iter {iteration}/{max_iter}",
+                )
+                self._publish_phase_event(review_phase,
+                                          note=f"iter {iteration}/{max_iter}")
+                self._save_checkpoint(iteration)
 
             # Pipeline B: auto-detect multi-reviewer from agent composition
-            reviewer_agents = self._resolve_agents("reviewer")
-            if len(reviewer_agents) > 1:
-                self._invoke_agents_parallel(
-                    reviewer_agents, "reviewer", iteration,
-                    review_phase=review_phase,
+            reviewer_marker = self._state.foreground_reconcile
+            resume_after_review = (
+                iteration == start_iteration
+                and resume_at_review
+                and reviewer_marker is not None
+                and reviewer_marker.status == "reconciled"
+                and reviewer_marker.phase == review_phase
+                and reviewer_marker.role == "reviewer"
+            )
+            if (
+                reviewer_marker is not None
+                and reviewer_marker.status == "reconcile_started"
+                and self._state.active_foreground_invocation is not None
+                and self._state.active_foreground_invocation.phase == review_phase
+            ):
+                self._consume_reconciled_foreground(
+                    role="reviewer",
+                    iteration=iteration,
+                    next_phase=review_phase,
                 )
-            else:
-                self._invoke_agent_for_role("reviewer", iteration, review_phase=review_phase)
+            elif not resume_after_review:
+                reviewer_agents = self._resolve_agents("reviewer")
+                if len(reviewer_agents) > 1:
+                    self._invoke_agents_parallel(
+                        reviewer_agents, "reviewer", iteration,
+                        review_phase=review_phase,
+                    )
+                else:
+                    self._invoke_agent_for_role("reviewer", iteration, review_phase=review_phase)
 
-            if self._state.halt_signal:
+            if self._state.halt_signal or self._foreground_invocation_pending():
                 return
 
             # ---- Verdict routing --------------------------------------------
@@ -2096,6 +2196,20 @@ class Orchestrator:
             iteration: Current iteration number.
             review_phase: "planning_review" or "dev_review" (for correct review file path).
         """
+        foreground_marker = self._state.foreground_reconcile
+        if (
+            foreground_marker is not None
+            and foreground_marker.status == "reconcile_started"
+            and self._state.active_foreground_invocation is not None
+            and self._state.active_foreground_invocation.phase == self._state.phase
+        ):
+            self._consume_reconciled_foreground(
+                role=role,
+                iteration=iteration,
+                next_phase=review_phase,
+            )
+            return
+
         # 0. V2: parallel-dev routing
         if role == "developer":
             pd = self.spec.parallel_dev
@@ -2191,12 +2305,24 @@ class Orchestrator:
             pass
 
         # 6. Run agent subprocess
+        foreground_marker = self._state.foreground_reconcile
+        if (
+            getattr(self, "_reconcile_resume", False)
+            and self.spec.execution.resolve_phase(self._state.phase) != "foreground_manual"
+        ):
+            self.halt(
+                "foreground reconcile refuses to fall back to headless execution",
+                category="external",
+            )
+            self._save_checkpoint(iteration)
+            return
         if self.spec.execution.resolve_phase(self._state.phase) == "foreground_manual":
             self._dispatch_foreground_invocation(
                 effective_spec=effective_spec,
                 prompt=prompt,
                 baseline_commit=pre_commit,
                 iteration=iteration,
+                snapshot_ids=snapshot_ids,
             )
             return
 
@@ -2275,15 +2401,21 @@ class Orchestrator:
         prompt: str,
         baseline_commit: str | None,
         iteration: int,
+        snapshot_ids: list[str] | None = None,
     ) -> None:
         """Persist and hand off one foreground invocation without completion claims."""
-        if self._state.active_foreground_invocation is not None:
+        marker = self._state.foreground_reconcile
+        if self._state.active_foreground_invocation is not None and (
+            marker is None or marker.status != "reconciled"
+        ):
             self.halt(
                 "foreground invocation is already active; refusing duplicate dispatch",
                 category="external",
             )
             self._save_checkpoint(iteration)
             return
+        if marker is not None and marker.status == "reconciled":
+            self._state.active_foreground_invocation = None
 
         world = self.spec.world
         invocation = prepare_foreground_invocation(
@@ -2314,7 +2446,9 @@ class Orchestrator:
             output_path=str(invocation.output_path),
             started_at=started_at,
             last_heartbeat_observed_at=None,
+            snapshot_ids=tuple(snapshot_ids or ()),
         )
+        self._state.foreground_reconcile = None
         self._save_checkpoint(iteration)
 
         try:
@@ -2343,7 +2477,10 @@ class Orchestrator:
         verified result without dispatching the completed role again.
         """
         pending = self._state.active_foreground_invocation
+        marker = self._state.foreground_reconcile
         if pending is None:
+            if marker is not None and marker.status == "reconciled" and marker.phase and marker.role:
+                return True
             self.halt("foreground reconcile requires an active invocation", category="external")
             self._save_checkpoint()
             return False
@@ -2370,7 +2507,7 @@ class Orchestrator:
                 )
                 self._save_checkpoint()
                 return False
-            return marker.status == "reconcile_started"
+            return marker.status in {"reconcile_started", "reconciled"}
         self._state.foreground_reconcile = ForegroundReconcileState(
             invocation_id=pending.invocation_id,
             result_digest=digest,
@@ -2379,9 +2516,107 @@ class Orchestrator:
         self._save_checkpoint()
         return True
 
+    def _consume_reconciled_foreground(
+        self,
+        *,
+        role: str,
+        iteration: int,
+        next_phase: str,
+    ) -> bool:
+        """Apply one verified foreground result without redispatching its role."""
+        pending = self._state.active_foreground_invocation
+        marker = self._state.foreground_reconcile
+        if (
+            pending is None
+            or marker is None
+            or marker.status != "reconcile_started"
+            or pending.phase != self._state.phase
+            or pending.role != role
+        ):
+            self.halt("foreground reconcile state is inconsistent", category="external")
+            self._save_checkpoint(iteration)
+            return False
+        invocation = ForegroundInvocation(pending.invocation_id, Path(pending.artifact_dir))
+        verified = invocation.read_verified_result_evidence()
+        if verified is None:
+            self.halt(
+                "foreground interrupted_unverified: result evidence changed before continuation",
+                category="external",
+            )
+            self._save_checkpoint(iteration)
+            return False
+        result_record, evidence = verified
+        if hashlib.sha256(evidence).hexdigest() != marker.result_digest:
+            self.halt(
+                "foreground interrupted_unverified: reconciliation evidence changed",
+                category="external",
+            )
+            self._save_checkpoint(iteration)
+            return False
+        try:
+            request = invocation.read_request()
+        except ValueError:
+            self.halt("foreground interrupted_unverified: request evidence is invalid", category="external")
+            self._save_checkpoint(iteration)
+            return False
+        baseline_commit = request.get("baseline_commit")
+        if baseline_commit is not None and not isinstance(baseline_commit, str):
+            self.halt("foreground interrupted_unverified: request baseline is invalid", category="external")
+            self._save_checkpoint(iteration)
+            return False
+        if result_record["exit_code"] != 0:
+            self._evaluate_post_invoke_risk(self.spec.world.root, list(pending.snapshot_ids))
+            if not self._state.halt_signal:
+                self.halt(
+                    f"foreground {role} exited with code {result_record['exit_code']}",
+                    category="external",
+                )
+            self._save_checkpoint(iteration)
+            return False
+        detected = self._detector.detect(
+            workspace=self.spec.world.root,
+            expected_iter=iteration,
+            role=role,
+            log_path=Path(pending.output_path),
+            pre_commit=baseline_commit,
+            review_dir=self.spec.world.reviews_dir_for(self._run_ctx),
+            prd_dir=self.spec.world.prd_dir_for(self._run_ctx.pipeline_key),
+        )
+        if detected.commit:
+            self._state.last_dev_commit = detected.commit
+        if self._evaluate_post_invoke_risk(self.spec.world.root, list(pending.snapshot_ids)):
+            self._save_checkpoint(iteration)
+            return False
+        if not detected.success:
+            _log.warning(
+                "Foreground completion detection failed for role=%s iteration=%s; "
+                "continuing without automatic self-heal",
+                role,
+                iteration,
+            )
+        self._state.foreground_reconcile = ForegroundReconcileState(
+            invocation_id=marker.invocation_id,
+            result_digest=marker.result_digest,
+            status="reconciled",
+            phase=pending.phase,
+            role=pending.role,
+        )
+        self._state.active_foreground_invocation = None
+        if self._state.phase != next_phase:
+            self._state.transition(
+                next_phase, "orchestrator", iter_n=iteration,
+                note=f"reconciled foreground {role} result",
+            )
+        self._save_checkpoint(iteration)
+        return True
+
     def _foreground_invocation_pending(self) -> bool:
         """Return whether durable State still requires foreground reconciliation."""
-        return self._state.active_foreground_invocation is not None
+        marker = self._state.foreground_reconcile
+        return (
+            self._state.active_foreground_invocation is not None
+            and (marker is None or marker.status != "reconciled")
+        )
 
     def _attempt_self_heal(self, role: str, iteration: int,
                            review_phase: str, result: AgentResult,
