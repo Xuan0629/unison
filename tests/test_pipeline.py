@@ -1822,7 +1822,6 @@ class TestPipelineObserverConfig:
             old_level = logger.level
             logger.setLevel(logging.WARNING)
             records = []
-            handler = logging.handlers.MemoryHandler if hasattr(logging, 'handlers') else None
 
             class ListHandler(logging.Handler):
                 def emit(self, record):
@@ -1837,6 +1836,80 @@ class TestPipelineObserverConfig:
                 logger.setLevel(old_level)
 
         return _capture()
+
+
+class TestLlmObserverConfig:
+    def _write_pipeline(self, tmp_path, extra: str = ""):
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "developer.md").write_text("developer", encoding="utf-8")
+        (prompts / "reviewer.md").write_text("reviewer", encoding="utf-8")
+        path = tmp_path / "pipeline.yaml"
+        path.write_text(
+            """version: "1.0"
+mode: code-dev
+agents:
+  developer:
+    role: developer
+    runtime: codex
+    system_prompt_path: prompts/developer.md
+  reviewer:
+    role: reviewer
+    runtime: codex
+    system_prompt_path: prompts/reviewer.md
+""" + extra,
+            encoding="utf-8",
+        )
+        return path
+
+    def test_defaults_disabled(self, tmp_path):
+        spec = PipelineLoader().load(self._write_pipeline(tmp_path))
+
+        assert spec.llm_observer.enabled is False
+        assert spec.llm_observer.allow_halt is False
+        assert spec.llm_observer.allow_redirect is False
+
+    def test_enabled_requires_registered_runtime(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: crush
+""",
+        )
+
+        with pytest.raises(PipelineValidationError, match="registered runtime"):
+            PipelineLoader().load(path)
+
+    def test_enabled_policy_is_explicit_and_disabled_for_foreground(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: codex
+  model: gpt-5.6-sol
+  allow_halt: true
+  allow_redirect: true
+execution:
+  selected_policy: interactive
+""",
+        )
+
+        with pytest.raises(PipelineValidationError, match="foreground_manual"):
+            PipelineLoader().load(path)
+
+    def test_control_flags_report_the_invalid_field(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: codex
+  allow_halt: "yes"
+""",
+        )
+
+        with pytest.raises(PipelineValidationError, match="allow_halt"):
+            PipelineLoader().load(path)
 
     def test_pipeline_name_from_project(self, tmp_path):
         """pipeline_name is read from project.name in YAML."""

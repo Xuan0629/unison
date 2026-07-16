@@ -139,6 +139,17 @@ class ExecutionConfig:
 
 
 @dataclass(frozen=True)
+class LlmObserverConfig:
+    """Opt-in LLM observation policy for non-interactive pipeline phases."""
+
+    enabled: bool = False
+    runtime: str = ""
+    model: str = ""
+    allow_halt: bool = False
+    allow_redirect: bool = False
+
+
+@dataclass(frozen=True)
 class ProjectConfig:
     """项目级配置。"""
     language: ProjectLanguage = "python"
@@ -348,6 +359,7 @@ class PipelineSpec:
     agents: dict[AgentRole, AgentSpec]
     project: ProjectConfig = field(default_factory=ProjectConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    llm_observer: LlmObserverConfig = field(default_factory=LlmObserverConfig)
     bootstrap: BootstrapConfig = field(default_factory=BootstrapConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     snapshots: SnapshotConfig = field(default_factory=SnapshotConfig)

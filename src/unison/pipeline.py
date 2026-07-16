@@ -57,6 +57,7 @@ from unison.interfaces import (
     ExecutionMode,
     ExecutionPolicy,
     GreenfieldConfig,
+    LlmObserverConfig,
     MOA_MODES,
     MoaConfig,
     PipelineMode,
@@ -228,6 +229,7 @@ class PipelineLoader:
         snapshots_cfg = self._build_snapshots(raw.get("snapshots"))
         risk_cfg = self._build_risk_matrix(raw.get("risk_matrix"))
         execution_cfg = self._build_execution(raw.get("execution"))
+        llm_observer_cfg = self._build_llm_observer(raw.get("llm_observer"))
 
         # ---- V2 fields ----
         dag_cfg = self._build_dag(raw.get("dag"))
@@ -276,6 +278,7 @@ class PipelineLoader:
             snapshots=snapshots_cfg,
             risk_matrix=risk_cfg,
             execution=execution_cfg,
+            llm_observer=llm_observer_cfg,
             dag=dag_cfg,
             reviewer_config=reviewer_cfg,
             parallel_dev=parallel_dev_cfg,
@@ -444,6 +447,37 @@ class PipelineLoader:
             )
         return ExecutionConfig(selected_policy=selected_policy, policies=policies)
 
+    def _build_llm_observer(self, raw: dict[str, Any] | None) -> LlmObserverConfig:
+        """Build explicit LLM Observer policy; unknown or partial opt-in fails closed."""
+        if raw is None:
+            return LlmObserverConfig()
+        if not isinstance(raw, dict):
+            raise PipelineValidationError("llm_observer must be a mapping")
+        enabled = raw.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise PipelineValidationError("llm_observer.enabled must be a boolean")
+        if not enabled:
+            return LlmObserverConfig()
+        runtime = raw.get("runtime")
+        if not isinstance(runtime, str) or not is_registered_runtime(runtime):
+            raise PipelineValidationError("llm_observer.runtime must be a registered runtime")
+        model = raw.get("model", "")
+        if not isinstance(model, str):
+            raise PipelineValidationError("llm_observer.model must be a string")
+        allow_halt = raw.get("allow_halt", False)
+        allow_redirect = raw.get("allow_redirect", False)
+        if not isinstance(allow_halt, bool):
+            raise PipelineValidationError("llm_observer.allow_halt must be a boolean")
+        if not isinstance(allow_redirect, bool):
+            raise PipelineValidationError("llm_observer.allow_redirect must be a boolean")
+        return LlmObserverConfig(
+            enabled=True,
+            runtime=runtime,
+            model=model,
+            allow_halt=allow_halt,
+            allow_redirect=allow_redirect,
+        )
+
     @staticmethod
     def validate_execution(spec: PipelineSpec) -> None:
         """Fail closed when the selected policy contains foreground execution."""
@@ -458,6 +492,10 @@ class PipelineLoader:
             spec.execution.resolve_phase(phase) == "foreground_manual"
             for phase in EXECUTION_POLICY_PHASES
         )
+        if spec.llm_observer.enabled and foreground:
+            raise PipelineValidationError(
+                "llm_observer cannot run with foreground_manual execution"
+            )
         if not foreground:
             return
         if spec.mode in MOA_MODES:
