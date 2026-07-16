@@ -45,6 +45,7 @@ from unison.checkpoint import FileCheckpointManager
 from unison.completion import GitCompletionDetector
 from unison.checklist import ChecklistItem, ChecklistStatus
 from unison.io import atomic_read_json, atomic_write_json
+from unison.llm_observer import append_audit, write_manifest
 import yaml
 from unison.verdict import YamlFrontmatterParser
 from unison.context_deflate import assemble_context, extract_top_findings
@@ -545,6 +546,7 @@ class Orchestrator:
             self._state.observer_language = self.spec.observer_language
             self._state.pipeline_name = self.spec.pipeline_name
             self._save_checkpoint()
+            self._start_llm_observer_audit()
             self._start_run_history()
 
             # ------------------------------------------------------------------
@@ -590,6 +592,31 @@ class Orchestrator:
             self._lock_mgr.release(project_name)
 
         return self._state
+
+    def _start_llm_observer_audit(self) -> None:
+        """Persist opt-in observer identity, then fail closed without a read-only runner."""
+        config = self.spec.llm_observer
+        if not config.enabled:
+            return
+        _, digest = write_manifest(self.spec.world, self._run_ctx, self._state)
+        append_audit(
+            self.spec.world,
+            self._run_ctx,
+            event="manifest_created",
+            manifest_sha256=digest,
+            runtime=config.runtime,
+            model=config.model,
+            detail="allowlisted run-bound manifest created",
+        )
+        append_audit(
+            self.spec.world,
+            self._run_ctx,
+            event="observation_skipped",
+            manifest_sha256=digest,
+            runtime=config.runtime,
+            model=config.model,
+            detail="no verified read-only runtime binding",
+        )
 
     # ==================================================================
     # Internal: state machine (§3 two-phase loop → mode dispatch)
