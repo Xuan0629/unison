@@ -1992,17 +1992,77 @@ execution:
         with pytest.raises(PipelineValidationError, match="allow_halt"):
             PipelineLoader().load(path)
 
-    def test_control_authority_remains_rejected_until_implemented(self, tmp_path):
+    def test_claude_control_authority_requires_static_redirect_policy(self, tmp_path):
         path = self._write_pipeline(
             tmp_path,
             """llm_observer:
   enabled: true
   runtime: claude
   allow_halt: true
+  allow_redirect: true
+  redirect:
+    roles: [developer]
+    directives:
+      - address_open_checklist
+      - address_reviewer_findings
+      - run_declared_verification
 """,
         )
 
-        with pytest.raises(PipelineValidationError, match="authority.*not implemented"):
+        observer = PipelineLoader().load(path).llm_observer
+
+        assert observer.allow_halt is True
+        assert observer.allow_redirect is True
+        assert observer.redirect_roles == ("developer",)
+        assert observer.redirect_directives == (
+            "address_open_checklist",
+            "address_reviewer_findings",
+            "run_declared_verification",
+        )
+
+    def test_hermes_control_authority_remains_rejected(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: hermes
+  provider: custom:openai-987xyz
+  model: gpt-5.6-terra
+  allow_halt: true
+""",
+        )
+
+        with pytest.raises(PipelineValidationError, match="Claude"):
+            PipelineLoader().load(path)
+
+    def test_control_authority_rejects_unknown_observer_field(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: claude
+  allow_halt: true
+  unsafe_freeform_prompt: do anything
+""",
+        )
+
+        with pytest.raises(PipelineValidationError, match="unknown field"):
+            PipelineLoader().load(path)
+
+    def test_redirect_authority_rejects_unknown_directive(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: claude
+  allow_redirect: true
+  redirect:
+    roles: [developer]
+    directives: [run_shell_command]
+""",
+        )
+
+        with pytest.raises(PipelineValidationError, match="directive"):
             PipelineLoader().load(path)
 
     def test_pipeline_name_from_project(self, tmp_path):

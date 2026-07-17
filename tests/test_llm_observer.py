@@ -48,6 +48,33 @@ def test_manifest_is_run_scoped_and_contains_only_allowlisted_state(tmp_path):
     assert "runtime_agents" not in manifest
 
 
+def test_control_manifest_bounds_and_redacts_allowlisted_evidence(tmp_path):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+    evidence = {
+        "reviewer_findings": [
+            {"id": "review.finding.1", "text": f"{secret} " + "x" * 500},
+        ],
+        "open_checklist": [
+            {"id": "checklist.P1", "severity": "HIGH", "title": "y" * 500},
+        ],
+        "verification": {"id": "verification.declared", "status": "failed"},
+        "risk": {"id": "risk.post_invoke", "status": "unavailable"},
+        "budget": {"id": "budget.current", "status": "unavailable"},
+    }
+
+    path, _ = write_manifest(world, ctx, State(), evidence=evidence)
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+
+    assert manifest["evidence"]["reviewer_findings"][0]["id"] == "review.finding.1"
+    assert secret not in manifest["evidence"]["reviewer_findings"][0]["text"]
+    assert len(manifest["evidence"]["reviewer_findings"][0]["text"]) <= 240
+    assert len(manifest["evidence"]["open_checklist"][0]["title"]) <= 160
+    assert manifest["evidence"]["verification"]["status"] == "failed"
+    assert "raw_log" not in json.dumps(manifest)
+
+
 def test_audit_is_append_only_and_excludes_observation_content(tmp_path):
     world = World(tmp_path)
     ctx = _ctx(world)

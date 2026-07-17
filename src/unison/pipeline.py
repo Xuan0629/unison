@@ -58,6 +58,7 @@ from unison.interfaces import (
     ExecutionPolicy,
     GreenfieldConfig,
     LlmObserverConfig,
+    CONTROLLED_REDIRECT_DIRECTIVES,
     MOA_MODES,
     MoaConfig,
     PipelineMode,
@@ -453,6 +454,14 @@ class PipelineLoader:
             return LlmObserverConfig()
         if not isinstance(raw, dict):
             raise PipelineValidationError("llm_observer must be a mapping")
+        allowed_fields = {
+            "enabled", "runtime", "provider", "model", "allow_halt", "allow_redirect", "redirect",
+        }
+        unknown_fields = set(raw) - allowed_fields
+        if unknown_fields:
+            raise PipelineValidationError(
+                "llm_observer has unknown field(s): " + ", ".join(sorted(unknown_fields))
+            )
         enabled = raw.get("enabled", False)
         if not isinstance(enabled, bool):
             raise PipelineValidationError("llm_observer.enabled must be a boolean")
@@ -479,10 +488,36 @@ class PipelineLoader:
             raise PipelineValidationError("llm_observer.allow_halt must be a boolean")
         if not isinstance(allow_redirect, bool):
             raise PipelineValidationError("llm_observer.allow_redirect must be a boolean")
-        if allow_halt or allow_redirect:
+        if (allow_halt or allow_redirect) and runtime != "claude":
             raise PipelineValidationError(
-                "llm_observer halt and redirect authority are not implemented"
+                "llm_observer control authority requires the verified Claude structured binding"
             )
+        redirect_roles: tuple[str, ...] = ()
+        redirect_directives: tuple[str, ...] = ()
+        redirect = raw.get("redirect")
+        if allow_redirect:
+            if not isinstance(redirect, dict):
+                raise PipelineValidationError("llm_observer.redirect is required when allow_redirect is true")
+            if set(redirect) != {"roles", "directives"}:
+                raise PipelineValidationError("llm_observer.redirect allows only roles and directives")
+            roles = redirect["roles"]
+            directives = redirect["directives"]
+            if (
+                not isinstance(roles, list)
+                or not roles
+                or any(not isinstance(role, str) or role != "developer" for role in roles)
+            ):
+                raise PipelineValidationError("llm_observer.redirect.roles must contain only developer")
+            if (
+                not isinstance(directives, list)
+                or not directives
+                or any(not isinstance(code, str) or code not in CONTROLLED_REDIRECT_DIRECTIVES for code in directives)
+            ):
+                raise PipelineValidationError("llm_observer.redirect.directives contains an unsupported directive")
+            redirect_roles = tuple(dict.fromkeys(roles))
+            redirect_directives = tuple(dict.fromkeys(directives))
+        elif redirect is not None:
+            raise PipelineValidationError("llm_observer.redirect requires allow_redirect true")
         return LlmObserverConfig(
             enabled=True,
             runtime=runtime,
@@ -490,6 +525,8 @@ class PipelineLoader:
             model=model,
             allow_halt=allow_halt,
             allow_redirect=allow_redirect,
+            redirect_roles=redirect_roles,
+            redirect_directives=redirect_directives,
         )
 
     @staticmethod

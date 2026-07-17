@@ -140,6 +140,13 @@ class ExecutionConfig:
         return policy.resolve_phase(phase)
 
 
+CONTROLLED_REDIRECT_DIRECTIVES = frozenset({
+    "address_open_checklist",
+    "address_reviewer_findings",
+    "run_declared_verification",
+})
+
+
 @dataclass(frozen=True)
 class LlmObserverConfig:
     """Opt-in LLM observation policy for non-interactive pipeline phases."""
@@ -150,6 +157,8 @@ class LlmObserverConfig:
     model: str = ""
     allow_halt: bool = False
     allow_redirect: bool = False
+    redirect_roles: tuple[str, ...] = ()
+    redirect_directives: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

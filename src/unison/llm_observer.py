@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from unison.io import atomic_write_json
+from unison.runners.base import mask_secrets
 from unison.state import State
 from unison.world import RunContext, World
 
@@ -59,10 +60,46 @@ def llm_observation_path(world: World, ctx: RunContext) -> Path:
     return llm_observer_dir(world, ctx) / "observation.json"
 
 
-def build_manifest(state: State, ctx: RunContext) -> dict:
-    """Return the small, redaction-safe state projection available to an observer."""
+def _bounded_text(value: str, limit: int) -> str:
+    return mask_secrets(value)[:limit]
+
+
+def _manifest_evidence(evidence: dict | None) -> dict:
+    evidence = evidence if isinstance(evidence, dict) else {}
+    findings = evidence.get("reviewer_findings")
+    checklist = evidence.get("open_checklist")
+    bounded_findings = []
+    if isinstance(findings, list):
+        for item in findings[:5]:
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("text"), str):
+                bounded_findings.append({"id": item["id"], "text": _bounded_text(item["text"], 240)})
+    bounded_checklist = []
+    if isinstance(checklist, list):
+        for item in checklist[:10]:
+            if (
+                isinstance(item, dict)
+                and isinstance(item.get("id"), str)
+                and isinstance(item.get("severity"), str)
+                and isinstance(item.get("title"), str)
+            ):
+                bounded_checklist.append({
+                    "id": item["id"],
+                    "severity": item["severity"],
+                    "title": _bounded_text(item["title"], 160),
+                })
     return {
-        "version": 1,
+        "reviewer_findings": bounded_findings,
+        "open_checklist": bounded_checklist,
+        "verification": evidence.get("verification", {"id": "verification.declared", "status": "unavailable"}),
+        "risk": evidence.get("risk", {"id": "risk.post_invoke", "status": "unavailable"}),
+        "budget": evidence.get("budget", {"id": "budget.current", "status": "unavailable"}),
+    }
+
+
+def build_manifest(state: State, ctx: RunContext, *, evidence: dict | None = None) -> dict:
+    """Return the bounded, redaction-safe state and evidence projection for an observer."""
+    return {
+        "version": 2,
         "project_id": ctx.project_id,
         "pipeline_key": ctx.pipeline_key,
         "run_id": ctx.run_id,
@@ -73,11 +110,14 @@ def build_manifest(state: State, ctx: RunContext) -> dict:
         "halt_reason": state.halt_reason,
         "last_review_verdict": state.last_review_verdict,
         "transition_count": len(state.history),
+        "evidence": _manifest_evidence(evidence),
     }
 
 
-def write_manifest(world: World, ctx: RunContext, state: State) -> tuple[Path, str]:
-    manifest = build_manifest(state, ctx)
+def write_manifest(
+    world: World, ctx: RunContext, state: State, *, evidence: dict | None = None,
+) -> tuple[Path, str]:
+    manifest = build_manifest(state, ctx, evidence=evidence)
     path = llm_observer_manifest_path(world, ctx)
     atomic_write_json(path, manifest)
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
