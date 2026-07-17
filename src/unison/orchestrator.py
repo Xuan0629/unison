@@ -45,7 +45,12 @@ from unison.checkpoint import FileCheckpointManager
 from unison.completion import GitCompletionDetector
 from unison.checklist import ChecklistItem, ChecklistStatus
 from unison.io import atomic_read_json, atomic_write_json
-from unison.llm_observer import append_audit, run_claude_observation, write_manifest
+from unison.llm_observer import (
+    append_audit,
+    run_claude_observation,
+    run_hermes_observation,
+    write_manifest,
+)
 import yaml
 from unison.verdict import YamlFrontmatterParser
 from unison.context_deflate import assemble_context, extract_top_findings
@@ -594,7 +599,7 @@ class Orchestrator:
         return self._state
 
     def _start_llm_observer_audit(self) -> None:
-        """Run the bounded Claude observer for an explicit automated opt-in."""
+        """Run the selected bounded observer for an explicit automated opt-in."""
         config = self.spec.llm_observer
         if not config.enabled:
             return
@@ -608,6 +613,11 @@ class Orchestrator:
             model=config.model,
             detail="allowlisted run-bound manifest created",
         )
+        detail = (
+            "no-tool independent Hermes observation started"
+            if config.runtime == "hermes"
+            else "no-tool independent Claude observation started"
+        )
         append_audit(
             self.spec.world,
             self._run_ctx,
@@ -615,16 +625,27 @@ class Orchestrator:
             manifest_sha256=digest,
             runtime=config.runtime,
             model=config.model,
-            detail="no-tool independent Claude observation started",
+            detail=detail,
         )
-        result = run_claude_observation(
-            self.spec.world,
-            self._run_ctx,
-            manifest_path,
-            digest,
-            config.model,
-            min(self.spec.per_agent_timeout, 120),
-        )
+        if config.runtime == "hermes":
+            result = run_hermes_observation(
+                self.spec.world,
+                self._run_ctx,
+                manifest_path,
+                digest,
+                config.model,
+                config.provider,
+                min(self.spec.per_agent_timeout, 120),
+            )
+        else:
+            result = run_claude_observation(
+                self.spec.world,
+                self._run_ctx,
+                manifest_path,
+                digest,
+                config.model,
+                min(self.spec.per_agent_timeout, 120),
+            )
         append_audit(
             self.spec.world,
             self._run_ctx,

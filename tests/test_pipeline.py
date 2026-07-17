@@ -1869,7 +1869,7 @@ agents:
         assert spec.llm_observer.allow_halt is False
         assert spec.llm_observer.allow_redirect is False
 
-    def test_enabled_requires_verified_read_only_runtime(self, tmp_path):
+    def test_enabled_rejects_unverified_read_only_runtime(self, tmp_path):
         path = self._write_pipeline(
             tmp_path,
             """llm_observer:
@@ -1878,10 +1878,52 @@ agents:
 """,
         )
 
-        with pytest.raises(PipelineValidationError, match="must be claude"):
+        with pytest.raises(PipelineValidationError, match="must be hermes or claude"):
             PipelineLoader().load(path)
 
-    def test_enabled_accepts_claude_read_only_runtime(self, tmp_path):
+    def test_enabled_requires_provider_for_hermes(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: hermes
+  model: gpt-5.6-terra
+""",
+        )
+
+        with pytest.raises(PipelineValidationError, match="provider is required for hermes"):
+            PipelineLoader().load(path)
+
+    def test_enabled_requires_model_for_hermes(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: hermes
+  provider: custom:openai-987xyz
+""",
+        )
+
+        with pytest.raises(PipelineValidationError, match="model is required for hermes"):
+            PipelineLoader().load(path)
+
+    def test_enabled_accepts_hermes_with_explicit_provider(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: hermes
+  provider: custom:openai-987xyz
+  model: gpt-5.6-terra
+""",
+        )
+
+        observer = PipelineLoader().load(path).llm_observer
+        assert observer.runtime == "hermes"
+        assert observer.provider == "custom:openai-987xyz"
+        assert observer.model == "gpt-5.6-terra"
+
+    def test_enabled_accepts_claude_read_only_fallback(self, tmp_path):
         path = self._write_pipeline(
             tmp_path,
             """llm_observer:

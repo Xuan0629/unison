@@ -146,6 +146,7 @@ class LlmObserverConfig:
 
     enabled: bool = False
     runtime: str = ""
+    provider: str = ""
     model: str = ""
     allow_halt: bool = False
     allow_redirect: bool = False

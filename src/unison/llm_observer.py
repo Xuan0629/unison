@@ -160,6 +160,66 @@ def run_claude_observation(
     return ObservationResult("observed", summary)
 
 
+def run_hermes_observation(
+    world: World,
+    ctx: RunContext,
+    manifest_path: Path,
+    manifest_sha256: str,
+    model: str,
+    provider: str,
+    timeout: int,
+) -> ObservationResult:
+    """Run a report-only Hermes observation with an explicit zero-tool allowlist."""
+    if not provider.strip():
+        return ObservationResult("failed", "observer provider is required")
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+        if hashlib.sha256(manifest_bytes).hexdigest() != manifest_sha256:
+            return ObservationResult("failed", "manifest digest mismatch")
+        manifest = json.loads(manifest_bytes)
+    except (OSError, json.JSONDecodeError):
+        return ObservationResult("failed", "manifest unavailable")
+
+    prompt = (
+        "You are a read-only pipeline observer. Analyze only this allowlisted JSON "
+        "manifest. Return a concise factual status summary. Do not request tools, "
+        "actions, reruns, redirects, or a halt. Manifest: "
+        + json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    )
+    command = [
+        "hermes",
+        "-z",
+        prompt,
+        "--provider",
+        provider,
+        "--toolsets",
+        "none",
+        "--ignore-rules",
+        "-m",
+        model,
+    ]
+
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(manifest_path.parent),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ObservationResult("failed", "observer invocation failed")
+    summary = completed.stdout.strip()
+    if completed.returncode != 0 or not summary:
+        return ObservationResult("failed", "invalid observation output")
+    if len(summary) > 240:
+        summary = summary[:239].rstrip() + "…"
+
+    atomic_write_json(llm_observation_path(world, ctx), {"status": "observed", "summary": summary})
+    return ObservationResult("observed", summary)
+
+
 def append_audit(
     world: World,
     ctx: RunContext,

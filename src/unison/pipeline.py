@@ -459,15 +459,20 @@ class PipelineLoader:
         if not enabled:
             return LlmObserverConfig()
         runtime = raw.get("runtime")
-        if not isinstance(runtime, str) or not is_registered_runtime(runtime):
-            raise PipelineValidationError("llm_observer.runtime must be a registered runtime")
-        if runtime != "claude":
+        if not isinstance(runtime, str) or runtime not in {"hermes", "claude"}:
             raise PipelineValidationError(
-                "llm_observer.runtime must be claude until another read-only binding is verified"
+                "llm_observer.runtime must be hermes or claude with a verified read-only binding"
             )
+        provider = raw.get("provider", "")
+        if not isinstance(provider, str):
+            raise PipelineValidationError("llm_observer.provider must be a string")
+        if runtime == "hermes" and not provider.strip():
+            raise PipelineValidationError("llm_observer.provider is required for hermes")
         model = raw.get("model", "")
         if not isinstance(model, str):
             raise PipelineValidationError("llm_observer.model must be a string")
+        if runtime == "hermes" and not model.strip():
+            raise PipelineValidationError("llm_observer.model is required for hermes")
         allow_halt = raw.get("allow_halt", False)
         allow_redirect = raw.get("allow_redirect", False)
         if not isinstance(allow_halt, bool):
@@ -481,6 +486,7 @@ class PipelineLoader:
         return LlmObserverConfig(
             enabled=True,
             runtime=runtime,
+            provider=provider.strip(),
             model=model,
             allow_halt=allow_halt,
             allow_redirect=allow_redirect,

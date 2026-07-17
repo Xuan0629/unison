@@ -6,6 +6,7 @@ from unison.llm_observer import (
     append_audit,
     llm_observation_path,
     run_claude_observation,
+    run_hermes_observation,
     write_manifest,
 )
 from unison.state import State, Transition
@@ -112,6 +113,59 @@ llm_observer:
         "manifest_created", "observation_started", "observation_succeeded",
     ]
     assert records[-1]["detail"] == "review complete"
+
+
+def test_orchestrator_dispatches_hermes_observer_without_control(tmp_path, monkeypatch):
+    from unison.orchestrator import Orchestrator
+    from unison.pipeline import PipelineLoader
+
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "developer.md").write_text("developer", encoding="utf-8")
+    (prompts / "reviewer.md").write_text("reviewer", encoding="utf-8")
+    pipeline = tmp_path / "pipeline.yaml"
+    pipeline.write_text(
+        """version: "1.0"
+mode: code-dev
+project_root: .
+agents:
+  developer:
+    role: developer
+    runtime: codex
+    system_prompt_path: prompts/developer.md
+  reviewer:
+    role: reviewer
+    runtime: codex
+    system_prompt_path: prompts/reviewer.md
+llm_observer:
+  enabled: true
+  runtime: hermes
+  provider: custom:openai-987xyz
+  model: gpt-5.6-terra
+""",
+        encoding="utf-8",
+    )
+    orchestrator = Orchestrator(PipelineLoader().load(pipeline), dry_run=True)
+    captured = {}
+
+    def fake_hermes(*args):
+        captured["args"] = args
+        return SimpleNamespace(status="observed", summary="review complete")
+
+    monkeypatch.setattr("unison.orchestrator.run_hermes_observation", fake_hermes)
+    monkeypatch.setattr(
+        "unison.orchestrator.run_claude_observation",
+        lambda *args: (_ for _ in ()).throw(AssertionError("must not use Claude fallback")),
+    )
+
+    orchestrator._start_llm_observer_audit()
+
+    assert captured["args"][4:6] == ("gpt-5.6-terra", "custom:openai-987xyz")
+    audit_path = orchestrator.spec.world.unison_run_dir_for(orchestrator._run_ctx) / "llm-observer" / "audit.jsonl"
+    records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    assert records[1]["detail"] == "no-tool independent Hermes observation started"
+    assert records[-1]["event"] == "observation_succeeded"
+    assert orchestrator._state.halt_signal is False
 
 
 def test_claude_observer_uses_no_tools_and_persists_only_structured_result(tmp_path, monkeypatch):
@@ -254,6 +308,97 @@ llm_observer:
     assert records[-1]["event"] == "observation_failed"
     assert records[-1]["detail"] == "observer invocation failed"
     assert orchestrator._state.halt_signal is False
+
+
+def test_hermes_observer_uses_explicit_provider_and_no_tools(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    manifest_path, digest = write_manifest(world, ctx, State(phase="dev_review", iteration=2))
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(returncode=0, stdout="review complete\n", stderr="raw stderr must not persist")
+
+    monkeypatch.setattr("unison.llm_observer.subprocess.run", fake_run)
+
+    result = run_hermes_observation(
+        world, ctx, manifest_path, digest, "gpt-5.6-terra", "custom:openai-987xyz", 30,
+    )
+
+    assert result.status == "observed"
+    assert result.summary == "review complete"
+    assert captured["command"][:2] == ["hermes", "-z"]
+    assert "--provider" in captured["command"]
+    assert captured["command"][captured["command"].index("--provider") + 1] == "custom:openai-987xyz"
+    assert "--toolsets" in captured["command"]
+    assert captured["command"][captured["command"].index("--toolsets") + 1] == "none"
+    assert "-m" in captured["command"]
+    assert captured["command"][captured["command"].index("-m") + 1] == "gpt-5.6-terra"
+    assert "--yolo" not in captured["command"]
+    assert captured["kwargs"]["cwd"] == str(manifest_path.parent)
+    persisted = json.loads(llm_observation_path(world, ctx).read_text(encoding="utf-8"))
+    assert persisted == {"status": "observed", "summary": "review complete"}
+
+
+def test_hermes_observer_rejects_missing_provider(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    manifest_path, digest = write_manifest(world, ctx, State())
+    monkeypatch.setattr(
+        "unison.llm_observer.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not run without provider")),
+    )
+
+    result = run_hermes_observation(world, ctx, manifest_path, digest, "gpt-5.6-terra", "", 30)
+
+    assert result.status == "failed"
+    assert result.summary == "observer provider is required"
+    assert not llm_observation_path(world, ctx).exists()
+
+
+def test_hermes_observer_bounds_verbose_report_without_granting_control(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    manifest_path, digest = write_manifest(world, ctx, State())
+    verbose = "x" * 300
+    monkeypatch.setattr(
+        "unison.llm_observer.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=verbose, stderr=""),
+    )
+
+    result = run_hermes_observation(
+        world, ctx, manifest_path, digest, "gpt-5.6-terra", "custom:openai-987xyz", 30,
+    )
+
+    assert result.status == "observed"
+    assert result.summary == ("x" * 239) + "…"
+    persisted = json.loads(llm_observation_path(world, ctx).read_text(encoding="utf-8"))
+    assert persisted == {"status": "observed", "summary": result.summary}
+
+
+def test_hermes_observer_rejects_manifest_changed_after_audit(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    manifest_path, digest = write_manifest(world, ctx, State())
+    manifest_path.write_text('{"tampered":true}', encoding="utf-8")
+    called = False
+
+    def fake_run(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("observer must not run with a changed manifest")
+
+    monkeypatch.setattr("unison.llm_observer.subprocess.run", fake_run)
+
+    result = run_hermes_observation(
+        world, ctx, manifest_path, digest, "gpt-5.6-terra", "custom:openai-987xyz", 30,
+    )
+
+    assert result.status == "failed"
+    assert result.summary == "manifest digest mismatch"
+    assert called is False
 
 
 def test_claude_observer_fails_closed_for_invalid_output(tmp_path, monkeypatch):
