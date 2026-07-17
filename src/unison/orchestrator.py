@@ -814,7 +814,18 @@ class Orchestrator:
                 role="reviewer", iteration=1, next_phase="dev_review",
             )
             return
-        if self._state.halt_signal or self._foreground_invocation_pending():
+        if self._state.halt_signal:
+            return
+        if self._foreground_invocation_pending():
+            replacement_from = getattr(self, "_resume_replacement_from", None)
+            if (
+                replacement_from is not None
+                and pending is not None
+                and pending.invocation_id == replacement_from
+                and pending.phase == "dev_review"
+                and pending.role == "reviewer"
+            ):
+                self._invoke_agent_for_role("reviewer", 1, review_phase="dev_review")
             return
         self._state.transition("dev_review", "orchestrator",
                                iter_n=1, note="starting review-only")

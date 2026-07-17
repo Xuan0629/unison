@@ -866,6 +866,42 @@ class TestForegroundReconcile:
             for transition in resumed.state().history
         )
 
+    def test_inspect_only_resume_dispatches_one_replacement_after_verified_dead_interruption(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        orchestrator.spec = replace(orchestrator.spec, mode="inspect-only")
+        old = self._attach_invocation(orchestrator, tmp_path)
+        old.result_path.unlink()
+        old.child_path.write_text(
+            '{"schema_version": 1, "invocation_id": "reconcile-id", "child_pid": 123, "child_start_identity": "linux:456", "child_process_group_id": 123}',
+            encoding="utf-8",
+        )
+        pending = orchestrator._state.active_foreground_invocation
+        assert pending is not None
+        orchestrator._state.active_foreground_invocation = replace(
+            pending,
+            phase="dev_review",
+            role="reviewer",
+        )
+        orchestrator._state.transition("dev_review", "orchestrator", iter_n=1)
+        orchestrator._state.halt_signal = True
+        orchestrator._state.halt_reason = "foreground interrupted_unverified: heartbeat stale"
+        orchestrator._state.run_id = "resume-run"
+        orchestrator._state.pipeline_name = orchestrator.spec.pipeline_name
+        monkeypatch.setattr("unison.orchestrator.foreground_child_and_group_status", lambda _invocation: "dead")
+
+        resumed = Orchestrator(spec=orchestrator.spec)
+        resumed.load_resume_state(orchestrator.state())
+        dispatched = []
+        monkeypatch.setattr(
+            resumed,
+            "_invoke_agent_for_role",
+            lambda role, iteration, **kwargs: dispatched.append((role, iteration, kwargs)),
+        )
+
+        resumed.run()
+
+        assert dispatched == [("reviewer", 1, {"review_phase": "dev_review"})]
+
     def test_nonzero_foreground_result_halts_without_self_heal(self, tmp_path, monkeypatch):
         orchestrator = self._make_orchestrator(tmp_path)
         self._attach_invocation(orchestrator, tmp_path, exit_code=7)
