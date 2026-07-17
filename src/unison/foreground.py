@@ -7,11 +7,12 @@ produce and verify before treating foreground work as complete.
 
 from __future__ import annotations
 
+import argparse
+import fcntl
 import json
 import os
 import pty
 import select
-import argparse
 import signal
 import shutil
 import subprocess
@@ -368,6 +369,22 @@ def prepare_foreground_invocation(
     return invocation
 
 
+def _terminal_size(fd: int) -> bytes:
+    try:
+        return fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8)
+    except OSError as exc:
+        raise RuntimeError("foreground wrapper cannot read visible terminal size") from exc
+
+
+def _apply_terminal_size(fd: int, size: bytes) -> None:
+    if len(size) != 8:
+        raise RuntimeError("foreground wrapper received invalid terminal size")
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, size)
+    except OSError as exc:
+        raise RuntimeError("foreground wrapper cannot initialize child terminal size") from exc
+
+
 def _write_all(fd: int, data: bytes) -> None:
     while data:
         written = os.write(fd, data)
@@ -430,6 +447,7 @@ def run_foreground_wrapper(
 
         command, workdir, started_at = _wrapper_request(invocation)
         original_terminal = termios.tcgetattr(stdin_fd)
+        terminal_size = _terminal_size(stdin_fd)
         raw_output = invocation.directory / ".output.raw"
         input_open = True
         next_heartbeat = time.monotonic() + heartbeat_interval
@@ -438,6 +456,7 @@ def run_foreground_wrapper(
         child_pid, master_fd = pty.fork()
         if child_pid == 0:
             try:
+                _apply_terminal_size(0, terminal_size)
                 os.chdir(workdir)
                 os.execvpe(command[0], command, os.environ.copy())
             except BaseException:

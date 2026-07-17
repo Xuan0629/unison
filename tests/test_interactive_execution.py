@@ -1,8 +1,11 @@
 """Phase A tests for the opt-in interactive execution contract."""
+import fcntl
 import json
 import os
 import pty
+import struct
 import sys
+import termios
 
 from dataclasses import replace
 from pathlib import Path
@@ -587,6 +590,47 @@ class TestForegroundWrapper:
         assert invocation.read_verified_result()["exit_code"] == 0
         assert invocation.output_path.read_text(encoding="utf-8").replace("\r\n", "\n") == "foreground output\n"
         assert invocation.heartbeat_path.exists()
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux process identity is required")
+    def test_wrapper_copies_visible_terminal_size_to_pty_child(self, tmp_path):
+        invocation = ForegroundInvocation.create(
+            run_dir=tmp_path / "run",
+            phase="dev_active",
+            role="developer",
+            runtime="codex",
+            workdir=tmp_path,
+            command=[
+                sys.executable,
+                "-c",
+                "import fcntl, struct, sys, termios; "
+                "print(*struct.unpack('HHHH', fcntl.ioctl(sys.stdin.fileno(), termios.TIOCGWINSZ, b'\\0' * 8))[:2])",
+            ],
+            prompt_path=tmp_path / "prompt.txt",
+            baseline_commit=None,
+        )
+        prompt_path = invocation.directory / "prompt.txt"
+        prompt_path.write_text("first task", encoding="utf-8")
+        request = invocation.read_request()
+        request["prompt_path"] = str(prompt_path)
+        atomic_write_json(invocation.request_path, request)
+
+        stdin_master, stdin_slave = pty.openpty()
+        stdout_master, stdout_slave = pty.openpty()
+        fcntl.ioctl(stdin_slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+        try:
+            assert run_foreground_wrapper(
+                invocation,
+                stdin_fd=stdin_slave,
+                stdout_fd=stdout_slave,
+                heartbeat_interval=0.01,
+            ) == 0
+        finally:
+            os.close(stdin_master)
+            os.close(stdin_slave)
+            os.close(stdout_master)
+            os.close(stdout_slave)
+
+        assert invocation.output_path.read_text(encoding="utf-8").replace("\r\n", "\n") == "40 120\n"
 
     @pytest.mark.skipif(sys.platform != "linux", reason="Linux process identity is required")
     def test_wrapper_records_exact_nonzero_child_exit(self, tmp_path):
