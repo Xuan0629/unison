@@ -272,7 +272,7 @@ Unison 1.0 composes bounded roles, models, phases, artifacts, and review loops a
 1. bounded custom-role behavior, while exact per-step agent-key binding remains deferred pending durable cursor/artifact handoff;
 2. implemented Runner capability metadata;
 3. implemented per-Agent execution profiles for isolated prompts, models, and Hermes-supported skills/tools;
-4. a constrained Runtime adapter framework, with Crush intentionally deferred until its executable, provider, cancellation, and truthful-usage contracts are proven;
+4. a constrained Runtime adapter framework, with the verified Crush adapter limited to serial `headless_bypass` dispatch, isolated per-invocation state, no session reuse, signal-based cancellation, and `unavailable` token/cost provenance when the upstream session lacks a complete provider breakdown;
 5. implemented truthful usage reporting (`actual`, `estimated`, or `unavailable`);
 6. implemented foreground heartbeat/reconcile/dead-only `resume` recovery with real Linux native-approval evidence; macOS Terminal.app validation remains a release blocker; and
 7. implemented mode-specific LLM Observer reporting plus Claude-only typed control for serial automated dispatch. Interactive foreground, MoA, chain, DAG, and parallel development reject typed control; rerun/replacement always requires user confirmation.

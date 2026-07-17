@@ -272,7 +272,7 @@ Unison 1.0 已能把有限的角色、模型、阶段、产物和审查循环围
 1. 有界的 Custom Role 行为；精确到每步 agent key 的绑定仍待 durable cursor/artifact handoff 后再实现；
 2. 已实现的 Runner Capability Metadata；
 3. 已实现的 Per-Agent Execution Profile，用于隔离 prompt、model 与 Hermes 实际支持的 skills/tools；
-4. 受约束的 Runtime Adapter Framework；Crush 在可执行文件、provider、取消和真实 usage 合同得到证明前明确搁置；
+4. 受约束的 Runtime Adapter Framework；已验证的 Crush adapter 严格限于串行 `headless_bypass` dispatch、每次调用独立状态、禁止 session reuse、基于信号的取消；当上游 session 缺少完整 provider 用量明细时，token/cost provenance 标记为 `unavailable`；
 5. 已实现、诚实标注为 `actual`、`estimated` 或 `unavailable` 的 Usage Reporting；
 6. 已实现 Foreground heartbeat/reconcile/dead-only `resume` recovery，并已有真实 Linux native-approval 证据；macOS Terminal.app validation 仍是 release blocker；以及
 7. 已实现分模式 LLM Observer 汇报与仅 Claude 可用的 typed control，范围限于串行自动化 dispatch。Interactive foreground、MoA、chain、DAG 与 parallel development 均拒绝 typed control；任何 rerun/replacement 仍须用户确认。
