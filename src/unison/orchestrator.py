@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import logging
 import os
 import shlex
 import shutil
@@ -66,6 +67,9 @@ from unison.run_history import RunHistoryStore
 from unison.risk_engine import RuleEngineRiskEvaluator
 from unison.snapshot import FileSnapshotManager, SnapshotBoundaryError
 from unison.world import RunContext
+
+
+_log = logging.getLogger(__name__)
 
 
 # ============================================================================

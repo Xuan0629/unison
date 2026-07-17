@@ -608,6 +608,26 @@ class TestForegroundReconcile:
             "reconciled", "dev_review", "reviewer",
         )
 
+    def test_consume_reconciled_result_allows_missing_completion_detection(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        self._attach_invocation(orchestrator, tmp_path)
+        assert orchestrator.reconcile_foreground() is True
+        monkeypatch.setattr(
+            orchestrator._detector,
+            "detect",
+            lambda **_kwargs: type("Detection", (), {"success": False, "commit": None})(),
+        )
+        monkeypatch.setattr(orchestrator, "_evaluate_post_invoke_risk", lambda *_args: False)
+        monkeypatch.setattr(orchestrator, "_save_checkpoint", lambda *args, **kwargs: None)
+
+        assert orchestrator._consume_reconciled_foreground(
+            role="developer", iteration=1, next_phase="dev_review",
+        ) is True
+        assert orchestrator.state().active_foreground_invocation is None
+        marker = orchestrator.state().foreground_reconcile
+        assert marker is not None
+        assert marker.status == "reconciled"
+
     def test_reconcile_completed_inspect_only_run_is_noop(self, tmp_path, monkeypatch):
         orchestrator = self._make_orchestrator(tmp_path)
         orchestrator.spec = replace(orchestrator.spec, mode="inspect-only")
