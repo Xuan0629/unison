@@ -608,6 +608,22 @@ class TestForegroundReconcile:
             "reconciled", "dev_review", "reviewer",
         )
 
+    def test_reconcile_completed_inspect_only_run_is_noop(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        orchestrator.spec = replace(orchestrator.spec, mode="inspect-only")
+        orchestrator._state.transition("done", "orchestrator", note="pipeline complete")
+        history_len = len(orchestrator.state().history)
+        monkeypatch.setattr(
+            orchestrator,
+            "_resolve_agents",
+            lambda _role: pytest.fail("completed run must not resolve an agent"),
+        )
+
+        state = orchestrator.run()
+
+        assert state.phase == "done"
+        assert len(state.history) == history_len
+
 
     def test_reconcile_refuses_policy_changed_to_headless(self, tmp_path):
         orchestrator = self._make_orchestrator(tmp_path)

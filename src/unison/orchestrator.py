@@ -531,6 +531,9 @@ class Orchestrator:
         if self._state.halt_signal:
             return self._state
 
+        if self._state.phase == "done":
+            return self._state
+
         # Ensure workspace root exists
         self.spec.world.root.mkdir(parents=True, exist_ok=True)
 
