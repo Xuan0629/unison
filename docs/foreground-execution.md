@@ -126,7 +126,7 @@ Foreground failures must not enter existing automatic self-heal/retry behavior. 
 A launcher receives a trusted wrapper argv, working directory, title, and environment whitelist.
 
 - Linux: GNOME Terminal adapter. It launches the wrapper as argv in a visible terminal, preserves working directory, and reports only launcher handoff state.
-- macOS: Terminal.app adapter through a fixed generated script file and `open`/`osascript` invocation. It must not interpolate prompt or agent command text into AppleScript source; it invokes the wrapper script with fixed positional arguments.
+- macOS: Terminal.app adapter through `osascript`. It passes one shell-quoted wrapper command to Terminal.app's `do script`, encoded as an AppleScript string; it must not interpolate the prompt or agent command text into AppleScript source, send terminal input, or automate approval.
 - No supported graphical session or missing adapter produces a clear foreground execution error. It does not run an invisible terminal or fall back to headless.
 
 ## Durable session backend decision
