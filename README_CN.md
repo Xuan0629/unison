@@ -211,7 +211,7 @@ unison webui --project /path/to/project --port 9099
 
 一个 WebUI 进程可以服务多个项目。同一端口已经启动时，新 pipeline 会把自己的项目注册到现有 server。项目切换会同时限定 state、config、agents、预算显示、controls 和 run history。History 来自每个项目 `.unison/runs/` 下的持久运行记录，不是当前 transition 列表。
 
-Control endpoint 使用生成的 session token，token 文件只允许 owner 读写。Server 默认只绑定 `127.0.0.1`；除非另加经过设计的认证 reverse proxy 并完成 threat review，不要公开暴露。
+Control endpoint 使用生成的 session token，token 文件只允许 owner 读写。多项目 server 将 `~/.unison/webui-token` 作为 canonical token；项目本地 `.unison/webui-token` 仅保留为单项目兼容时的 fallback。Server 默认只绑定 `127.0.0.1`；除非另加经过设计的认证 reverse proxy 并完成 threat review，不要公开暴露。
 
 ## 安全与可靠性模型
 

@@ -209,7 +209,7 @@ Use all of the following:
 | Risk matrix | `sudo` and configured critical paths are L3 and halt. Other operations are classified by workspace/external scope. |
 | Snapshots | Enabled by default for configured external paths; restore is bounded by project identity and allowed roots. |
 | Budget | Authoritative process-locked ledger; malformed or unwritable state closes the tracker. |
-| WebUI | Binds to `127.0.0.1`; control endpoints require a session token and active run ID. |
+| WebUI | Binds to `127.0.0.1`; control endpoints require a session token and active run ID. A multi-project server uses the owner-only shared `~/.unison/webui-token` as canonical; project-local `.unison/webui-token` is fallback-only for standalone compatibility. |
 | Self-heal | Disabled by default for both Unison and consumer-project fixes. |
 | Notifications | Lifecycle events are appended to JSONL. Built-in Discord webhook delivery is disabled. |
 

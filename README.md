@@ -211,7 +211,7 @@ Open `http://127.0.0.1:9099`.
 
 One WebUI process can serve multiple projects. Starting another pipeline on the same port registers that project with the existing server. Project selection scopes state, configuration, agents, budget display, controls, and run history. History is backed by persistent run records under each project’s `.unison/runs/`, not by the current transition list.
 
-Control endpoints use a generated session token stored with owner-only permissions. The server binds to `127.0.0.1` by default; do not expose it publicly without a separate authenticated reverse proxy and a deliberate threat review.
+Control endpoints use a generated session token stored with owner-only permissions. A multi-project server treats `~/.unison/webui-token` as the canonical token; a project-local `.unison/webui-token` is retained only as a fallback for standalone compatibility. The server binds to `127.0.0.1` by default; do not expose it publicly without a separate authenticated reverse proxy and a deliberate threat review.
 
 ## Safety and reliability model
 

@@ -3909,17 +3909,61 @@ agents:
 
         import socket
         monkeypatch.setattr(socket, "socket", RefusedSocket)
-        token = "visible-in-process-list"
+        project_token = "project-token"
         token_file = tmp_path / ".unison" / "webui-token"
         token_file.parent.mkdir(parents=True, exist_ok=True)
-        token_file.write_text(token)
+        token_file.write_text(project_token)
+        shared_token = "shared-token"
+        shared_token_file = tmp_path / ".unison-home" / ".unison" / "webui-token"
+        shared_token_file.parent.mkdir(parents=True, exist_ok=True)
+        shared_token_file.write_text(shared_token)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / ".unison-home")
 
         orch._auto_start_webui()
 
         argv = popen.call_args.args[0]
-        assert token not in argv
+        assert shared_token not in argv
+        assert project_token not in argv
         assert "--token" not in argv
-        assert popen.call_args.kwargs["env"]["UNISON_WEBUI_TOKEN"] == token
+        assert popen.call_args.kwargs["env"]["UNISON_WEBUI_TOKEN"] == shared_token
+
+    def test_auto_start_webui_falls_back_to_project_token(
+        self, tmp_path, monkeypatch
+    ):
+        """A standalone project uses its local token when no shared UI exists."""
+        from dataclasses import replace
+        from unittest.mock import MagicMock
+
+        spec = self._make_spec(tmp_path)
+        spec = replace(spec, webui=replace(spec.webui, auto_start=True, port=19099))
+        orch = Orchestrator(spec=spec)
+        popen = MagicMock()
+        monkeypatch.setattr("unison.orchestrator.subprocess.Popen", popen)
+
+        class RefusedSocket:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def settimeout(self, timeout):
+                pass
+
+            def connect(self, address):
+                raise ConnectionRefusedError
+
+            def close(self):
+                pass
+
+        import socket
+        monkeypatch.setattr(socket, "socket", RefusedSocket)
+        project_token = "project-token"
+        token_file = tmp_path / ".unison" / "webui-token"
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(project_token)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / ".unison-home")
+
+        orch._auto_start_webui()
+
+        assert popen.call_args.kwargs["env"]["UNISON_WEBUI_TOKEN"] == project_token
 
     def test_snapshot_mgr_none_when_disabled(self, tmp_path):
         """snapshots.enabled=False → _snapshot_mgr is None."""
