@@ -269,13 +269,13 @@ unison run --pipeline pipeline.yaml --switch reviewer:claude --save-pref
 
 Unison 1.0 已能把有限的角色、模型、阶段、产物和审查循环围绕一个目标重新组合。v1.1 将按以下顺序扩展“万物”一侧：
 
-1. 声明式工作流与更完整的 Custom Role 行为；
-2. 显式 Runner Capability Metadata；
-3. Per-Agent Execution Profile，让每个逻辑 Agent 隔离 prompt、model，以及 Runtime 实际支持的 skills/tools/memory scope；
-4. 受约束的 Runtime Adapter Framework，并首先用 Crush 做真实验证；
-5. 诚实标注为 `actual`、`estimated` 或 `unavailable` 的 Usage Reporting；若 Runtime 无法提供可靠的单次调用用量，则搁置该项；
-6. 计划完成 Foreground recovery：heartbeat interruption 检测、新增显式 replacement `resume` 命令、真实 Linux native-approval E2E 与 macOS validation，同时保持无自动 approval/retry/headless fallback；
-7. 计划实现分模式 LLM Observer：全自动/部分自动运行将可显式启用独立、可审计的 Observer invocation；用户交互 foreground 将默认不启用 LLM Observer。启用后，它将自动观察、汇报，并仅被允许对明确目标偏离或安全证据 halt、写入受限 redirect；任何 rerun/replacement 均须用户确认。
+1. 有界的 Custom Role 行为；精确到每步 agent key 的绑定仍待 durable cursor/artifact handoff 后再实现；
+2. 已实现的 Runner Capability Metadata；
+3. 已实现的 Per-Agent Execution Profile，用于隔离 prompt、model 与 Hermes 实际支持的 skills/tools；
+4. 受约束的 Runtime Adapter Framework；Crush 在可执行文件、provider、取消和真实 usage 合同得到证明前明确搁置；
+5. 已实现、诚实标注为 `actual`、`estimated` 或 `unavailable` 的 Usage Reporting；
+6. 已实现 Foreground heartbeat/reconcile/dead-only `resume` recovery，并已有真实 Linux native-approval 证据；macOS Terminal.app validation 仍是 release blocker；以及
+7. 已实现分模式 LLM Observer 汇报与仅 Claude 可用的 typed control，范围限于串行自动化 dispatch。Interactive foreground、MoA、chain、DAG 与 parallel development 均拒绝 typed control；任何 rerun/replacement 仍须用户确认。
 
 在这些合同真正实现并经过测试前，v1.0 会明确拒绝任意 Runtime key，而不是假装只写 YAML 就完成了集成。SQLiteChannel 只保留为证据触发型候选项：必须先有可复现的 FileChannel 局限，并在设计或实施前获得维护者的单独批准。Unison 坚持本地优先、单操作者定位；不规划 SaaS/多用户 WebUI、identity federation 或独立的 Unison plugin ecosystem。
 

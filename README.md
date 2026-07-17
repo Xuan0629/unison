@@ -269,13 +269,13 @@ unison run --pipeline pipeline.yaml --switch reviewer:claude --save-pref
 
 Unison 1.0 composes bounded roles, models, phases, artifacts, and review loops around one goal. v1.1 will extend the “all things / 万物” side in this order:
 
-1. declarative workflows and richer custom-role behavior;
-2. explicit Runner capability metadata;
-3. per-Agent execution profiles for isolated prompts, models, and supported skills/tools/memory scopes;
-4. a constrained Runtime adapter framework, validated first with Crush;
-5. truthful usage reporting (`actual`, `estimated`, or `unavailable`), deferred if a Runtime cannot expose reliable per-call usage;
-6. planned foreground-recovery completion: heartbeat-interruption detection, a new explicit replacement `resume` command, real Linux native-approval E2E, and macOS validation, while retaining no automatic approval/retry/headless fallback;
-7. planned mode-specific LLM Observer: fully/partially automated runs will be able to explicitly enable an isolated, auditable Observer invocation; user-interactive foreground will default to no LLM Observer. When enabled, it will observe/report and will only be permitted to halt or write bounded redirect controls for explicit goal deviation or safety evidence; any rerun/replacement will require user confirmation.
+1. bounded custom-role behavior, while exact per-step agent-key binding remains deferred pending durable cursor/artifact handoff;
+2. implemented Runner capability metadata;
+3. implemented per-Agent execution profiles for isolated prompts, models, and Hermes-supported skills/tools;
+4. a constrained Runtime adapter framework, with Crush intentionally deferred until its executable, provider, cancellation, and truthful-usage contracts are proven;
+5. implemented truthful usage reporting (`actual`, `estimated`, or `unavailable`);
+6. implemented foreground heartbeat/reconcile/dead-only `resume` recovery with real Linux native-approval evidence; macOS Terminal.app validation remains a release blocker; and
+7. implemented mode-specific LLM Observer reporting plus Claude-only typed control for serial automated dispatch. Interactive foreground, MoA, chain, DAG, and parallel development reject typed control; rerun/replacement always requires user confirmation.
 
 Until these contracts are implemented and tested, v1.0 intentionally rejects arbitrary Runtime keys rather than pretending that YAML alone creates a working integration. SQLiteChannel remains an evidence-gated possibility: it may be proposed only after reproducible FileChannel limitations and requires separate maintainer approval before design or implementation. Unison remains local-first and single-operator; SaaS/multi-user WebUI, identity federation, and a separate Unison plugin ecosystem are not planned.
 
