@@ -188,9 +188,7 @@ class SnapshotConfig:
     retention_hours: int = 168    # 7d
     max_slots: int = 100
     max_pre_snapshot_size_mb: int = 50
-    external_paths: list[str] = field(default_factory=lambda: [
-        "~/.hermes/skills/",
-    ])
+    external_paths: list[str] = field(default_factory=list)
     exclude_patterns: list[str] = field(default_factory=lambda: [
         "~/.hermes/.env",
         "~/.openclaw/**/auth-profiles.json",

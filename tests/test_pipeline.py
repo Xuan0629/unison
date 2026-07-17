@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from unison.interfaces import AgentSpec, Stage
+from unison.interfaces import AgentSpec, SnapshotConfig, Stage
 from unison.pipeline import DAGScheduler, PipelineLoader, PipelineValidationError
 from unison.world import World
 
@@ -202,6 +202,33 @@ snapshots:
         assert spec.snapshots.retention_hours == 72
         assert spec.snapshots.max_slots == 50
         assert "~/.hermes/skills/" in spec.snapshots.external_paths
+
+    def test_default_snapshot_external_paths_require_explicit_opt_in(self):
+        """Shared external directories are not snapshotted without YAML opt-in."""
+        assert SnapshotConfig().external_paths == []
+
+    def test_load_pipeline_without_external_paths_uses_no_external_snapshot(self, tmp_path):
+        """Omitting external_paths must not capture shared Hermes state."""
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: prompts/developer.md
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: test
+    system_prompt_path: prompts/reviewer.md
+""")
+
+        spec = PipelineLoader().load(pipeline_file)
+
+        assert spec.snapshots.external_paths == []
 
     def test_load_pipeline_nonexistent_file(self, tmp_path):
         """Load non-existent pipeline file raises error."""

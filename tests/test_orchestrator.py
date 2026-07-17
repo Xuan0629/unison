@@ -575,6 +575,40 @@ class TestForegroundReconcile:
             "reconciled", "dev_active", "developer",
         )
 
+    def test_inspect_only_reconcile_consumes_result_without_redispatch(self, tmp_path, monkeypatch):
+        orchestrator = self._make_orchestrator(tmp_path)
+        orchestrator.spec = replace(orchestrator.spec, mode="inspect-only")
+        self._attach_invocation(orchestrator, tmp_path)
+        pending = orchestrator._state.active_foreground_invocation
+        assert pending is not None
+        orchestrator._state.active_foreground_invocation = replace(
+            pending, phase="dev_review", role="reviewer", runtime="claude",
+        )
+        orchestrator._state.transition("dev_review", "orchestrator", iter_n=1)
+        assert orchestrator.reconcile_foreground() is True
+        monkeypatch.setattr(
+            orchestrator._detector,
+            "detect",
+            lambda **_kwargs: type("Detection", (), {"success": True, "commit": None})(),
+        )
+        monkeypatch.setattr(orchestrator, "_evaluate_post_invoke_risk", lambda *_args: False)
+        monkeypatch.setattr(orchestrator, "_save_checkpoint", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            orchestrator,
+            "_resolve_agents",
+            lambda _role: pytest.fail("completed foreground reviewer must not be resolved"),
+        )
+
+        orchestrator._run_review_only()
+
+        assert orchestrator.state().active_foreground_invocation is None
+        marker = orchestrator.state().foreground_reconcile
+        assert marker is not None
+        assert (marker.status, marker.phase, marker.role) == (
+            "reconciled", "dev_review", "reviewer",
+        )
+
+
     def test_reconcile_refuses_policy_changed_to_headless(self, tmp_path):
         orchestrator = self._make_orchestrator(tmp_path)
         orchestrator._state.run_id = "resume-run"

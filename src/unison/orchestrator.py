@@ -798,6 +798,19 @@ class Orchestrator:
 
     def _run_review_only(self) -> None:
         """inspect-only mode: Reviewer(s) → report (no planner, no dev)."""
+        marker = self._state.foreground_reconcile
+        pending = self._state.active_foreground_invocation
+        if (
+            marker is not None
+            and marker.status == "reconcile_started"
+            and pending is not None
+            and pending.phase == "dev_review"
+            and pending.role == "reviewer"
+        ):
+            self._consume_reconciled_foreground(
+                role="reviewer", iteration=1, next_phase="dev_review",
+            )
+            return
         if self._state.halt_signal or self._foreground_invocation_pending():
             return
         self._state.transition("dev_review", "orchestrator",
