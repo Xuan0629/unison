@@ -48,13 +48,15 @@ from unison.checklist import ChecklistItem, ChecklistStatus
 from unison.io import atomic_read_json, atomic_write_json
 from unison.llm_observer import (
     append_audit,
+    llm_control_receipt_path,
+    run_claude_control_observation,
     run_claude_observation,
     run_hermes_observation,
     write_manifest,
 )
 import yaml
 from unison.verdict import YamlFrontmatterParser
-from unison.context_deflate import assemble_context, extract_top_findings
+from unison.context_deflate import assemble_context, extract_top_findings, parse_findings
 from unison.budget import BudgetTracker, estimate_tokens
 from unison.usage import UsageRecord
 from unison.event_bus import get_event_bus
@@ -129,6 +131,7 @@ class Orchestrator:
         self._test_result_cache: dict = {}  # {timestamp, exit_code} for skip quality gate
         # P10: REDIRECT control — Observer writes redirect.json; orchestrator reads + logs
         self._pending_redirect: RedirectControl | None = None
+        self._llm_redirect_directive: str = ""
 
         # -- cooperative cancellation (DAG mode only) ---------------------------
         self._dag_cancel_event: threading.Event | None = None
@@ -604,6 +607,114 @@ class Orchestrator:
             self._lock_mgr.release(project_name)
 
         return self._state
+
+    def _llm_control_evidence(self) -> dict:
+        raw_checklist = atomic_read_json(self.spec.world.run_checklist_file(self._run_ctx))
+        try:
+            checklist = ChecklistStatus.from_dict(raw_checklist) if raw_checklist is not None else ChecklistStatus()
+        except Exception:
+            checklist = ChecklistStatus()
+        findings = []
+        review_path = self._state.last_review_path
+        reviews_dir = self.spec.world.reviews_dir_for(self._run_ctx).resolve()
+        if review_path is not None:
+            try:
+                review_path.resolve().relative_to(reviews_dir)
+            except (OSError, ValueError):
+                review_path = None
+        if review_path is not None and review_path.exists():
+            try:
+                findings = [
+                    {"id": f"review.finding.{index}", "text": finding.text}
+                    for index, finding in enumerate(
+                        parse_findings(review_path.read_text(encoding="utf-8")), start=1,
+                    )
+                ]
+            except Exception:
+                findings = []
+        return {
+            "reviewer_findings": findings,
+            "open_checklist": [
+                {"id": item.id, "severity": item.severity, "title": item.title}
+                for item in checklist.pending_items
+            ],
+            "verification": {"id": "verification.declared", "status": "unavailable"},
+            "risk": {"id": "risk.post_invoke", "status": "unavailable"},
+            "budget": {"id": "budget.current", "status": "unavailable"},
+        }
+
+    def _compile_llm_redirect(self, directive_code: str, evidence_ids: tuple[str, ...]) -> str:
+        labels = {
+            "address_open_checklist": "Address the listed unresolved checklist items before the next review.",
+            "address_reviewer_findings": "Address the listed reviewer findings before the next review.",
+            "run_declared_verification": "Run the declared verification and record its result before the next review.",
+        }
+        return labels[directive_code] + " Evidence IDs: " + ", ".join(evidence_ids)
+
+    def _run_llm_control_boundary(self, *, role: str, iteration: int) -> bool:
+        """Consume one Claude-only typed proposal before a non-foreground agent starts."""
+        config = self.spec.llm_observer
+        if (
+            not config.enabled
+            or config.runtime != "claude"
+            or not (config.allow_halt or config.allow_redirect)
+            or self._state.active_foreground_invocation is not None
+        ):
+            return True
+        manifest_path, digest = write_manifest(
+            self.spec.world, self._run_ctx, self._state, evidence=self._llm_control_evidence(),
+        )
+        receipt_path = llm_control_receipt_path(self.spec.world, self._run_ctx, digest)
+        if receipt_path.exists():
+            self.halt("LLM control receipt already exists for this boundary", category="external")
+            return False
+        append_audit(
+            self.spec.world, self._run_ctx, event="manifest_created", manifest_sha256=digest,
+            runtime=config.runtime, model=config.model, detail="phase-boundary control manifest created",
+        )
+        append_audit(
+            self.spec.world, self._run_ctx, event="control_started", manifest_sha256=digest,
+            runtime=config.runtime, model=config.model, detail="typed Claude control proposal started",
+        )
+        result = run_claude_control_observation(
+            self.spec.world, self._run_ctx, manifest_path, digest, config.model,
+            min(self.spec.per_agent_timeout, 120), allow_halt=config.allow_halt,
+            allow_redirect=config.allow_redirect, redirect_roles=config.redirect_roles,
+            redirect_directives=config.redirect_directives,
+        )
+        if result.status != "proposed" or result.proposal is None or (
+            result.proposal.action == "redirect" and result.proposal.target_role != role
+        ):
+            detail = result.summary if result.proposal is None else "redirect target does not match boundary role"
+            append_audit(
+                self.spec.world, self._run_ctx, event="action_rejected", manifest_sha256=digest,
+                runtime=config.runtime, model=config.model, detail=detail,
+            )
+            return True
+        append_audit(
+            self.spec.world, self._run_ctx, event="control_proposed", manifest_sha256=digest,
+            runtime=config.runtime, model=config.model, detail=result.proposal.action,
+        )
+        atomic_write_json(receipt_path, {
+            "manifest_sha256": digest,
+            "action": result.proposal.action,
+            "reason_code": result.proposal.reason_code,
+            "evidence_ids": list(result.proposal.evidence_ids),
+            "target_role": result.proposal.target_role,
+            "directive_code": result.proposal.directive_code,
+        })
+        if result.proposal.action == "halt":
+            self.halt("LLM control: " + result.proposal.reason_code, category="external")
+        else:
+            self._llm_redirect_directive = self._compile_llm_redirect(
+                result.proposal.directive_code or "", result.proposal.evidence_ids,
+            )
+        self._save_checkpoint(iteration)
+        append_audit(
+            self.spec.world, self._run_ctx, event="control_consumed", manifest_sha256=digest,
+            runtime=config.runtime, model=config.model, detail=result.proposal.action,
+        )
+        return not self._state.halt_signal
 
     def _start_llm_observer_audit(self) -> None:
         """Run the selected bounded observer for an explicit automated opt-in."""
@@ -2342,6 +2453,10 @@ class Orchestrator:
             iteration: Current iteration number.
             review_phase: "planning_review" or "dev_review" (for correct review file path).
         """
+        if self._state.halt_signal:
+            return
+        if not self._run_llm_control_boundary(role=role, iteration=iteration):
+            return
         foreground_marker = self._state.foreground_reconcile
         if (
             foreground_marker is not None
@@ -2388,6 +2503,8 @@ class Orchestrator:
         # 1. Select runner with budget-aware downgrade
         runner, effective_spec = self._select_runner(role)
         if runner is None or effective_spec is None:
+            if role == "developer":
+                self._llm_redirect_directive = ""
             return
 
         # 2. Check budget overflow BEFORE invoking agent
@@ -2423,6 +2540,9 @@ class Orchestrator:
 
         # 4. Build prompt (uses BudgetTracker for token budget)
         prompt = self._build_prompt(role, iteration, review_phase=review_phase)
+        if self._llm_redirect_directive:
+            prompt += "\n\n## Unison Control Directive\n" + self._llm_redirect_directive
+            self._llm_redirect_directive = ""
 
         # 5. Build log path
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -3175,6 +3295,8 @@ class Orchestrator:
         review_phase: str = "dev_review",
     ) -> None:
         """Invoke a multi-agent group with external-path protection."""
+        if not self._run_llm_control_boundary(role=pipeline_role, iteration=iteration):
+            return
         snapshot_ids: list[str] = []
         if self._snapshot_mgr is not None:
             snapshot_ids = self._snapshot_external_paths(pipeline_role, iteration)
@@ -5616,14 +5738,8 @@ class Orchestrator:
     # ==================================================================
 
     def _load_checklist(self) -> ChecklistStatus:
-        """Load the pipeline-scoped checklist (``.unison/checklist-{name}.json``).
-
-        Returns an empty ``ChecklistStatus`` when the file does not exist
-        or is unreadable.
-        """
-        raw = atomic_read_json(
-            self.spec.world.checklist_file_for(self.spec.pipeline_name)
-        )
+        """Load the current run's checklist without cross-run fallback."""
+        raw = atomic_read_json(self.spec.world.run_checklist_file(self._run_ctx))
         if raw is None:
             return ChecklistStatus()
         try:
@@ -5632,9 +5748,9 @@ class Orchestrator:
             return ChecklistStatus()
 
     def _save_checklist(self, status: ChecklistStatus) -> None:
-        """Persist *status* to the pipeline-scoped checklist file atomically."""
+        """Persist *status* to the current run's checklist atomically."""
         atomic_write_json(
-            self.spec.world.checklist_file_for(self.spec.pipeline_name),
+            self.spec.world.run_checklist_file(self._run_ctx),
             status.to_dict(),
         )
 

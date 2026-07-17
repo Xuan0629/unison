@@ -21,6 +21,9 @@ AuditEvent = Literal[
     "observation_started",
     "observation_succeeded",
     "observation_failed",
+    "control_started",
+    "control_proposed",
+    "control_consumed",
     "action_rejected",
 ]
 
@@ -108,6 +111,10 @@ def llm_observation_path(world: World, ctx: RunContext) -> Path:
 
 def llm_control_proposal_path(world: World, ctx: RunContext) -> Path:
     return llm_observer_dir(world, ctx) / "control-proposal.json"
+
+
+def llm_control_receipt_path(world: World, ctx: RunContext, manifest_sha256: str) -> Path:
+    return llm_observer_dir(world, ctx) / "receipts" / f"{manifest_sha256}.json"
 
 
 def _bounded_text(value: str, limit: int) -> str:

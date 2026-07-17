@@ -547,6 +547,23 @@ class PipelineLoader:
             raise PipelineValidationError(
                 "llm_observer cannot run with foreground_manual execution"
             )
+        if spec.llm_observer.enabled and (spec.llm_observer.allow_halt or spec.llm_observer.allow_redirect):
+            if (
+                spec.mode in MOA_MODES
+                or spec.mode == "chain"
+                or spec.chain.stages
+                or spec.dag is not None
+                or (spec.parallel_dev is not None and spec.parallel_dev.enabled)
+            ):
+                raise PipelineValidationError(
+                    "llm_observer control authority supports only serial non-MoA, non-chain, non-DAG dispatch"
+                )
+            if spec.llm_observer.allow_redirect and sum(
+                agent.effective_role == "developer" for agent in spec.agents.values()
+            ) != 1:
+                raise PipelineValidationError(
+                    "llm_observer redirect authority requires exactly one developer agent"
+                )
         if not foreground:
             return
         if spec.mode in MOA_MODES:

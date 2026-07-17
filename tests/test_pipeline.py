@@ -2065,6 +2065,27 @@ execution:
         with pytest.raises(PipelineValidationError, match="directive"):
             PipelineLoader().load(path)
 
+    def test_control_authority_rejects_uncovered_dispatch_modes(self, tmp_path):
+        authority = """llm_observer:
+  enabled: true
+  runtime: claude
+  allow_halt: true
+"""
+        for mode in ("moa:analyze", "chain"):
+            mode_dir = tmp_path / mode.replace(":", "-")
+            mode_dir.mkdir()
+            path = self._write_pipeline(mode_dir, authority)
+            text = path.read_text(encoding="utf-8").replace("mode: code-dev", f"mode: {mode}")
+            if mode == "chain":
+                text += """chain:
+  stages:
+    - mode: dev:quick
+"""
+            path.write_text(text, encoding="utf-8")
+
+            with pytest.raises(PipelineValidationError, match="serial non-MoA"):
+                PipelineLoader().load(path)
+
     def test_pipeline_name_from_project(self, tmp_path):
         """pipeline_name is read from project.name in YAML."""
         import yaml
