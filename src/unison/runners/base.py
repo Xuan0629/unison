@@ -209,6 +209,17 @@ class BaseRunner:
     ) -> AgentResult:
         """Execute the agent via subprocess, streaming output to log_path."""
         cmd = self._build_command(spec, prompt)
+        return self._run_command(cmd, prompt, workdir, timeout, log_path)
+
+    def _run_command(
+        self,
+        cmd: list[str],
+        prompt: str,
+        workdir: Path,
+        timeout: int,
+        log_path: Path,
+    ) -> AgentResult:
+        """Execute a fully constructed command through the common lifecycle."""
         effective_timeout = self._effective_timeout(timeout)
 
         start = time.monotonic()
@@ -224,6 +235,13 @@ class BaseRunner:
                 stdout_tail="", stderr_tail="", log_path=log_path,
                 error=self._not_found_error_message(),
             )
+
+    def _terminate_on_timeout(self, proc: subprocess.Popen, timeout: int) -> None:
+        """Terminate the dedicated child process group after a timeout."""
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            proc.kill()
 
     def _run_subprocess(
         self, cmd: list[str], prompt: str, workdir: Path, timeout: int, log_path: Path
@@ -278,11 +296,10 @@ class BaseRunner:
                 proc.wait(timeout=timeout)
                 reader.join(timeout=5)
             except subprocess.TimeoutExpired:
-                # Kill the entire process group, not just the parent.
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except (ProcessLookupError, OSError):
-                    proc.kill()
+                # Runtime-specific graceful cancellation may run before the
+                # BaseRunner force-kills the isolated child process group.
+                assert proc is not None
+                self._terminate_on_timeout(proc, timeout)
                 proc.wait()
                 reader.join(timeout=5)
                 log_fh.flush()

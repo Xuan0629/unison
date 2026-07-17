@@ -564,6 +564,42 @@ class PipelineLoader:
                 raise PipelineValidationError(
                     "llm_observer redirect authority requires exactly one developer agent"
                 )
+        crush_agents = [
+            (key, agent) for key, agent in spec.agents.items() if agent.runtime == "crush"
+        ]
+        if (
+            spec.reviewer_config is not None
+            and spec.reviewer_config.enabled
+            and any(agent.effective_role == "reviewer" for _, agent in crush_agents)
+        ):
+            raise PipelineValidationError(
+                "crush runtime does not support parallel reviewer dispatch"
+            )
+        if any(
+            any(spec.agents[agent_key].runtime == "crush" for agent_key in group)
+            for group in spec.parallel_groups.values()
+        ):
+            raise PipelineValidationError(
+                "crush runtime does not support parallel group dispatch"
+            )
+        if spec.mode in MOA_MODES:
+            crush_agent_keys = [key for key, _ in crush_agents]
+            if crush_agent_keys:
+                raise PipelineValidationError(
+                    "crush runtime supports only serial headless dispatch; unsupported MoA agent(s): "
+                    + ", ".join(crush_agent_keys)
+                )
+        if spec.mode == "chain" or spec.chain.stages or spec.dag is not None or (
+            spec.parallel_dev is not None and spec.parallel_dev.enabled
+        ):
+            crush_agents = [
+                key for key, agent in spec.agents.items() if agent.runtime == "crush"
+            ]
+            if crush_agents:
+                raise PipelineValidationError(
+                    "crush runtime supports only serial headless dispatch; unsupported agent(s): "
+                    + ", ".join(crush_agents)
+                )
         if not foreground:
             return
         if spec.mode in MOA_MODES:

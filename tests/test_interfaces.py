@@ -114,7 +114,18 @@ class TestRuntimeCapabilities:
         from unison.runtime_capabilities import get_runtime_capability
 
         with pytest.raises(KeyError, match="unknown runtime"):
-            get_runtime_capability("crush")
+            get_runtime_capability("not-a-runtime")
+
+    def test_crush_capability_is_headless_serial_and_usage_unavailable(self):
+        from unison.runtime_capabilities import get_runtime_capability
+
+        crush = get_runtime_capability("crush")
+
+        assert crush.executable == "crush"
+        assert crush.safe_execution_modes == frozenset({"headless_bypass"})
+        assert crush.preserves_interactive_tty is False
+        assert crush.max_concurrency == 1
+        assert crush.usage_provenance == "unavailable"
 
     def test_agent_spec_cli_flags_come_from_runtime_capability(self):
         spec = AgentSpec(

@@ -429,7 +429,7 @@ project_root: "."
 agents:
   developer:
     role: developer
-    runtime: crush
+    runtime: invalid_runtime
     model: default
     system_prompt_path: "prompts/developer.md"
   reviewer:
@@ -439,7 +439,77 @@ agents:
     system_prompt_path: "prompts/reviewer.md"
 """)
 
-        with pytest.raises(PipelineValidationError, match="Invalid runtime 'crush'"):
+        with pytest.raises(PipelineValidationError, match="Invalid runtime 'invalid_runtime'"):
+            PipelineLoader().load(pipeline_file)
+
+    def test_crush_runtime_is_accepted_for_serial_headless_pipeline(self, tmp_path):
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  developer:
+    role: developer
+    runtime: crush
+    model: unison-minimax-cn/MiniMax-M3
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: default
+    system_prompt_path: "prompts/reviewer.md"
+""")
+
+        spec = PipelineLoader().load(pipeline_file)
+
+        assert spec.agents["developer"].runtime == "crush"
+
+    def test_crush_runtime_rejects_moa_dispatch(self, tmp_path):
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+mode: moa:analyze
+agents:
+  developer:
+    role: developer
+    runtime: crush
+    model: unison-minimax-cn/MiniMax-M3
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: default
+    system_prompt_path: "prompts/reviewer.md"
+""")
+
+        with pytest.raises(PipelineValidationError, match="crush runtime supports only serial headless"):
+            PipelineLoader().load(pipeline_file)
+
+    def test_crush_runtime_rejects_parallel_group_dispatch(self, tmp_path):
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text("""
+version: "1.0"
+project_root: "."
+agents:
+  developer_a:
+    role: developer
+    runtime: crush
+    model: unison-minimax-cn/MiniMax-M3
+    system_prompt_path: "prompts/developer.md"
+  developer_b:
+    role: developer
+    runtime: claude
+    model: default
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: codex
+    model: default
+    system_prompt_path: "prompts/reviewer.md"
+""")
+
+        with pytest.raises(PipelineValidationError, match="crush runtime does not support parallel group dispatch"):
             PipelineLoader().load(pipeline_file)
 
     def test_foreground_validation_uses_runtime_capability(self, tmp_path):

@@ -339,7 +339,7 @@ class TestAgentOverrides:
         assert pipeline.read_text(encoding="utf-8") == original
         orchestrator.assert_not_called()
 
-    def test_invalid_runtime_override_fails_closed(self, tmp_path, monkeypatch, capsys):
+    def test_registered_runtime_override_reaches_tool_preflight(self, tmp_path, monkeypatch, capsys):
         import unison.cli as cli
 
         spec = self._spec(tmp_path)
@@ -350,7 +350,7 @@ class TestAgentOverrides:
         result = _cmd_run(self._args(tmp_path, switch="reviewer:crush"))
 
         assert result == 1
-        assert "invalid runtime(s): crush" in capsys.readouterr().err
+        assert "TOOL CHECK: CRUSH NOT FOUND" in capsys.readouterr().out
         orchestrator.assert_not_called()
 
     def test_save_pref_write_failure_does_not_start_or_replace_pipeline(

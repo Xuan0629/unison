@@ -64,6 +64,7 @@ from unison.runners.base import mask_secrets
 from unison.runners.claude import ClaudeRunner
 from unison.runners.codex import CodexRunner
 from unison.runners.hermes import HermesRunner
+from unison.runners.crush import CrushRunner
 from unison.runners.openclaw import OpenClawRunner
 from unison.run_history import RunHistoryStore
 from unison.risk_engine import RuleEngineRiskEvaluator
@@ -182,10 +183,11 @@ class Orchestrator:
         self._pipeline_start_time: float = time.monotonic()
 
         # -- runner routing (runtime name → runner instance) ------------------
-        self._runners: dict[str, ClaudeRunner | CodexRunner | HermesRunner | OpenClawRunner] = {
+        self._runners: dict[str, ClaudeRunner | CodexRunner | HermesRunner | CrushRunner | OpenClawRunner] = {
             "claude": ClaudeRunner(),
             "codex": CodexRunner(),
             "hermes": HermesRunner(),
+            "crush": CrushRunner(),
             "openclaw": OpenClawRunner(),
         }
 
