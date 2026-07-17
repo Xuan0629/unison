@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unison.llm_observer import (
     append_audit,
     llm_observation_path,
+    run_claude_control_observation,
     run_claude_observation,
     run_hermes_observation,
     write_manifest,
@@ -73,6 +74,232 @@ def test_control_manifest_bounds_and_redacts_allowlisted_evidence(tmp_path):
     assert len(manifest["evidence"]["open_checklist"][0]["title"]) <= 160
     assert manifest["evidence"]["verification"]["status"] == "failed"
     assert "raw_log" not in json.dumps(manifest)
+
+
+def test_claude_control_observer_persists_only_valid_typed_proposal(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    evidence = {
+        "reviewer_findings": [{"id": "review.finding.1", "text": "scope differs from approved goal"}],
+        "verification": {"id": "verification.declared", "status": "passed"},
+        "risk": {"id": "risk.post_invoke", "status": "unavailable"},
+        "budget": {"id": "budget.current", "status": "unavailable"},
+    }
+    manifest_path, digest = write_manifest(world, ctx, State(), evidence=evidence)
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"structured_output": {
+                "project_id": ctx.project_id,
+                "pipeline_key": ctx.pipeline_key,
+                "run_id": ctx.run_id,
+                "phase": "init",
+                "iteration": 0,
+                "manifest_sha256": digest,
+                "action": "halt",
+                "reason_code": "goal_deviation",
+                "evidence_ids": ["review.finding.1"],
+                "target_role": None,
+                "directive_code": None,
+            }}),
+            stderr="raw stderr must not persist",
+        )
+
+    monkeypatch.setattr("unison.llm_observer.subprocess.run", fake_run)
+    result = run_claude_control_observation(
+        world, ctx, manifest_path, digest, "deepseek-v4-pro", 30,
+        allow_halt=True, allow_redirect=False, redirect_roles=(), redirect_directives=(),
+    )
+
+    assert result.status == "proposed"
+    assert result.proposal.action == "halt"
+    assert "--tools" in captured["command"]
+    assert captured["command"][captured["command"].index("--tools") + 1] == ""
+    persisted = json.loads(result.path.read_text(encoding="utf-8"))
+    assert persisted["manifest_sha256"] == digest
+    assert persisted["project_id"] == ctx.project_id
+    assert persisted["run_id"] == ctx.run_id
+    assert persisted["phase"] == "init"
+    assert persisted["iteration"] == 0
+    assert persisted["evidence_ids"] == ["review.finding.1"]
+    assert "stderr" not in persisted
+
+
+def test_claude_control_observer_accepts_only_declared_redirect(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    manifest_path, digest = write_manifest(
+        world, ctx, State(), evidence={
+            "open_checklist": [{"id": "checklist.P1", "severity": "HIGH", "title": "missing test"}],
+        },
+    )
+    monkeypatch.setattr(
+        "unison.llm_observer.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"structured_output": {
+                "project_id": ctx.project_id,
+                "pipeline_key": ctx.pipeline_key,
+                "run_id": ctx.run_id,
+                "phase": "init",
+                "iteration": 0,
+                "manifest_sha256": digest,
+                "action": "redirect",
+                "reason_code": "unresolved_work",
+                "evidence_ids": ["checklist.P1"],
+                "target_role": "developer",
+                "directive_code": "address_open_checklist",
+            }}),
+            stderr="",
+        ),
+    )
+
+    result = run_claude_control_observation(
+        world, ctx, manifest_path, digest, "deepseek-v4-pro", 30,
+        allow_halt=False, allow_redirect=True,
+        redirect_roles=("developer",), redirect_directives=("address_open_checklist",),
+    )
+
+    assert result.status == "proposed"
+    assert result.proposal.directive_code == "address_open_checklist"
+
+
+def test_claude_control_observer_rejects_tampered_manifest_before_subprocess(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    manifest_path, digest = write_manifest(world, ctx, State())
+    manifest_path.write_text('{"tampered":true}', encoding="utf-8")
+    monkeypatch.setattr(
+        "unison.llm_observer.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not run")),
+    )
+
+    result = run_claude_control_observation(
+        world, ctx, manifest_path, digest, "deepseek-v4-pro", 30,
+        allow_halt=True, allow_redirect=False, redirect_roles=(), redirect_directives=(),
+    )
+
+    assert result.status == "failed"
+    assert result.summary == "manifest digest mismatch"
+
+
+def test_claude_control_observer_rejects_cross_phase_proposal(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    manifest_path, digest = write_manifest(
+        world, ctx, State(), evidence={
+            "reviewer_findings": [{"id": "review.finding.1", "text": "finding"}],
+        },
+    )
+    monkeypatch.setattr(
+        "unison.llm_observer.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"structured_output": {
+                "project_id": ctx.project_id,
+                "pipeline_key": ctx.pipeline_key,
+                "run_id": ctx.run_id,
+                "phase": "developer",
+                "iteration": 0,
+                "manifest_sha256": digest,
+                "action": "halt",
+                "reason_code": "goal_deviation",
+                "evidence_ids": ["review.finding.1"],
+                "target_role": None,
+                "directive_code": None,
+            }}),
+            stderr="",
+        ),
+    )
+
+    result = run_claude_control_observation(
+        world, ctx, manifest_path, digest, "deepseek-v4-pro", 30,
+        allow_halt=True, allow_redirect=False, redirect_roles=(), redirect_directives=(),
+    )
+
+    assert result.status == "failed"
+    assert result.summary == "invalid control proposal"
+    assert not result.path.exists()
+
+
+def test_claude_control_observer_rejects_malformed_evidence_ids_fail_closed(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    manifest_path, digest = write_manifest(
+        world, ctx, State(), evidence={
+            "reviewer_findings": [{"id": "review.finding.1", "text": "finding"}],
+        },
+    )
+    monkeypatch.setattr(
+        "unison.llm_observer.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"structured_output": {
+                "project_id": ctx.project_id,
+                "pipeline_key": ctx.pipeline_key,
+                "run_id": ctx.run_id,
+                "phase": "init",
+                "iteration": 0,
+                "manifest_sha256": digest,
+                "action": "halt",
+                "reason_code": "goal_deviation",
+                "evidence_ids": [["review.finding.1"]],
+                "target_role": None,
+                "directive_code": None,
+            }}),
+            stderr="",
+        ),
+    )
+
+    result = run_claude_control_observation(
+        world, ctx, manifest_path, digest, "deepseek-v4-pro", 30,
+        allow_halt=True, allow_redirect=False, redirect_roles=(), redirect_directives=(),
+    )
+
+    assert result.status == "failed"
+    assert result.summary == "invalid control proposal"
+
+
+def test_claude_control_observer_rejects_unsupported_evidence_action(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    manifest_path, digest = write_manifest(
+        world, ctx, State(), evidence={
+            "reviewer_findings": [{"id": "review.finding.1", "text": "finding"}],
+        },
+    )
+    monkeypatch.setattr(
+        "unison.llm_observer.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"structured_output": {
+                "project_id": ctx.project_id,
+                "pipeline_key": ctx.pipeline_key,
+                "run_id": ctx.run_id,
+                "phase": "init",
+                "iteration": 0,
+                "manifest_sha256": digest,
+                "action": "halt",
+                "reason_code": "safety_evidence",
+                "evidence_ids": ["review.finding.1"],
+                "target_role": None,
+                "directive_code": None,
+            }}),
+            stderr="",
+        ),
+    )
+
+    result = run_claude_control_observation(
+        world, ctx, manifest_path, digest, "deepseek-v4-pro", 30,
+        allow_halt=True, allow_redirect=False, redirect_roles=(), redirect_directives=(),
+    )
+
+    assert result.status == "failed"
+    assert result.summary == "invalid control proposal"
+    assert not result.path.exists()
 
 
 def test_audit_is_append_only_and_excludes_observation_content(tmp_path):
