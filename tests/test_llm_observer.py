@@ -122,6 +122,8 @@ def test_claude_control_observer_persists_only_valid_typed_proposal(tmp_path, mo
     assert result.proposal.action == "halt"
     assert "--tools" in captured["command"]
     assert captured["command"][captured["command"].index("--tools") + 1] == ""
+    assert captured["command"][captured["command"].index("--max-budget-usd") + 1] == "0.10"
+    assert f"manifest_sha256 must be exactly {digest}" in captured["command"][-1]
     persisted = json.loads(result.path.read_text(encoding="utf-8"))
     assert persisted["manifest_sha256"] == digest
     assert persisted["project_id"] == ctx.project_id
@@ -426,6 +428,38 @@ def test_orchestrator_consumes_halt_proposal_before_agent(tmp_path, monkeypatch)
     receipt = json.loads(receipt_paths[0].read_text(encoding="utf-8"))
     assert receipt["action"] == "halt"
     assert "finding\"" not in receipt_paths[0].read_text(encoding="utf-8")
+
+
+def test_orchestrator_rejects_replayed_control_receipt_before_model_call(tmp_path, monkeypatch):
+    orchestrator = _control_orchestrator(tmp_path)
+    evidence = {
+        "risk": {"id": "risk.post_invoke", "status": "failed"},
+        "verification": {"id": "verification.declared", "status": "unavailable"},
+        "budget": {"id": "budget.current", "status": "unavailable"},
+    }
+    monkeypatch.setattr(orchestrator, "_llm_control_evidence", lambda: evidence)
+    calls = []
+
+    def fake_control(world, ctx, manifest_path, digest, *args, **kwargs):
+        calls.append(digest)
+        proposal = ControlProposal(
+            project_id=ctx.project_id, pipeline_key=ctx.pipeline_key, run_id=ctx.run_id,
+            phase=orchestrator._state.phase, iteration=orchestrator._state.iteration,
+            manifest_sha256=digest, action="halt", reason_code="safety_evidence",
+            evidence_ids=("risk.post_invoke",), target_role=None, directive_code=None,
+        )
+        return ControlObservationResult("proposed", "typed halt", proposal, tmp_path / "proposal.json")
+
+    monkeypatch.setattr("unison.orchestrator.run_claude_control_observation", fake_control)
+    monkeypatch.setattr(orchestrator, "_save_checkpoint", lambda *args: None)
+
+    assert orchestrator._run_llm_control_boundary(role="developer", iteration=1) is False
+    assert len(calls) == 1
+    orchestrator._state.halt_signal = False
+    orchestrator._state.halt_reason = None
+    assert orchestrator._run_llm_control_boundary(role="developer", iteration=1) is False
+    assert len(calls) == 1
+    assert "receipt already exists" in (orchestrator._state.halt_reason or "")
 
 
 def test_orchestrator_compiles_redirect_without_llm_prompt_text(tmp_path, monkeypatch):

@@ -256,13 +256,14 @@ def run_claude_control_observation(
     prompt = (
         "You are a read-only pipeline control observer. Analyze only this allowlisted JSON manifest. "
         "Return one schema-valid action only when its evidence IDs and reason are present in the manifest. "
+        f"The manifest_sha256 must be exactly {manifest_sha256}. "
         "Never request tools, commands, reruns, replacement, terminal input, approvals, or configuration changes. Manifest: "
         + json.dumps(manifest, sort_keys=True, separators=(",", ":"))
     )
     command = [
         "claude", "-p", "--bare", "--no-session-persistence", "--permission-mode", "plan",
         "--tools", "", "--output-format", "json", "--json-schema",
-        json.dumps(_CONTROL_SCHEMA, sort_keys=True, separators=(",", ":")), "--max-budget-usd", "0.05",
+        json.dumps(_CONTROL_SCHEMA, sort_keys=True, separators=(",", ":")), "--max-budget-usd", "0.10",
     ]
     if model:
         command.extend(["--model", model])
