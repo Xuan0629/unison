@@ -13,6 +13,7 @@ import json
 import os
 import pty
 import select
+import shlex
 import signal
 import shutil
 import subprocess
@@ -559,6 +560,38 @@ def launch_linux_terminal(invocation: ForegroundInvocation) -> int:
         "--invocation-dir", str(invocation.directory),
     ]
     return subprocess.Popen(command, start_new_session=True).pid
+
+
+def launch_macos_terminal(invocation: ForegroundInvocation) -> int:
+    """Open Terminal.app for one wrapper invocation without terminal input control."""
+    if sys.platform != "darwin":
+        raise RuntimeError("macOS Terminal launcher only supports macOS")
+    osascript = shutil.which("osascript")
+    if osascript is None:
+        raise RuntimeError("foreground execution requires osascript")
+
+    command = shlex.join([
+        sys.executable,
+        "-m", "unison.foreground", "wrapper",
+        "--invocation-dir", str(invocation.directory),
+    ])
+    script = [
+        osascript,
+        "-e", 'tell application "Terminal"',
+        "-e", f"do script {json.dumps(command)}",
+        "-e", "activate",
+        "-e", "end tell",
+    ]
+    return subprocess.Popen(script, start_new_session=True).pid
+
+
+def launch_foreground_terminal(invocation: ForegroundInvocation) -> int:
+    """Open the supported native terminal for a foreground wrapper."""
+    if sys.platform == "linux":
+        return launch_linux_terminal(invocation)
+    if sys.platform == "darwin":
+        return launch_macos_terminal(invocation)
+    raise RuntimeError("foreground terminal launcher supports Linux and macOS only")
 
 
 def main(argv: list[str] | None = None) -> int:

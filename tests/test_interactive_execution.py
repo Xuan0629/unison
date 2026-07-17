@@ -3,6 +3,7 @@ import fcntl
 import json
 import os
 import pty
+import shlex
 import struct
 import sys
 import termios
@@ -20,6 +21,7 @@ from unison.foreground import (
     ProcessIdentity,
     build_foreground_command,
     foreground_child_and_group_status,
+    launch_foreground_terminal,
     launch_linux_terminal,
     main as foreground_main,
     prepare_foreground_invocation,
@@ -788,6 +790,71 @@ class TestLinuxForegroundLauncher:
 
         with pytest.raises(RuntimeError, match="only supports Linux"):
             launch_linux_terminal(invocation)
+
+        spawn.assert_not_called()
+
+    def test_dispatches_to_linux_launcher(self, tmp_path, monkeypatch):
+        invocation = self._invocation(tmp_path)
+        monkeypatch.setattr("unison.foreground.sys.platform", "linux")
+        launcher = MagicMock(return_value=4321)
+        monkeypatch.setattr("unison.foreground.launch_linux_terminal", launcher)
+
+        assert launch_foreground_terminal(invocation) == 4321
+        launcher.assert_called_once_with(invocation)
+
+    def test_launches_terminal_app_with_wrapper_command_and_returns_handoff_pid(
+        self, tmp_path, monkeypatch
+    ):
+        invocation = self._invocation(tmp_path)
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        monkeypatch.setattr("unison.foreground.shutil.which", lambda name: "/usr/bin/osascript" if name == "osascript" else None)
+        process = MagicMock(pid=4321)
+        spawn = MagicMock(return_value=process)
+        monkeypatch.setattr("unison.foreground.subprocess.Popen", spawn)
+
+        handoff_pid = launch_foreground_terminal(invocation)
+
+        assert handoff_pid == 4321
+        script = spawn.call_args.args[0]
+        assert script[:3] == ["/usr/bin/osascript", "-e", 'tell application "Terminal"']
+        assert script[-2:] == ["-e", "end tell"]
+        wrapper_command = script[4]
+        assert script[3] == "-e"
+        assert wrapper_command.startswith("do script ")
+        assert "unison.foreground wrapper" in wrapper_command
+        assert str(invocation.directory) in wrapper_command
+        assert "Unison foreground" not in wrapper_command
+        assert spawn.call_args.kwargs == {"start_new_session": True}
+
+    def test_macos_launcher_encodes_special_character_paths_as_one_command(
+        self, tmp_path, monkeypatch
+    ):
+        invocation = self._invocation(tmp_path / 'path with "quotes"; $HOME')
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        monkeypatch.setattr(
+            "unison.foreground.shutil.which",
+            lambda name: "/usr/bin/osascript" if name == "osascript" else None,
+        )
+        spawn = MagicMock(return_value=MagicMock(pid=4321))
+        monkeypatch.setattr("unison.foreground.subprocess.Popen", spawn)
+
+        launch_foreground_terminal(invocation)
+
+        encoded = spawn.call_args.args[0][4].removeprefix("do script ")
+        assert json.loads(encoded) == shlex.join([
+            sys.executable,
+            "-m", "unison.foreground", "wrapper",
+            "--invocation-dir", str(invocation.directory),
+        ])
+
+    def test_rejects_unknown_platform_before_spawning(self, tmp_path, monkeypatch):
+        invocation = self._invocation(tmp_path)
+        monkeypatch.setattr("unison.foreground.sys.platform", "freebsd")
+        spawn = MagicMock()
+        monkeypatch.setattr("unison.foreground.subprocess.Popen", spawn)
+
+        with pytest.raises(RuntimeError, match="supports Linux and macOS"):
+            launch_foreground_terminal(invocation)
 
         spawn.assert_not_called()
 

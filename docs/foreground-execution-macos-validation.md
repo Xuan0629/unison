@@ -2,9 +2,9 @@
 
 ## Status and scope
 
-This is an external validation procedure for the foreground-execution contract in [foreground-execution.md](foreground-execution.md). It is not evidence that the foreground backend, `reconcile`, or `resume` commands are implemented in the current checkout.
+This is an external validation procedure for the foreground-execution contract in [foreground-execution.md](foreground-execution.md). The checkout implements a minimal macOS Terminal.app launcher, but this document is not itself evidence that the launcher, `reconcile`, or `resume` commands work on a real macOS host.
 
-Run this pack only after the foreground launcher and reconciliation slices are merged. Before that point, record the checkout as **blocked: backend not implemented** and do not substitute a headless run for an interactive test.
+Run this pack only after the foreground launcher and reconciliation slices are merged. Do not substitute a headless run for an interactive test.
 
 This pack validates macOS Terminal.app behavior only. It does not authorize changing Terminal settings, granting Automation permissions broadly, installing a PTY dependency, sending terminal input, accepting native approval prompts, or retrying an interrupted foreground invocation.
 

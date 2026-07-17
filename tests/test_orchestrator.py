@@ -73,7 +73,7 @@ agents:
             lambda iteration=None: checkpoints.append(orchestrator._state.active_foreground_invocation),
         )
 
-        with patch("unison.orchestrator.launch_linux_terminal", return_value=4321) as launch:
+        with patch("unison.orchestrator.launch_foreground_terminal", return_value=4321) as launch:
             orchestrator._invoke_agent_for_role("developer", 1)
 
         assert launch.call_count == 1
@@ -107,7 +107,7 @@ agents:
             lambda role: [effective_spec] if role == "developer" else reviewer_calls.append(role) or [],
         )
 
-        with patch("unison.orchestrator.launch_linux_terminal", return_value=4321):
+        with patch("unison.orchestrator.launch_foreground_terminal", return_value=4321):
             orchestrator._run_loop("dev_active", "dev_review", "code + tests", role="developer")
 
         assert reviewer_calls == []
@@ -341,7 +341,7 @@ agents:
         monkeypatch.setattr(orchestrator, "_get_budget_tracker", lambda role: tracker)
         monkeypatch.setattr(orchestrator, "_build_prompt", lambda *args, **kwargs: "first task")
 
-        with patch("unison.orchestrator.launch_linux_terminal") as launch:
+        with patch("unison.orchestrator.launch_foreground_terminal") as launch:
             orchestrator._invoke_agent_for_role("developer", 1)
 
         launch.assert_not_called()
@@ -674,7 +674,7 @@ class TestForegroundReconcile:
         }
         snapshots = []
         monkeypatch.setattr("unison.orchestrator.prepare_foreground_invocation", lambda **_kwargs: invocation)
-        monkeypatch.setattr("unison.orchestrator.launch_linux_terminal", lambda _invocation: 4321)
+        monkeypatch.setattr("unison.orchestrator.launch_foreground_terminal", lambda _invocation: 4321)
         monkeypatch.setattr(orchestrator, "_observe_foreground_liveness", lambda _iteration: snapshots.append(True))
 
         orchestrator._dispatch_foreground_invocation(
@@ -866,7 +866,7 @@ class TestForegroundReconcile:
         replacement.output_path = replacement.directory / "output.log"
         replacement.read_request.return_value = {"launched_at": "2026-07-16T00:00:00Z"}
         monkeypatch.setattr("unison.orchestrator.prepare_foreground_invocation", lambda **_kwargs: replacement)
-        monkeypatch.setattr("unison.orchestrator.launch_linux_terminal", lambda _invocation: 4321)
+        monkeypatch.setattr("unison.orchestrator.launch_foreground_terminal", lambda _invocation: 4321)
         monkeypatch.setattr(resumed, "_observe_foreground_liveness", lambda _iteration: None)
 
         resumed._dispatch_foreground_invocation(

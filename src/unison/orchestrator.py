@@ -36,7 +36,7 @@ from unison.foreground import (
     ForegroundInvocation,
     ProcessIdentity,
     foreground_child_and_group_status,
-    launch_linux_terminal,
+    launch_foreground_terminal,
     prepare_foreground_invocation,
     read_process_identity,
 )
@@ -2750,7 +2750,7 @@ class Orchestrator:
         self._save_checkpoint(iteration)
 
         try:
-            launcher_pid = launch_linux_terminal(invocation)
+            launcher_pid = launch_foreground_terminal(invocation)
         except (OSError, RuntimeError, ValueError) as exc:
             self.halt(f"foreground terminal launch failed: {exc}", category="external")
             self._save_checkpoint(iteration)
