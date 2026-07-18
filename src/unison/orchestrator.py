@@ -46,6 +46,7 @@ from unison.checkpoint import FileCheckpointManager
 from unison.completion import GitCompletionDetector
 from unison.checklist import ChecklistItem, ChecklistStatus
 from unison.io import atomic_read_json, atomic_write_json
+from unison.alignment import protected_deletions
 from unison.llm_observer import (
     append_audit,
     llm_control_receipt_path,
@@ -2553,6 +2554,28 @@ class Orchestrator:
         if self._state.halt_signal:
             return
 
+        # L2-A: a whole-workspace snapshot is required to discard work made
+        # under a later-detected wrong prompt/phase binding. It is deliberately
+        # not best-effort: without it a context correction cannot be truthful.
+        workspace_snapshot_id: str | None = None
+        if self.spec.llm_observer.alignment_enabled:
+            if self._snapshot_mgr is None:
+                self.halt("L2-A requires snapshots.enabled", category="external")
+                return
+            try:
+                workspace_snapshot_id = self._snapshot_mgr.snapshot(
+                    path=world.root,
+                    operation=Operation.MODIFY,
+                    agent=role,  # type: ignore[arg-type]
+                    iteration=iteration,
+                    project_id=world.project_id,
+                    pipeline_name=self.spec.pipeline_name,
+                    run_id=self._run_ctx.run_id,
+                ).audit_id
+            except (ValueError, OSError, shutil.Error) as exc:
+                self.halt(f"L2-A workspace snapshot failed: {exc}", category="external")
+                return
+
         # 4. Build prompt (uses BudgetTracker for token budget)
         prompt = self._build_prompt(role, iteration, review_phase=review_phase)
         if self._llm_redirect_directive:
@@ -2623,6 +2646,17 @@ class Orchestrator:
                     world.root, snapshot_ids
                 )
         if risk_halted:
+            return
+
+        deleted_paths = [
+            path for path, operation in self._get_git_diff_files(world.root)
+            if operation is Operation.DELETE
+        ]
+        if self.spec.llm_observer.alignment_enabled and self._halt_on_protected_deletion(
+            spec=effective_spec,
+            deleted=deleted_paths,
+            workspace_snapshot_id=workspace_snapshot_id,
+        ):
             return
 
         # P12b: Restore workspace from tier snapshot if downgraded agent failed
@@ -3127,6 +3161,28 @@ class Orchestrator:
             allowed_paths=allowed_paths,
         )
 
+    def _halt_on_protected_deletion(
+        self, *, spec: AgentSpec, deleted: list[str], workspace_snapshot_id: str | None,
+    ) -> bool:
+        """Restore and halt when a role deleted declared governance input."""
+        protected = protected_deletions(self.spec.world.root, spec, deleted)
+        if not protected:
+            return False
+        if workspace_snapshot_id is not None:
+            try:
+                self._restore_snapshot(workspace_snapshot_id, [self.spec.world.root])
+            except (KeyError, FileNotFoundError, SnapshotBoundaryError):
+                self.halt(
+                    "protected project input deleted and workspace restore failed",
+                    category="external",
+                )
+                return True
+        self.halt(
+            "protected project input deleted: " + ", ".join(protected),
+            category="external",
+        )
+        return True
+
     def _snapshot_for_tier_switch(self, role: str) -> None:
         """Snapshot workspace before tier switch so it can be restored on failure.
 
@@ -3266,7 +3322,7 @@ class Orchestrator:
         result: list[tuple[str, Operation]] = []
         try:
             proc = subprocess.run(
-                ["git", "diff", "--name-status", "HEAD"],
+                ["git", "diff", "HEAD", "--name-status"],
                 cwd=workspace,
                 capture_output=True,
                 text=True,

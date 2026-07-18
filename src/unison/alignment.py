@@ -74,6 +74,29 @@ def build_execution_contract(
     return contract
 
 
+
+
+_GOVERNANCE_FILENAMES = frozenset({"CLAUDE.md", "AGENTS.md", "pipeline.yaml", "unison.yaml"})
+
+
+def protected_deletions(workspace: Path, spec: AgentSpec, deleted: Sequence[str]) -> list[str]:
+    """Return deleted project-governance files and the role's declared prompt."""
+    protected = {
+        spec.system_prompt_path.as_posix(),
+        "prd/PRD.md",
+        "prd/tech-design.md",
+    }
+    result = []
+    for relative in deleted:
+        candidate = Path(relative)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            result.append(relative)
+            continue
+        if candidate.name in _GOVERNANCE_FILENAMES or candidate.as_posix() in protected:
+            result.append(candidate.as_posix())
+    return sorted(set(result))
+
+
 def execution_summary_dir(world: World, ctx: RunContext) -> Path:
     return world.unison_run_dir_for(ctx) / "alignment" / "execution-summaries"
 

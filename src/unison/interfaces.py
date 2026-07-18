@@ -167,6 +167,8 @@ class LlmObserverConfig:
     redirect_directives: tuple[str, ...] = ()
     review_roles: tuple[str, ...] = ()
     review_directives: tuple[str, ...] = ()
+    alignment_enabled: bool = False
+    alignment_max_corrections_per_run: int = 3
 
 
 @dataclass(frozen=True)

@@ -457,7 +457,7 @@ class PipelineLoader:
             raise PipelineValidationError("llm_observer must be a mapping")
         allowed_fields = {
             "enabled", "runtime", "provider", "model", "allow_halt", "allow_redirect",
-            "allow_require_review", "redirect", "review",
+            "allow_require_review", "redirect", "review", "alignment",
         }
         unknown_fields = set(raw) - allowed_fields
         if unknown_fields:
@@ -549,6 +549,26 @@ class PipelineLoader:
             review_directives = tuple(dict.fromkeys(directives))
         elif review is not None:
             raise PipelineValidationError("llm_observer.review requires allow_require_review true")
+        alignment_enabled = False
+        alignment_max_corrections_per_run = 3
+        alignment = raw.get("alignment")
+        if alignment is not None:
+            if not isinstance(alignment, dict) or set(alignment) != {"enabled", "max_corrections_per_run"}:
+                raise PipelineValidationError(
+                    "llm_observer.alignment allows only enabled and max_corrections_per_run"
+                )
+            alignment_enabled = alignment["enabled"]
+            alignment_max_corrections_per_run = alignment["max_corrections_per_run"]
+            if not isinstance(alignment_enabled, bool):
+                raise PipelineValidationError("llm_observer.alignment.enabled must be a boolean")
+            if (
+                not isinstance(alignment_max_corrections_per_run, int)
+                or isinstance(alignment_max_corrections_per_run, bool)
+                or not 0 <= alignment_max_corrections_per_run <= 3
+            ):
+                raise PipelineValidationError(
+                    "llm_observer.alignment.max_corrections_per_run must be an integer from 0 to 3"
+                )
         return LlmObserverConfig(
             enabled=True,
             runtime=runtime,
@@ -561,6 +581,8 @@ class PipelineLoader:
             redirect_directives=redirect_directives,
             review_roles=review_roles,
             review_directives=review_directives,
+            alignment_enabled=alignment_enabled,
+            alignment_max_corrections_per_run=alignment_max_corrections_per_run,
         )
 
     @staticmethod
@@ -585,6 +607,7 @@ class PipelineLoader:
             spec.llm_observer.allow_halt
             or spec.llm_observer.allow_redirect
             or spec.llm_observer.allow_require_review
+            or spec.llm_observer.alignment_enabled
         ):
             if (
                 spec.mode in MOA_MODES

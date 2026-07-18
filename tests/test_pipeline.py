@@ -2062,6 +2062,39 @@ execution:
         with pytest.raises(PipelineValidationError, match="allow_halt"):
             PipelineLoader().load(path)
 
+    def test_alignment_policy_accepts_bounded_runwide_correction_budget(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: claude
+  alignment:
+    enabled: true
+    max_corrections_per_run: 3
+""",
+        )
+
+        observer = PipelineLoader().load(path).llm_observer
+        assert observer.alignment_enabled is True
+        assert observer.alignment_max_corrections_per_run == 3
+
+    @pytest.mark.parametrize("value", ["-1", "4", "true"])
+    def test_alignment_policy_rejects_invalid_correction_budget(self, tmp_path, value):
+        path = self._write_pipeline(
+            tmp_path,
+            f"""llm_observer:
+  enabled: true
+  runtime: claude
+  alignment:
+    enabled: true
+    max_corrections_per_run: {value}
+""",
+        )
+
+        with pytest.raises(PipelineValidationError, match="max_corrections_per_run"):
+            PipelineLoader().load(path)
+
+
     def test_claude_control_authority_requires_static_redirect_policy(self, tmp_path):
         path = self._write_pipeline(
             tmp_path,
