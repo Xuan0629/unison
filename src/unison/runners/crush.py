@@ -7,10 +7,10 @@ import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from unison.interfaces import AgentResult, AgentSpec
-from unison.runners.base import BaseRunner
+from unison.runners.base import BaseRunner, ProcessHandle
 from unison.usage import UsageRecord
 
 
@@ -110,16 +110,23 @@ class CrushRunner(BaseRunner):
         workdir: Path,
         timeout: int,
         log_path: Path,
+        *,
+        on_started: Callable[[ProcessHandle], None] | None = None,
     ) -> AgentResult:
         state_dir = self._new_state_dir(log_path)
         state_dir.mkdir(parents=True, exist_ok=False)
-        result = self._run_command(
-            self._build_command_for_state(spec, prompt, workdir, log_path, state_dir),
-            prompt,
-            workdir,
-            timeout,
-            log_path,
-        )
+        command = self._build_command_for_state(spec, prompt, workdir, log_path, state_dir)
+        if on_started is None:
+            result = self._run_command(command, prompt, workdir, timeout, log_path)
+        else:
+            result = self._run_command(
+                command,
+                prompt,
+                workdir,
+                timeout,
+                log_path,
+                on_started=on_started,
+            )
         if not result.success:
             return result
         session = self._session_meta(workdir, state_dir)

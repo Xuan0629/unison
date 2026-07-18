@@ -9,12 +9,42 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from unison.interfaces import AgentSpec, AgentResult
+
+
+# ------------------------------------------------------------------
+# lifecycle evidence
+# ------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ProcessHandle:
+    """One verified, isolated headless process-group identity."""
+
+    pid: int
+    process_group: int
+    start_identity: str
+    started_at: str
+
+
+def _read_process_identity(pid: int) -> str | None:
+    """Return a Linux PID start-time identity; unknown platforms fail closed."""
+    if not isinstance(pid, int) or pid <= 0 or sys.platform != "linux":
+        return None
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        fields = stat[stat.rfind(")") + 2 :].split()
+        starttime = fields[19]
+    except (IndexError, OSError, UnicodeError):
+        return None
+    return f"linux:{starttime}" if starttime.isdigit() else None
 
 
 # ------------------------------------------------------------------
@@ -206,10 +236,17 @@ class BaseRunner:
         workdir: Path,
         timeout: int,
         log_path: Path,
+        *,
+        on_started: Callable[[ProcessHandle], None] | None = None,
     ) -> AgentResult:
-        """Execute the agent via subprocess, streaming output to log_path."""
+        """Execute the agent via subprocess, streaming output to log_path.
+
+        When *on_started* is supplied, Linux only, it receives a verified
+        dedicated child process-group identity immediately after ``Popen``.
+        Unsupported or unverifiable identities deliberately produce no callback.
+        """
         cmd = self._build_command(spec, prompt)
-        return self._run_command(cmd, prompt, workdir, timeout, log_path)
+        return self._run_command(cmd, prompt, workdir, timeout, log_path, on_started=on_started)
 
     def _run_command(
         self,
@@ -218,13 +255,17 @@ class BaseRunner:
         workdir: Path,
         timeout: int,
         log_path: Path,
+        *,
+        on_started: Callable[[ProcessHandle], None] | None = None,
     ) -> AgentResult:
         """Execute a fully constructed command through the common lifecycle."""
         effective_timeout = self._effective_timeout(timeout)
 
         start = time.monotonic()
         try:
-            result = self._run_subprocess(cmd, prompt, workdir, effective_timeout, log_path)
+            result = self._run_subprocess(
+                cmd, prompt, workdir, effective_timeout, log_path, on_started=on_started,
+            )
             result.duration = round(time.monotonic() - start, 3)
             return result
         except FileNotFoundError:
@@ -244,7 +285,14 @@ class BaseRunner:
             proc.kill()
 
     def _run_subprocess(
-        self, cmd: list[str], prompt: str, workdir: Path, timeout: int, log_path: Path
+        self,
+        cmd: list[str],
+        prompt: str,
+        workdir: Path,
+        timeout: int,
+        log_path: Path,
+        *,
+        on_started: Callable[[ProcessHandle], None] | None = None,
     ) -> AgentResult:
         """Run *cmd* via Popen, streaming stdout/stderr directly to *log_path*.
 
@@ -278,6 +326,21 @@ class BaseRunner:
             log_fh.flush()
             try:
                 proc = subprocess.Popen(cmd, **popen_kwargs)
+                if on_started is not None:
+                    try:
+                        process_group = os.getpgid(proc.pid)
+                        start_identity = _read_process_identity(proc.pid)
+                    except (ProcessLookupError, OSError):
+                        process_group = None
+                        start_identity = None
+                    if start_identity is not None and process_group == proc.pid:
+                        assert process_group is not None
+                        on_started(ProcessHandle(
+                            pid=proc.pid,
+                            process_group=process_group,
+                            start_identity=start_identity,
+                            started_at=datetime.now(timezone.utc).isoformat(),
+                        ))
                 if self.use_stdin:
                     proc.stdin.write(prompt)
                     proc.stdin.close()
@@ -346,8 +409,8 @@ class BaseRunner:
 class AgentRunner:
     """Protocol for agent CLI wrappers (backward compatibility).
 
-    Kept for test imports.  All concrete runners derive from
-    :class:`BaseRunner` instead.
+    The optional lifecycle callback is Linux-only and only receives verified
+    dedicated headless process-group identities.
     """
 
     def run(
@@ -357,6 +420,8 @@ class AgentRunner:
         workdir: Path,
         timeout: int,
         log_path: Path,
+        *,
+        on_started: Callable[[ProcessHandle], None] | None = None,
     ) -> AgentResult: ...
 
     def _build_command(self, spec: AgentSpec, prompt: str) -> list[str]: ...

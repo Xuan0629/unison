@@ -19,9 +19,10 @@ import json
 import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Callable
 
 from unison.interfaces import AgentSpec, AgentResult
-from unison.runners.base import BaseRunner
+from unison.runners.base import BaseRunner, ProcessHandle
 from unison.usage import UsageRecord
 
 
@@ -205,9 +206,11 @@ class OpenClawRunner(BaseRunner):
         workdir: Path,
         timeout: int,
         log_path: Path,
+        *,
+        on_started: Callable[[ProcessHandle], None] | None = None,
     ) -> AgentResult:
         """Run OpenClaw and attach only verified structured usage facts."""
-        result = super().run(spec, prompt, workdir, timeout, log_path)
+        result = super().run(spec, prompt, workdir, timeout, log_path, on_started=on_started)
         try:
             raw_log = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
