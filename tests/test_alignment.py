@@ -1,13 +1,10 @@
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
-from unison.alignment import (
-    AlignmentBindingError,
-    build_execution_contract,
-    write_execution_summary,
-)
+from unison.alignment import AlignmentBindingError, build_execution_contract, write_execution_summary
 from unison.interfaces import AgentResult, AgentSpec
 from unison.world import RunContext, World
 
@@ -99,8 +96,11 @@ def test_execution_summary_records_authoritative_contract_process_and_delta(tmp_
     ctx = _ctx(world)
     contract = {
         "role": "developer", "phase": "dev_active", "iteration": 1,
-        "task_sha256": "a" * 64, "inputs": [], "sha256": "b" * 64,
+        "task_sha256": "a" * 64, "inputs": [],
     }
+    contract["sha256"] = hashlib.sha256(
+        json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     result = AgentResult(True, 0, 1.25, "untrusted raw output", "", tmp_path / "agent.log")
 
     path = write_execution_summary(
@@ -126,8 +126,11 @@ def test_execution_summary_rejects_malformed_contract_and_records_failure(tmp_pa
     result = AgentResult(False, 7, 0.5, "raw", "", tmp_path / "agent.log", error="failed")
     contract = {
         "role": "developer", "phase": "dev_active", "iteration": 1,
-        "task_sha256": "a" * 64, "inputs": [], "sha256": "b" * 64,
+        "task_sha256": "a" * 64, "inputs": [],
     }
+    contract["sha256"] = hashlib.sha256(
+        json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
     with pytest.raises(AlignmentBindingError, match="missing required"):
         write_execution_summary(
@@ -144,3 +147,24 @@ def test_execution_summary_rejects_malformed_contract_and_records_failure(tmp_pa
     summary = json.loads(path.read_text(encoding="utf-8"))
     assert summary["process"]["status"] == "failed"
     assert summary["process"]["exit_code"] == 7
+
+
+def test_execution_summary_rejects_contract_with_mismatched_digest(tmp_path):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    result = AgentResult(True, 0, 0.5, "", "", tmp_path / "agent.log")
+    contract = {
+        "role": "developer", "phase": "dev_active", "iteration": 1,
+        "task_sha256": "a" * 64, "inputs": [],
+    }
+    contract["sha256"] = hashlib.sha256(
+        json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    contract["role"] = "reviewer"
+
+    with pytest.raises(AlignmentBindingError, match="digest does not match"):
+        write_execution_summary(
+            world, ctx, contract=contract, runtime="claude", model="test",
+            pid=None, process_group=None, started_at="start", ended_at="end", result=result,
+            created=[], modified=[], deleted=[],
+        )

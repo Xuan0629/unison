@@ -46,7 +46,12 @@ from unison.checkpoint import FileCheckpointManager
 from unison.completion import GitCompletionDetector
 from unison.checklist import ChecklistItem, ChecklistStatus
 from unison.io import atomic_read_json, atomic_write_json
-from unison.alignment import protected_deletions
+from unison.alignment import (
+    AlignmentBindingError,
+    build_execution_contract,
+    protected_deletions,
+    write_execution_summary,
+)
 from unison.llm_observer import (
     append_audit,
     llm_control_receipt_path,
@@ -2582,6 +2587,31 @@ class Orchestrator:
             prompt += "\n\n## Unison Control Directive\n" + self._llm_redirect_directive
             self._llm_redirect_directive = ""
 
+        alignment_contract: dict | None = None
+        alignment_started_at: str | None = None
+        if self.spec.llm_observer.alignment_enabled:
+            try:
+                alignment_contract = build_execution_contract(
+                    world,
+                    self._run_ctx,
+                    effective_spec,
+                    role=role,
+                    phase=self._state.phase,
+                    iteration=iteration,
+                    task=effective_spec.task_instruction or prompt,
+                    inputs=self._alignment_input_bindings(effective_spec, iteration, review_phase),
+                )
+            except AlignmentBindingError as exc:
+                self._write_alignment_binding_proposal(
+                    spec=effective_spec,
+                    role=role,
+                    iteration=iteration,
+                    reason=str(exc),
+                )
+                self.halt(f"L2-A binding validation failed: {exc}", category="external")
+                return
+            alignment_started_at = datetime.now(timezone.utc).isoformat()
+
         # 5. Build log path
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         log_path = world.agent_log(role, iteration, timestamp, ctx=getattr(self, "_run_ctx", None))  # type: ignore[arg-type]
@@ -2658,6 +2688,27 @@ class Orchestrator:
             workspace_snapshot_id=workspace_snapshot_id,
         ):
             return
+        if alignment_contract is not None and alignment_started_at is not None:
+            created, modified, deleted = self._alignment_filesystem_delta(world.root)
+            try:
+                write_execution_summary(
+                    world,
+                    self._run_ctx,
+                    contract=alignment_contract,
+                    runtime=effective_spec.runtime,
+                    model=effective_spec.model,
+                    pid=None,
+                    process_group=None,
+                    started_at=alignment_started_at,
+                    ended_at=datetime.now(timezone.utc).isoformat(),
+                    result=result,
+                    created=created,
+                    modified=modified,
+                    deleted=deleted,
+                )
+            except AlignmentBindingError as exc:
+                self.halt(f"L2-A execution summary failed: {exc}", category="external")
+                return
 
         # P12b: Restore workspace from tier snapshot if downgraded agent failed
         if not result.success and role in self._tier_snapshot_ids:
@@ -3160,6 +3211,87 @@ class Orchestrator:
             project_id=self.spec.world.project_id,
             allowed_paths=allowed_paths,
         )
+
+    def _alignment_input_bindings(
+        self, spec: AgentSpec, iteration: int, review_phase: str,
+    ) -> dict[str, Path]:
+        """Return only project-local artifacts actually loaded into this invocation."""
+        world = self.spec.world
+        bindings: dict[str, Path] = {
+            "system_prompt": world.root / spec.system_prompt_path,
+        }
+        ctx = self._run_ctx
+        for kind, path in (
+            ("prd", world.prd_for(ctx.pipeline_key)),
+            ("design", world.tech_design_for(ctx.pipeline_key)),
+        ):
+            if path.exists():
+                bindings[kind] = path
+        if iteration > 1:
+            previous_kind = "dev_review" if spec.effective_role == "developer" else "planning_review"
+            previous_review = self._review_file_for_phase(previous_kind, iteration - 1)
+            if previous_review.exists():
+                bindings["previous_review"] = previous_review
+        if spec.effective_role == "reviewer":
+            review_package = world.run_review_package_file(ctx, iteration)
+            if review_package.exists():
+                bindings["review_package"] = review_package
+        if spec.effective_role == "developer":
+            dev_notes = world.reviews_dir_for(ctx) / "dev-notes.md"
+            if dev_notes.exists():
+                bindings["developer_notes"] = dev_notes
+        return bindings
+
+    def _write_alignment_binding_proposal(
+        self, *, spec: AgentSpec, role: str, iteration: int, reason: str,
+    ) -> Path:
+        """Write a non-applicable YAML proposal; never choose/edit a binding."""
+        path = (
+            self.spec.world.unison_run_dir_for(self._run_ctx)
+            / "alignment"
+            / "binding-proposals"
+            / f"{role}-iter-{iteration}.patch"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "# L2-A binding proposal — requires SEAN approval; not auto-applied\n"
+            f"# reason: {reason}\n"
+            "--- pipeline.yaml\n"
+            "+++ pipeline.yaml\n"
+            f"@@ agents.{role} @@\n"
+            f"-  system_prompt_path: {spec.system_prompt_path.as_posix()}\n"
+            "+  # Choose an existing project-local, predeclared system prompt path.\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def _alignment_filesystem_delta(self, workspace: Path) -> tuple[list[str], list[str], list[str]]:
+        """Return the current Git-observed workspace delta without agent prose."""
+        created: list[str] = []
+        modified: list[str] = []
+        deleted: list[str] = []
+        for path, operation in self._get_git_diff_files(workspace):
+            if operation is Operation.CREATE:
+                created.append(path)
+            elif operation is Operation.DELETE:
+                deleted.append(path)
+            else:
+                modified.append(path)
+        try:
+            status = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=all"],
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if status.returncode == 0:
+                for line in status.stdout.splitlines():
+                    if line.startswith("?? "):
+                        created.append(line[3:])
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass
+        return sorted(set(created)), sorted(set(modified)), sorted(set(deleted))
 
     def _halt_on_protected_deletion(
         self, *, spec: AgentSpec, deleted: list[str], workspace_snapshot_id: str | None,

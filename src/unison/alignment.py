@@ -132,6 +132,8 @@ def write_execution_summary(
         raise AlignmentBindingError("execution contract task digest is invalid")
     if not isinstance(contract["sha256"], str) or len(contract["sha256"]) != 64:
         raise AlignmentBindingError("execution contract digest is invalid")
+    if contract["sha256"] != _canonical_sha256(contract):
+        raise AlignmentBindingError("execution contract digest does not match its contents")
     if not isinstance(contract["inputs"], list):
         raise AlignmentBindingError("execution contract inputs are invalid")
 

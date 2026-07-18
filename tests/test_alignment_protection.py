@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -64,6 +65,50 @@ def test_protected_deletion_restores_workspace_snapshot_and_halts(tmp_path):
     assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") == "rules"
     assert orchestrator.state().halt_signal is True
     assert "protected project input deleted" in orchestrator.state().halt_reason
+
+
+def test_invoke_path_writes_contract_bound_execution_summary(tmp_path, monkeypatch):
+    orchestrator = _orchestrator(tmp_path)
+    subprocess.run(["git", "init", "-b", "master"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "baseline"], cwd=tmp_path, check=True, capture_output=True)
+    spec = orchestrator.spec.agents["developer"]
+    runner = SimpleNamespace(run=lambda **_kwargs: AgentResult(
+        success=True, exit_code=0, duration=0.1, stdout_tail="untrusted", stderr_tail="",
+        log_path=tmp_path / "agent.log",
+    ))
+    monkeypatch.setattr(orchestrator, "_select_runner", lambda _role: (runner, spec))
+    monkeypatch.setattr(orchestrator, "_get_budget_tracker", lambda _role: SimpleNamespace(
+        check_budget=lambda: True,
+        add_usage=lambda *_args, **_kwargs: None,
+    ))
+    monkeypatch.setattr(orchestrator, "_build_prompt", lambda *_args, **_kwargs: "task")
+    monkeypatch.setattr(orchestrator._detector, "_get_commit", lambda _root: "baseline")
+    monkeypatch.setattr(orchestrator._detector, "detect", lambda **_kwargs: AgentResult(
+        success=True, exit_code=0, duration=0.1, stdout_tail="", stderr_tail="",
+        log_path=tmp_path / "agent.log",
+    ))
+
+    def create_source(*_args, **_kwargs):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "new.py").write_text("x = 1\n", encoding="utf-8")
+        return AgentResult(True, 0, 0.1, "untrusted", "", tmp_path / "agent.log")
+
+    runner.run = create_source
+    orchestrator._invoke_agent_for_role("developer", 1)
+
+    summaries = list(
+        orchestrator.spec.world.unison_run_dir_for(orchestrator._run_ctx)
+        .glob("alignment/execution-summaries/*.json")
+    )
+    assert len(summaries) == 1
+    summary = json.loads(summaries[0].read_text(encoding="utf-8"))
+    assert summary["inputs"][0]["kind"] == "system_prompt"
+    assert summary["filesystem_delta"]["created"] == ["src/new.py"]
+    assert summary["agent"]["pid"] is None
+    assert "untrusted" not in json.dumps(summary)
 
 
 def test_invoke_path_restores_protected_deletion_and_halts(tmp_path, monkeypatch):
