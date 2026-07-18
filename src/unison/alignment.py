@@ -97,6 +97,37 @@ def protected_deletions(workspace: Path, spec: AgentSpec, deleted: Sequence[str]
     return sorted(set(result))
 
 
+def verify_execution_contract(world: World, contract: Mapping[str, object]) -> tuple[str, ...]:
+    """Return typed deviations from a captured contract; never trusts agent prose."""
+    inputs = contract.get("inputs")
+    if not isinstance(inputs, list):
+        return ("contract:inputs_invalid",)
+    deviations: list[str] = []
+    root = world.root.resolve()
+    for entry in inputs:
+        if not isinstance(entry, dict):
+            return ("contract:input_invalid",)
+        kind = entry.get("kind")
+        relative = entry.get("path")
+        digest = entry.get("sha256")
+        if not isinstance(kind, str) or not isinstance(relative, str) or not isinstance(digest, str):
+            return ("contract:input_invalid",)
+        candidate = Path(relative)
+        try:
+            resolved = (root / candidate).resolve(strict=True)
+            if candidate.is_absolute():
+                raise ValueError
+            resolved.relative_to(root)
+        except (OSError, ValueError):
+            deviations.append(f"{kind}:path_invalid")
+            continue
+        if not resolved.is_file():
+            deviations.append(f"{kind}:path_invalid")
+        elif hashlib.sha256(resolved.read_bytes()).hexdigest() != digest:
+            deviations.append(f"{kind}:digest_mismatch")
+    return tuple(sorted(set(deviations)))
+
+
 def execution_summary_dir(world: World, ctx: RunContext) -> Path:
     return world.unison_run_dir_for(ctx) / "alignment" / "execution-summaries"
 

@@ -50,6 +50,7 @@ from unison.alignment import (
     AlignmentBindingError,
     build_execution_contract,
     protected_deletions,
+    verify_execution_contract,
     write_execution_summary,
 )
 from unison.llm_observer import (
@@ -68,7 +69,7 @@ from unison.context_deflate import assemble_context, extract_top_findings, parse
 from unison.budget import BudgetTracker, estimate_tokens
 from unison.usage import UsageRecord
 from unison.event_bus import get_event_bus
-from unison.runners.base import mask_secrets
+from unison.runners.base import BaseRunner, ProcessHandle, mask_secrets
 from unison.runners.claude import ClaudeRunner
 from unison.runners.codex import CodexRunner
 from unison.runners.hermes import HermesRunner
@@ -2661,21 +2662,36 @@ class Orchestrator:
             return
 
         risk_halted = False
+        alignment_process: ProcessHandle | None = None
         try:
-            result = runner.run(
-                spec=effective_spec,
-                prompt=prompt,
-                workdir=world.root,
-                timeout=self._effective_timeout(),
-                log_path=log_path,
-            )
+            if alignment_contract is not None and isinstance(runner, BaseRunner):
+                result, _, alignment_process = self._run_alignment_supervised(
+                    runner=runner,
+                    spec=effective_spec,
+                    prompt=prompt,
+                    workdir=world.root,
+                    timeout=self._effective_timeout(),
+                    log_path=log_path,
+                    contract=alignment_contract,
+                    workspace_snapshot_id=workspace_snapshot_id,
+                    role=role,
+                    iteration=iteration,
+                )
+            else:
+                result = runner.run(
+                    spec=effective_spec,
+                    prompt=prompt,
+                    workdir=world.root,
+                    timeout=self._effective_timeout(),
+                    log_path=log_path,
+                )
         finally:
             # F1b: Always evaluate external paths, even when a runner raises.
             if self._risk_evaluator is not None and self._snapshot_mgr is not None:
                 risk_halted = self._evaluate_post_invoke_risk(
                     world.root, snapshot_ids
                 )
-        if risk_halted:
+        if risk_halted or self._state.halt_signal:
             return
 
         deleted_paths = [
@@ -2697,8 +2713,8 @@ class Orchestrator:
                     contract=alignment_contract,
                     runtime=effective_spec.runtime,
                     model=effective_spec.model,
-                    pid=None,
-                    process_group=None,
+                    pid=alignment_process.pid if alignment_process is not None else None,
+                    process_group=alignment_process.process_group if alignment_process is not None else None,
                     started_at=alignment_started_at,
                     ended_at=datetime.now(timezone.utc).isoformat(),
                     result=result,
@@ -3211,6 +3227,122 @@ class Orchestrator:
             project_id=self.spec.world.project_id,
             allowed_paths=allowed_paths,
         )
+
+    def _run_alignment_supervised(
+        self,
+        *,
+        runner: BaseRunner,
+        spec: AgentSpec,
+        prompt: str,
+        workdir: Path,
+        timeout: int,
+        log_path: Path,
+        contract: dict,
+        workspace_snapshot_id: str | None,
+        role: str,
+        iteration: int,
+    ) -> tuple[AgentResult, bool, ProcessHandle | None]:
+        """Run one Linux headless role and correct only a verified contract drift.
+
+        This observes digests of inputs already captured before dispatch.  It
+        neither evaluates implementation quality nor accepts LLM free text.
+        """
+        if workspace_snapshot_id is None:
+            self.halt("L2-A requires a pre-dispatch workspace snapshot", category="external")
+            return AgentResult(False, -1, 0, "", "", log_path, error="alignment snapshot missing"), False, None
+        corrected = False
+        while not self._state.halt_signal:
+            started = threading.Event()
+            finished = threading.Event()
+            holder: dict[str, Any] = {}
+
+            def on_started(handle: ProcessHandle) -> None:
+                holder["handle"] = handle
+                started.set()
+
+            def invoke() -> None:
+                try:
+                    holder["result"] = runner.run(
+                        spec=spec,
+                        prompt=prompt,
+                        workdir=workdir,
+                        timeout=timeout,
+                        log_path=log_path,
+                        on_started=on_started,
+                    )
+                except BaseException as exc:
+                    holder["error"] = exc
+                finally:
+                    finished.set()
+
+            worker = threading.Thread(target=invoke, daemon=True)
+            worker.start()
+            deviation: tuple[str, ...] = ()
+            while not finished.wait(0.1):
+                if not started.is_set():
+                    continue
+                deviation = verify_execution_contract(self.spec.world, contract)
+                if deviation:
+                    break
+            if not deviation and finished.is_set():
+                worker.join()
+                deviation = verify_execution_contract(self.spec.world, contract)
+            elif not deviation:
+                deviation = verify_execution_contract(self.spec.world, contract)
+            if not deviation:
+                worker.join()
+                if "error" in holder:
+                    raise holder["error"]
+                result = holder.get("result")
+                if isinstance(result, AgentResult):
+                    return result, corrected, holder.get("handle") if isinstance(holder.get("handle"), ProcessHandle) else None
+                raise RuntimeError("runner returned no AgentResult")
+
+            handle = holder.get("handle")
+            if isinstance(handle, ProcessHandle) and self._kill_verified_alignment_process(handle):
+                worker.join()
+            elif finished.is_set():
+                worker.join()
+            else:
+                self.halt(
+                    "L2-A contract drift detected but process identity was not verifiable: " + ", ".join(deviation),
+                    category="external",
+                )
+                worker.join()
+                return AgentResult(
+                    False, -1, 0, "", "", log_path,
+                    error="alignment identity unknown",
+                ), corrected, handle if isinstance(handle, ProcessHandle) else None
+            try:
+                self._restore_snapshot(workspace_snapshot_id, [self.spec.world.root])
+            except (KeyError, FileNotFoundError, SnapshotBoundaryError):
+                self.halt("L2-A contract drift restore failed", category="external")
+                return holder.get("result", AgentResult(False, -1, 0, "", "", log_path, error="alignment restore failed")), corrected, handle
+            if self._state.alignment_corrections >= self.spec.llm_observer.alignment_max_corrections_per_run:
+                self.halt(
+                    "L2-A correction budget exhausted after contract drift: " + ", ".join(deviation),
+                    category="external",
+                )
+                self._save_checkpoint(iteration)
+                return holder.get("result", AgentResult(False, -1, 0, "", "", log_path, error="alignment correction budget exhausted")), corrected, handle
+            self._state.alignment_corrections += 1
+            self._save_checkpoint(iteration)
+            corrected = True
+        return AgentResult(False, -1, 0, "", "", log_path, error="alignment halted"), corrected, None
+
+    @staticmethod
+    def _kill_verified_alignment_process(handle: ProcessHandle) -> bool:
+        """Kill only the original verified dedicated headless process group."""
+        current = read_process_identity(handle.pid)
+        if current is None or current.start_identity != handle.start_identity:
+            return False
+        try:
+            if os.getpgid(handle.pid) != handle.process_group or handle.process_group != handle.pid:
+                return False
+            os.killpg(handle.process_group, signal.SIGKILL)
+            return True
+        except (ProcessLookupError, OSError):
+            return False
 
     def _alignment_input_bindings(
         self, spec: AgentSpec, iteration: int, review_phase: str,

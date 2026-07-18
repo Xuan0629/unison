@@ -277,6 +277,7 @@ class State:
     run_id: str = ""               # Canonical execution identity
     active_foreground_invocation: ForegroundInvocationState | None = None
     foreground_reconcile: ForegroundReconcileState | None = None
+    alignment_corrections: int = 0
 
     def __post_init__(self) -> None:
         if self.phase not in VALID_PHASES:
@@ -284,6 +285,9 @@ class State:
                 f"Invalid phase: {self.phase!r}. "
                 f"Must be one of {sorted(VALID_PHASES)}"
             )
+
+        if not isinstance(self.alignment_corrections, int) or isinstance(self.alignment_corrections, bool) or self.alignment_corrections < 0:
+            raise ValueError("alignment_corrections must be a non-negative integer")
 
     # ---- Serialization ------------------------------------------------------
 
@@ -320,6 +324,7 @@ class State:
                 if self.foreground_reconcile is not None
                 else None
             ),
+            "alignment_corrections": self.alignment_corrections,
         }
 
     @classmethod
@@ -361,6 +366,7 @@ class State:
             foreground_reconcile=ForegroundReconcileState.from_dict(
                 d.get("foreground_reconcile")
             ),
+            alignment_corrections=d.get("alignment_corrections", 0),
         )
 
     # ---- State Machine ------------------------------------------------------
