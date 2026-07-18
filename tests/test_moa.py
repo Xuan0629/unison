@@ -115,7 +115,7 @@ class TestMoaConfigYamlParsing:
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text("""
 version: "1.0"
-mode: moa
+mode: moa:analyze
 project_root: "."
 agents:
   developer:
@@ -260,8 +260,8 @@ agents:
 
         assert spec.mode == "moa"
 
-    def test_moa_mode_without_dev_reviewer_loads(self, tmp_path):
-        """mode: moa without developer/reviewer agents loads successfully.
+    def test_moa_analyze_without_dev_reviewer_loads(self, tmp_path):
+        """Canonical moa:analyze without developer/reviewer agents loads successfully.
 
         MoA generates analyzer/synthesizer agents dynamically from
         MoaConfig — developer and reviewer are not required.
@@ -269,7 +269,7 @@ agents:
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text("""
 version: "1.0"
-mode: moa
+mode: moa:analyze
 project_root: "."
 agents: {}
 moa:
@@ -279,17 +279,17 @@ moa:
         loader = PipelineLoader()
         spec = loader.load(pipeline_file)
 
-        assert spec.mode == "moa"
+        assert spec.mode == "moa:analyze"
         assert spec.moa is not None
         assert spec.moa.agents == 3
         assert spec.moa.rounds == 2
 
-    def test_moa_mode_without_agents_section_loads(self, tmp_path):
-        """mode: moa without an agents: section at all loads successfully."""
+    def test_moa_analyze_without_agents_section_loads(self, tmp_path):
+        """Canonical moa:analyze without an agents: section loads successfully."""
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text("""
 version: "1.0"
-mode: moa
+mode: moa:analyze
 project_root: "."
 moa:
   agents: 2
@@ -298,7 +298,7 @@ moa:
         loader = PipelineLoader()
         spec = loader.load(pipeline_file)
 
-        assert spec.mode == "moa"
+        assert spec.mode == "moa:analyze"
         assert spec.moa is not None
         assert spec.moa.agents == 2
         assert spec.moa.rounds == 1
@@ -507,11 +507,12 @@ class TestMoaPhaseSequence:
     """MoA is NOT routed through PhaseRouter — verified absence."""
 
     def test_moa_not_in_phaserouter(self):
-        """moa mode returns empty list — MoA bypasses PhaseRouter."""
-        phases = PhaseRouter.get_phases("moa")
-        assert phases == [], (
-            "MoA should NOT be in PhaseRouter.PHASES_BY_MODE — "
-            "it is driven by MoaConfig.rounds in _run_moa_pipeline()"
+        """Canonical and legacy MoA modes bypass PhaseRouter."""
+        assert PhaseRouter.get_phases("moa:analyze") == [], (
+            "Canonical MoA should bypass PhaseRouter and use MoaConfig.rounds"
+        )
+        assert PhaseRouter.get_phases("moa") == [], (
+            "Legacy MoA alias should preserve the same bypass behavior"
         )
 
     def test_moa_not_in_all_modes(self):

@@ -2343,13 +2343,13 @@ class TestModeValidation:
         valid_modes = [
             "code-dev", "full-dev", "design-debate", "inspect-only",
             "agent-fix", "migrate", "greenfield", "spec-driven",
-            "moa", "chain",
+            "moa:analyze", "chain",
         ]
         for mode in valid_modes:
             pipeline_file = tmp_path / f"test_{mode}.yaml"
             agents_block = {}
-            if mode == "moa":
-                # MoA mode doesn't require developer/reviewer agents
+            if mode.startswith("moa:"):
+                # MoA modes don't require developer/reviewer agents.
                 agents_block = {}
             elif mode == "inspect-only":
                 agents_block = {

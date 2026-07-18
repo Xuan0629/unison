@@ -1202,16 +1202,16 @@ agents:
         # Main pipeline (chain mode)
         main_file = self._write_minimal_pipeline(tmp_path, "pipeline.yaml", "chain")
 
-        # Stage pipeline (moa mode)
+        # Stage pipeline (canonical MoA analyze mode)
         stage_pipeline_rel = "pipelines/stage1.yaml"
         stage_file = self._write_minimal_pipeline(
-            tmp_path, stage_pipeline_rel, "moa",
+            tmp_path, stage_pipeline_rel, "moa:analyze",
         )
 
         loader = PipelineLoader()
         spec = loader.load(main_file)
         spec.chain.stages = [
-            ChainStage(mode="moa", pipeline=stage_pipeline_rel),
+            ChainStage(mode="moa:analyze", pipeline=stage_pipeline_rel),
         ]
 
         orch = Orchestrator(spec=spec)
@@ -1235,13 +1235,13 @@ agents:
         """
         main_file = self._write_minimal_pipeline(tmp_path, "pipeline.yaml", "chain")
         stage_file = self._write_minimal_pipeline(
-            tmp_path, "pipelines/stage1.yaml", "moa",
+            tmp_path, "pipelines/stage1.yaml", "moa:analyze",
         )
 
         loader = PipelineLoader()
         spec = loader.load(main_file)
         spec.chain.stages = [
-            ChainStage(mode="moa", pipeline="pipelines/stage1.yaml"),
+            ChainStage(mode="moa:analyze", pipeline="pipelines/stage1.yaml"),
         ]
 
         orch = Orchestrator(spec=spec)
@@ -1261,20 +1261,20 @@ agents:
         # subdirectory), so agents can find src/, tests/, prd/.
         expected_project_root = tmp_path.resolve()
         assert captured_spec.world.root == expected_project_root
-        # Mode should be overridden to the stage's mode
-        assert captured_spec.mode == "moa"
+        # Mode should be overridden to the canonical stage mode
+        assert captured_spec.mode == "moa:analyze"
 
     def test_stage_pipeline_restores_spec_after_run(self, tmp_path, monkeypatch):
         """After a stage with pipeline runs, self.spec is restored."""
         main_file = self._write_minimal_pipeline(tmp_path, "pipeline.yaml", "chain")
         stage_file = self._write_minimal_pipeline(
-            tmp_path, "pipelines/stage1.yaml", "moa",
+            tmp_path, "pipelines/stage1.yaml", "moa:analyze",
         )
 
         loader = PipelineLoader()
         spec = loader.load(main_file)
         spec.chain.stages = [
-            ChainStage(mode="moa", pipeline="pipelines/stage1.yaml"),
+            ChainStage(mode="moa:analyze", pipeline="pipelines/stage1.yaml"),
         ]
 
         orch = Orchestrator(spec=spec)
@@ -1353,7 +1353,7 @@ agents:
 
         stage_file = stage_dir / "stage1.yaml"
         stage_file.write_text("""version: "2.0"
-mode: moa
+mode: moa:analyze
 project_root: "."
 agents:
   developer:
@@ -1371,7 +1371,7 @@ agents:
         loader = PipelineLoader()
         spec = loader.load(main_file)
         spec.chain.stages = [
-            ChainStage(mode="moa", pipeline="pipelines/stage1.yaml"),
+            ChainStage(mode="moa:analyze", pipeline="pipelines/stage1.yaml"),
         ]
 
         orch = Orchestrator(spec=spec)

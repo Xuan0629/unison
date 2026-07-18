@@ -2191,7 +2191,7 @@ class TestMoaBudgetPrecheck:
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text(f"""
 version: "1.0"
-mode: moa
+mode: moa:analyze
 project_root: "{world_root}"
 agents:
   developer:
@@ -2248,7 +2248,7 @@ budget:
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text(f"""
 version: "1.0"
-mode: moa
+mode: moa:analyze
 project_root: "{world_root}"
 agents:
   developer:
