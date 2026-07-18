@@ -178,8 +178,8 @@ class BootstrapConfig:
 @dataclass(frozen=True)
 class BudgetConfig:
     """Token 预算。"""
-    daily_token_limit: int = 1_000_000
-    per_task_limit: int = 200_000
+    daily_token_limit: int | None = None
+    per_task_limit: int | None = None
     cost_tracking: Literal["approximate", "api_callback"] = "approximate"
     overflow_action: Literal["downgrade", "halt"] = "downgrade"
     halt_action: Literal["halt_only"] = "halt_only"

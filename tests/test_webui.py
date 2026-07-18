@@ -592,9 +592,9 @@ class TestLoadBudget:
             budget = handler._load_budget()
         assert budget == {
             "daily_used": 0,
-            "daily_limit": 1_000_000,
+            "daily_limit": None,
             "per_task_used": 0,
-            "per_task_limit": 200_000,
+            "per_task_limit": None,
             "phase_usage": [],
         }
 
@@ -745,7 +745,7 @@ class TestLoadBudget:
             )
         assert budget["daily_used"] == 0
         assert budget["per_task_used"] == 0
-        assert budget["daily_limit"] == 1_000_000
+        assert budget["daily_limit"] is None
 
 
 # ============================================================================

@@ -453,6 +453,18 @@ class TestAssembleContext:
         )
         assert isinstance(result, AssembledContext)
 
+    def test_unlimited_budget_keeps_all_available_sections(self):
+        result = assemble_context(
+            system_prompt="system",
+            prd_content="prd " * 500,
+            design_content="design " * 500,
+            last_review_findings="finding " * 500,
+            git_diff="diff " * 500,
+            phase_summary="summary " * 500,
+            token_budget=None,
+        )
+        assert result.truncated_sections == []
+
     def test_system_prompt_exceeds_budget(self):
         """Raises ContextBudgetError when system_prompt alone exceeds budget."""
         long_prompt = "x" * 10000  # ~2500 tokens at 4 chars/token

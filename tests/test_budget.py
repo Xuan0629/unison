@@ -93,6 +93,12 @@ class TestBudgetTracker:
         tracker.add_usage(150)
         assert tracker.check_budget() is False
 
+    def test_unlimited_limits_never_gate_or_downgrade(self):
+        tracker = BudgetTracker(daily_limit=None, per_task_limit=None)
+        tracker.add_usage(1_000_000)
+        assert tracker.check_budget() is True
+        assert tracker.should_downgrade() is False
+
 
 # ============================================================================
 # BudgetTracker — V2 property upgrade

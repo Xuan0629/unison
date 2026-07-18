@@ -451,8 +451,8 @@ class UnisonHandler(BaseHTTPRequestHandler):
                 except (json.JSONDecodeError, OSError):
                     pass
 
-        daily_limit = 1_000_000
-        per_task_limit = 200_000
+        daily_limit = None
+        per_task_limit = None
         if pipeline:
             bc = pipeline.get("budget")
             if isinstance(bc, dict):

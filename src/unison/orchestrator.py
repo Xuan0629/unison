@@ -4201,14 +4201,14 @@ class Orchestrator:
         if role == "developer" and iteration > 1:
             carry_forward = self._build_carry_forward(iteration, review_phase)
 
-        # Compute remaining budget (clamp to >= 1 to avoid ContextBudgetError
-        # when the tracker is already over the daily limit).
-        # Per-task cap takes precedence over daily cap — a per-agent
-        # context_budget=50000 is meaningless if assemble_context gets
-        # the full 1M daily budget (Codex Iter 2 finding).
-        daily_remaining = tracker.daily_limit - tracker.current_usage
-        per_task_remaining = tracker.per_task_limit - tracker._per_task_used
-        remaining = max(1, min(daily_remaining, per_task_remaining))
+        # Only explicit token limits constrain prompt assembly. Without one,
+        # context assembly includes the available bounded artifacts intact.
+        remaining_limits = []
+        if tracker.daily_limit is not None:
+            remaining_limits.append(tracker.daily_limit - tracker.current_usage)
+        if tracker.per_task_limit is not None:
+            remaining_limits.append(tracker.per_task_limit - tracker._per_task_used)
+        remaining = max(1, min(remaining_limits)) if remaining_limits else None
 
         # Build role-specific task instruction
         if agent_spec and agent_spec.task_instruction:
@@ -4329,10 +4329,11 @@ class Orchestrator:
         prev_verdict = self._state.last_review_verdict or "N/A"
         phase = self._state.phase
         phase_label = "planning" if "planning" in phase else ("dev" if "dev" in phase else phase)
+        budget_status = "unlimited" if remaining is None else f"{remaining} tokens"
         psum = (f"mode: {self.spec.mode or 'auto'}, phase: {phase_label}, "
                 f"iteration: {iteration}/{self.spec.max_iterations}, "
                 f"prev_verdict: {prev_verdict}, "
-                f"budget_remaining: {remaining} tokens")
+                f"budget_remaining: {budget_status}")
 
         assembled = assemble_context(
             system_prompt=full_system + dev_notes,

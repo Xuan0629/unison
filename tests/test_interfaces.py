@@ -195,6 +195,39 @@ class TestMoaConfig:
 
 
 class TestBudgetConfig:
+    def test_defaults_are_unlimited(self):
+        """Unset token limits do not impose a budget gate."""
+        cfg = BudgetConfig()
+        assert cfg.daily_token_limit is None
+        assert cfg.per_task_limit is None
+
+    def test_loader_defaults_to_unlimited_limits(self, tmp_path):
+        from unison.pipeline import PipelineLoader
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(f'''version: "1.0"
+project_root: "{tmp_path}"
+agents:
+  developer:
+    role: developer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/developer.md"
+  reviewer:
+    role: reviewer
+    runtime: claude
+    model: test
+    system_prompt_path: "prompts/reviewer.md"
+''')
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "developer.md").write_text("developer")
+        (prompts / "reviewer.md").write_text("reviewer")
+
+        cfg = PipelineLoader().load(pipeline_file).budget
+        assert cfg.daily_token_limit is None
+        assert cfg.per_task_limit is None
+
     def test_tier_upgrade_defaults_to_empty_dict(self):
         """tier_upgrade defaults to empty dict."""
         cfg = BudgetConfig()

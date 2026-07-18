@@ -4193,6 +4193,7 @@ version: "1.0"
 project_root: "."
 per_agent_timeout: 600
 budget:
+  daily_token_limit: 1000000
   overflow_action: {overflow_action}
   downgrade_map:
     reviewer:
@@ -4317,6 +4318,7 @@ version: "1.0"
 project_root: "."
 per_agent_timeout: 600
 budget:
+  daily_token_limit: 1000000
   overflow_action: {overflow_action}
 {dm_yaml}
 agents:
@@ -4490,6 +4492,7 @@ version: "1.0"
 project_root: "."
 per_agent_timeout: 600
 budget:
+  daily_token_limit: 1000000
   overflow_action: downgrade
 {dm_yaml}
 snapshots:{snaps_yaml}

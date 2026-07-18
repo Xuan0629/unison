@@ -121,8 +121,8 @@ class BudgetTracker:
 
     def __init__(
         self,
-        daily_limit: int,
-        per_task_limit: int,
+        daily_limit: int | None,
+        per_task_limit: int | None,
         persist_path: Path | None = None,
         daily_persist_path: Path | None = None,  # P1-2: separate daily from task
     ) -> None:
@@ -229,7 +229,7 @@ class BudgetTracker:
     # set_per_task_limit — thread-safe per-task limit update
     # ------------------------------------------------------------------
 
-    def set_per_task_limit(self, limit: int) -> None:
+    def set_per_task_limit(self, limit: int | None) -> None:
         """Set a new per-task limit, under the tracker's lock.
 
         This is the thread-safe way to update the limit mid-pipeline
@@ -310,16 +310,16 @@ class BudgetTracker:
         Thread-safe via ``threading.Lock`` (P8 S13).
 
         Returns:
-            True when ``daily_used < daily_limit`` **and**
-            ``per_task_used < per_task_limit``, False otherwise.
+            True when every configured token limit remains below usage.
+            ``None`` means unlimited for that dimension.
         """
         with self._lock:
             self._refresh_ledger()
             if self._persistence_failed:
                 return False
             return (
-                self._daily_used < self.daily_limit
-                and self._per_task_used < self.per_task_limit
+                (self.daily_limit is None or self._daily_used < self.daily_limit)
+                and (self.per_task_limit is None or self._per_task_used < self.per_task_limit)
             )
 
     # ------------------------------------------------------------------
@@ -335,7 +335,7 @@ class BudgetTracker:
         Returns:
             True when ``daily_used / daily_limit >= 0.8``.
         """
-        if self.daily_limit <= 0:
+        if self.daily_limit is None or self.daily_limit <= 0:
             return False
         with self._lock:
             self._refresh_ledger()

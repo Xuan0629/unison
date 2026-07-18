@@ -1,10 +1,10 @@
-# Unison 1.0 Deep Usage Manual · 深度使用手册
+# Unison Deep Usage Manual · 深度使用手册
 
 [English README](../README.md) · [中文 README](../README_CN.md)
 
-This manual is the operational contract for Unison 1.0. Each chapter presents English and Chinese together. Commands, field names, paths, and YAML examples are shared because they are language-independent.
+This manual documents the current `master` development source. The published package is 1.0.0; `master` contains unreleased v1.1 work and must not be treated as a tagged release until its release gates are complete.
 
-本手册是 Unison 1.0 的操作契约。每章均同时提供英文与中文；命令、字段名、路径和 YAML 示例不重复翻译，因为它们与语言无关。
+本手册描述当前 `master` 开发源码。已发布包是 1.0.0；`master` 包含未发布的 v1.1 工作，在 release gate 完成前不得把它当作已打 tag 的正式发布版。
 
 > [!WARNING]
 > Unison coordinates autonomous CLI agents that may bypass their own permission prompts. Read [Chapter 3: Safety model](#3-safety-model--安全模型) before running it on a real repository.
@@ -113,18 +113,19 @@ python3 -m pytest tests/ -q --timeout=30
 
 ### 2.2 Supported agent runtimes · 支持的 Agent Runtime
 
-Unison 1.0 accepts exactly these runtime keys:
+Unison currently accepts these runtime keys:
 
 | Key | Required executable | Invocation characteristics |
 |---|---|---|
 | `claude` | `claude` | Claude Code subprocess; model and reasoning effort can be forwarded. |
 | `codex` | `codex` | `codex exec` subprocess with model forwarding. |
 | `hermes` | `hermes` | `hermes chat` subprocess. |
+| `crush` | `crush` | Serial `headless_bypass` only; each invocation gets isolated state, never reuses a session, and records unavailable usage/cost unless upstream returns a complete verified breakdown. |
 | `openclaw` | `openclaw` | `openclaw agent` CLI; each invocation gets a unique session key. |
 
-Unison 1.0 只接受上述四个 runtime key。README 旧版本曾展示 `runtime: custom`，但当前 `PipelineLoader` 会拒绝它。要接入其他 CLI，需要先实现并注册 Runner，而不是只改 YAML。
+Only the binaries used by the selected agents are required. OpenClaw is exempt from the CLI preflight binary check in `unison run`, so verify its gateway and CLI yourself before an unattended run. Crush rejects foreground, MoA, chain, DAG, and all parallel dispatch.
 
-Before running a pipeline, verify each selected executable independently:
+当前源码接受以下 runtime key：`claude`、`codex`、`hermes`、`crush`、`openclaw`。其中 Crush 仅支持串行 `headless_bypass`；每次调用使用隔离 state、不复用 session，且在上游没有完整且可验证的 usage breakdown 时标记 token/cost 为 unavailable。只需安装所选 Agent 使用的 executable。`unison run` 的工具预检不会检查 OpenClaw，因此无人值守前应自行验证其 CLI 与 gateway；Crush 会拒绝 foreground、MoA、chain、DAG 和一切并行 dispatch。
 
 ```bash
 claude --version
@@ -335,7 +336,7 @@ Relative `project_root` is resolved relative to the pipeline YAML directory, not
 | `agents` | required except MoA | Named agent specifications. |
 | `project` | defaults | Language and test/build/lint commands. |
 | `bootstrap.commands` | `[]` | Commands executed before pipeline phases. Treat as trusted code. |
-| `budget` | defaults | Daily/task token limits and overflow policy. |
+| `budget` | defaults: unlimited token limits; explicit values enable daily/task token guards and overflow policy. Cost is recorded with provenance but has no cost cap. |
 | `snapshots` | enabled | External-path snapshot policy. |
 | `risk_matrix` | defaults | Critical paths and operation/scope rules. |
 | `dag` | none | Stage dependency descriptions. |
@@ -734,6 +735,24 @@ Controls are consumed at orchestrator boundaries, not as arbitrary process signa
 
 面板提供按 run 隔离的 `pause`、`skip`、`report`。它们需要有效 token、明确项目、真实 native run ID，且 run 必须仍在运行。Control 在 Orchestrator 边界消费，不是任意进程信号；`skip` 仍应有质量证据。
 
+### 8.5 Foreground recovery · 前台执行恢复
+
+The `interactive` execution policy may dispatch Claude or Codex into a visible native terminal. It never auto-approves prompts, injects terminal input, retries a foreground invocation, or falls back to headless execution. Foreground is sequential and rejects MoA, chain, DAG, parallel development, Hermes, OpenClaw, and Crush.
+
+```bash
+# Verify a completed foreground invocation and continue its persisted serial state
+unison reconcile --pipeline ./pipeline.yaml
+
+# Replace only an interrupted invocation whose old child/process group is proven dead
+unison resume --pipeline ./pipeline.yaml
+```
+
+`reconcile` consumes only matching durable result evidence and is idempotent. Missing, malformed, stale, or identity-mismatched result evidence fails closed. `resume` is not a retry: it records an old-to-new invocation lineage and rechecks liveness immediately before replacement. macOS Terminal.app launcher code exists in `master`, but real macOS GUI validation remains a release gate.
+
+`interactive` execution policy 可以将 Claude 或 Codex dispatch 到可见 native terminal。它绝不会自动批准 prompt、写入 terminal input、重试 foreground invocation 或回退到 headless execution。Foreground 是串行的，会拒绝 MoA、chain、DAG、parallel development、Hermes、OpenClaw 与 Crush。
+
+`reconcile` 只消费匹配的持久 result evidence，并且幂等；缺失、畸形、过期或 identity 不匹配的 result evidence 会 fail closed。`resume` 不是 retry：它记录 old-to-new invocation lineage，并在 replacement 前立即复查 liveness。`master` 中已有 macOS Terminal.app launcher 代码，但真实 macOS GUI 验证仍是 release gate。
+
 ---
 
 <a id="9-artifacts-isolation-and-recovery--产物隔离与恢复"></a>
@@ -906,6 +925,8 @@ Do not bind or proxy the WebUI to a public interface by default. The control tok
 ### 11.1 Budget configuration · 预算配置
 
 ```yaml
+# Omit budget entirely for unlimited token and cost use.
+# Add only the caps you intend to enforce:
 budget:
   daily_token_limit: 1000000
   per_task_limit: 200000
@@ -921,6 +942,7 @@ budget:
 
 Behavior:
 
+- when `budget` or an individual token-limit key is omitted, that token dimension is unlimited; cost has no cap unless a future explicit cost-cap field is introduced;
 - daily usage is project-scoped;
 - task usage is run-scoped;
 - one authoritative versioned ledger is protected by a persistent file lock;
@@ -929,7 +951,7 @@ Behavior:
 - malformed, unknown-version, or unwritable ledgers fail closed;
 - after persistence failure, `check_budget()` rejects work and later writes raise.
 
-行为：daily 用量按项目共享，task 用量按 run 隔离；一个带版本的权威 ledger 使用文件锁；并发 tracker 合并增量；跨日只重置 daily；损坏、未知 schema 或不可写时 fail closed。
+行为：未写 `budget` 或某个 token limit 时，该 token 维度无限；当前 cost 只做 provenance 记录，没有 cost cap（未来如新增 cost cap，必须显式配置）。daily 用量按项目共享，task 用量按 run 隔离；一个带版本的权威 ledger 使用文件锁；并发 tracker 合并增量；跨日只重置 daily；损坏、未知 schema 或不可写时 fail closed。
 
 Token usage is estimated from prompt text unless a stronger integration supplies authoritative counts. Budget thresholds are operational guards, not invoices.
 
@@ -1069,19 +1091,34 @@ Use only from a clean Git repository. Decide merge/conflict policy before runnin
 
 只在 clean Git 仓库使用。运行前先决定 merge/conflict policy，并确保 worktree 不进入发布产物。
 
-### 12.5 Observer · Observer
+### 12.5 Observer authority · Observer 权限
 
-```bash
-unison observe --project /path/to/project
-```
+Observer is explicitly enabled only for headless execution. It runs independently from agent sessions and consumes a run-bound, redacted manifest rather than ambient chat state. It does not run for `foreground_manual` execution.
 
-The Observer watches state and notification files using inotify on Linux with polling fallback. It performs liveness checks, emits structured local events, writes reports, and can create intervention control files when repeated review changes meet its rules.
+Current implementation:
 
-Observer 在 Linux 优先使用 inotify，失败时回退 polling；它执行 liveness 检查、写结构化本地事件和报告，并可在重复 REQUEST_CHANGES 满足规则时创建干预 control。
+- **L0 observe/report:** Hermes or Claude performs a no-tool independent observation and persists only a bounded status/summary plus append-only audit metadata.
+- **Narrow L1 subset:** only the verified Claude structured binding may propose an evidence-bound `halt`, or redirect the one configured developer through a fixed locally compiled directive. A proposal binds project, pipeline, run, phase, iteration, manifest SHA-256, and evidence IDs. A digest-keyed receipt is persisted before consumption and blocks replay.
+- Typed control is rejected for foreground, MoA, chain, DAG, and parallel-development dispatch. It cannot approve terminal prompts, send terminal input, kill/attach processes, run `reconcile`/`resume`, mutate runtime configuration, or treat model output as proof of liveness/completion/safety.
 
-Built-in Discord webhook delivery is disabled in 1.0. Integrate an external process with `observer/notifications.jsonl` if remote delivery is required. Delivery semantics, retries, credentials, and privacy then belong to that integration.
+Approved design direction, not yet implemented:
 
-1.0 已禁用内建 Discord webhook。需要远程投递时，应由外部进程消费 `observer/notifications.jsonl`；投递语义、重试、凭据和隐私由该集成负责。
+- **L1 evidence intervention:** pause, halt, require independent re-review, and read bounded per-role work summaries.
+- **L2 worldline correction:** change only versioned YAML-allowlisted runtime/model/timeout/retry policy, write an independent receipt before action, retain the prior policy for rollback, and bind the correction to a fresh evidence manifest. Free-form LLM text never becomes a command, prompt, configuration value, credential, or permission grant.
+
+Observer 是仅在 headless execution 下显式开启的监督策略。它独立于 Agent session 运行，只消费 run-bound、已脱敏的 manifest，不读取环境聊天状态；`foreground_manual` 时不能运行。
+
+当前实现：
+
+- **L0 观察/汇报：** Hermes 或 Claude 执行无工具的独立观察，只持久化受限的 status/summary 与 append-only audit metadata。
+- **狭窄 L1 子集：** 只有经过验证的 Claude structured binding 能基于证据提议 `halt`，或通过本地编译的固定 directive 重定向唯一已配置 Developer。proposal 绑定 project、pipeline、run、phase、iteration、manifest SHA-256 和 evidence ID；动作前持久化 digest-keyed receipt，receipt 会阻止重放。
+- typed control 会在 foreground、MoA、chain、DAG、parallel-development dispatch 中被拒绝；它不能批准 terminal prompt、写入 terminal input、kill/attach process、执行 `reconcile`/`resume`、修改 runtime config，也不能将模型输出当成存活/完成/安全状态的证明。
+
+已批准但尚未实现的设计方向：
+
+- **L1 证据干预：** pause、halt、要求独立 re-review，以及读取受限的按角色工作总结。
+- **L2 世界线修正：** 仅修改 versioned YAML allowlist 中的 runtime/model/timeout/retry policy；动作前写独立 receipt、保留旧 policy 以供 rollback，并将修正绑定到新的 evidence manifest。LLM 自由文本永远不能成为 command、prompt、config value、credential 或 permission grant。
+
 
 ---
 

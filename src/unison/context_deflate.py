@@ -343,7 +343,7 @@ def assemble_context(
     git_diff: str = "",
     phase_summary: str = "",  # P1-1: optional phase status injection
     phase: str = "dev",       # P2-1: phase-aware priority ("planning" or "dev")
-    token_budget: int,
+    token_budget: int | None,
     chars_per_token: float = 4.0,
 ) -> AssembledContext:
     """Assemble a prompt from sections, fitting within *token_budget*.
@@ -377,6 +377,31 @@ def assemble_context(
         ContextBudgetError: When *system_prompt* alone exceeds the budget.
     """
     truncated_sections: list[str] = []
+    if token_budget is None:
+        sections = [system_prompt]
+        if phase_summary:
+            sections.append("\n## Phase Status\n" + phase_summary)
+        if last_review_findings:
+            sections.append("\n## Last Review Findings\n" + last_review_findings)
+        if "planning" in phase:
+            ordered_sections = (
+                ("\n## Design\n", design_content),
+                ("\n## PRD\n", prd_content),
+                ("\n## Git Diff\n", git_diff),
+            )
+        else:
+            ordered_sections = (
+                ("\n## Git Diff\n", git_diff),
+                ("\n## Design\n", design_content),
+                ("\n## PRD\n", prd_content),
+            )
+        sections.extend(header + content for header, content in ordered_sections if content)
+        prompt = "\n".join(sections)
+        return AssembledContext(
+            prompt=prompt,
+            estimated_tokens=_estimate_tokens(prompt, chars_per_token),
+            truncated_sections=[],
+        )
 
     # --- system_prompt (priority 1) ---
     sys_est = _estimate_tokens(system_prompt, chars_per_token)

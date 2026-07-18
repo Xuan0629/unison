@@ -111,9 +111,12 @@ class TestLoadState:
     def test_budget_has_required_fields(self, obs: Observatory):
         state = obs.load_state()
         b = state["budget"]
-        for field in ("daily_used", "daily_limit", "per_task_used", "per_task_limit"):
+        for field in ("daily_used", "per_task_used"):
             assert field in b, f"Missing budget field: {field}"
             assert isinstance(b[field], int)
+        for field in ("daily_limit", "per_task_limit"):
+            assert field in b, f"Missing budget field: {field}"
+            assert b[field] is None or isinstance(b[field], int)
 
     def test_mode_is_present(self, obs: Observatory):
         state = obs.load_state()

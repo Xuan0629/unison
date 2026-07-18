@@ -15,7 +15,7 @@ Unison is a **local-first, file-driven Loop Engineering pipeline** for coordinat
 
 It is not an LLM provider, a chat UI, or a replacement for Claude Code, Codex, Hermes, or OpenClaw. It is the orchestration and reliability layer around them.
 
-- **Version:** 1.0.0
+- **Published release:** 1.0.0. The `master` branch is the unreleased v1.1 development source; do not treat it as a versioned release until its release gates and tag are complete.
 - **Platforms:** Linux and macOS; Windows through WSL. Native Windows is not supported because core locking uses `fcntl.flock`.
 - **Runtime model:** local subprocesses and files; no LangChain, CrewAI, or AutoGen dependency.
 - **License:** Apache License 2.0
@@ -98,17 +98,17 @@ Unison can automate implementation and verification loops; it cannot decide what
 ```bash
 python3 -m pip install unison-wanwuyixin
 
-# Or install from source
-# git clone https://github.com/Xuan0629/unison.git
-# cd unison
-# pip install -e .
+# Or use the current development source (not the v1.0.0 release artifact)
+git clone https://github.com/Xuan0629/unison.git
+cd unison
+python3 -m pip install -e .
 ```
 
 Requirements:
 
 - Python 3.12+
 - Git
-- at least one configured CLI runtime used by your pipeline (`claude`, `codex`, `hermes`, or `openclaw`)
+- at least one configured CLI runtime used by your pipeline (`claude`, `codex`, `hermes`, `crush`, or `openclaw`)
 - two independent runtimes or providers are recommended for developer/reviewer separation
 
 ### 2. Generate a starter pipeline
@@ -195,9 +195,10 @@ See the [manual](docs/MANUAL.md) for exact phase behavior, compatibility notes, 
 | Claude Code | `claude` | Local `claude` subprocess with explicit model/effort forwarding. |
 | Codex CLI | `codex` | Local `codex exec` subprocess. |
 | Hermes | `hermes` | Local `hermes chat` subprocess. |
+| Crush | `crush` | Verified serial `headless_bypass` adapter with isolated per-invocation state; no session reuse or foreground/parallel mode. |
 | OpenClaw | `openclaw` | Local `openclaw agent` CLI with a unique session key per invocation. |
 
-Unison v1.0 validates these four runtime keys. The implementation is intentionally narrow: adding an arbitrary `runtime: custom` entry is not currently supported by `PipelineLoader`.
+The current development source validates these five runtime keys. The implementation is intentionally narrow: adding an arbitrary `runtime: custom` entry is not currently supported by `PipelineLoader`.
 
 `mode: custom` is different from a custom Runtime. In v1.0 it accepts an ordered, non-repeating subset of `planning`, `discuss`, `spec-check`, `dev`, and `review`. The Loader enforces dependencies and required `pipeline_role` mappings, and execution reuses the built-in bounded handlers.
 
@@ -240,10 +241,18 @@ Control endpoints use a generated session token stored with owner-only permissio
 9. **Review the Git diff and test evidence before release.** A pipeline `PASS` is evidence, not ownership of the final decision.
 10. **Use the WebUI as an observer, not the source of truth.** The authoritative inputs remain pipeline YAML and run state on disk.
 
+## Observer authority
+
+Observer is an explicit headless-only supervisory policy, not an ambient chat agent. Current `master` supports report-only independent Hermes/Claude observations and a narrow Claude structured-control path at serial dispatch boundaries: evidence-bound `halt`, or one fixed locally compiled redirect directive for the sole developer. Every proposal binds the project, pipeline, run, phase, iteration, manifest digest, and allowlisted evidence; a digest-keyed receipt is written before action and blocks replay.
+
+The approved v1.1 direction is three levels: **L0 observe/report**, **L1 evidence intervention** (pause, halt, require re-review, bounded role-summary access), and **L2 worldline correction** (only versioned YAML-allowlisted runtime/model/timeout/retry policy changes with an independent receipt and rollback). L2 is a design commitment, not current behavior. Observer never operates in interactive foreground mode.
+
 ## CLI reference
 
 ```text
 unison run       Run a pipeline
+unison reconcile Consume verified completion evidence from a foreground run
+unison resume    Replace only a proven-dead interrupted foreground invocation
 unison dry-run   Validate a pipeline without invoking agents
 unison mode      Print the selected mode
 unison init      Interactive starter generator
