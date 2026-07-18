@@ -49,7 +49,9 @@ from unison.io import atomic_read_json, atomic_write_json
 from unison.alignment import (
     AlignmentBindingError,
     build_execution_contract,
+    missing_protected_paths,
     protected_deletions,
+    protected_existing_paths,
     verify_execution_contract,
     write_execution_summary,
 )
@@ -2582,6 +2584,10 @@ class Orchestrator:
                 self.halt(f"L2-A workspace snapshot failed: {exc}", category="external")
                 return
 
+        protected_before: tuple[str, ...] = ()
+        if self.spec.llm_observer.alignment_enabled:
+            protected_before = protected_existing_paths(world.root, effective_spec)
+
         # 4. Build prompt (uses BudgetTracker for token budget)
         prompt = self._build_prompt(role, iteration, review_phase=review_phase)
         if self._llm_redirect_directive:
@@ -2664,7 +2670,13 @@ class Orchestrator:
         risk_halted = False
         alignment_process: ProcessHandle | None = None
         try:
-            if alignment_contract is not None and isinstance(runner, BaseRunner):
+            if alignment_contract is not None:
+                if not isinstance(runner, BaseRunner):
+                    self.halt(
+                        "L2-A requires a BaseRunner with verified lifecycle evidence",
+                        category="external",
+                    )
+                    return
                 result, _, alignment_process = self._run_alignment_supervised(
                     runner=runner,
                     spec=effective_spec,
@@ -2698,6 +2710,8 @@ class Orchestrator:
             path for path, operation in self._get_git_diff_files(world.root)
             if operation is Operation.DELETE
         ]
+        if self.spec.llm_observer.alignment_enabled:
+            deleted_paths.extend(missing_protected_paths(world.root, protected_before))
         if self.spec.llm_observer.alignment_enabled and self._halt_on_protected_deletion(
             spec=effective_spec,
             deleted=deleted_paths,
@@ -2715,7 +2729,7 @@ class Orchestrator:
                     model=effective_spec.model,
                     pid=alignment_process.pid if alignment_process is not None else None,
                     process_group=alignment_process.process_group if alignment_process is not None else None,
-                    started_at=alignment_started_at,
+                    started_at=alignment_process.started_at if alignment_process is not None else alignment_started_at,
                     ended_at=datetime.now(timezone.utc).isoformat(),
                     result=result,
                     created=created,

@@ -79,6 +79,25 @@ def build_execution_contract(
 _GOVERNANCE_FILENAMES = frozenset({"CLAUDE.md", "AGENTS.md", "pipeline.yaml", "unison.yaml"})
 
 
+def protected_existing_paths(workspace: Path, spec: AgentSpec) -> tuple[str, ...]:
+    """Capture pre-dispatch protected inputs that exist and must survive a role."""
+    candidates = {
+        "CLAUDE.md",
+        "AGENTS.md",
+        "pipeline.yaml",
+        "unison.yaml",
+        "prd/PRD.md",
+        "prd/tech-design.md",
+        spec.system_prompt_path.as_posix(),
+    }
+    return tuple(sorted(path for path in candidates if (workspace / path).is_file()))
+
+
+def missing_protected_paths(workspace: Path, expected: Sequence[str]) -> list[str]:
+    """Return protected inputs present before dispatch but absent afterwards."""
+    return sorted(path for path in expected if not (workspace / path).is_file())
+
+
 def protected_deletions(workspace: Path, spec: AgentSpec, deleted: Sequence[str]) -> list[str]:
     """Return deleted project-governance files and the role's declared prompt."""
     protected = {

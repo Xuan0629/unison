@@ -1,12 +1,18 @@
 import json
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 
-from unison.alignment import protected_deletions
+from unison.alignment import (
+    missing_protected_paths,
+    protected_deletions,
+    protected_existing_paths,
+)
 from unison.interfaces import AgentResult, AgentSpec, Operation
 from unison.orchestrator import Orchestrator
 from unison.pipeline import PipelineLoader
+from unison.runners.base import BaseRunner
 
 
 def _orchestrator(tmp_path):
@@ -48,6 +54,47 @@ def test_protected_deletions_recognize_governance_and_declared_prompt_only(tmp_p
     ]
 
 
+
+
+class _ProtectedDeleteRunner(BaseRunner):
+    def _build_command(self, spec, prompt):
+        del spec, prompt
+        return [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; Path('CLAUDE.md').unlink()",
+        ]
+
+
+def test_protected_existing_paths_detects_untracked_governance_deletion(tmp_path):
+    spec = AgentSpec("developer", "codex", "test", Path("prompts/developer.md"))
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "developer.md").write_text("prompt", encoding="utf-8")
+    (tmp_path / "CLAUDE.md").write_text("rules", encoding="utf-8")
+
+    expected = protected_existing_paths(tmp_path, spec)
+    (tmp_path / "CLAUDE.md").unlink()
+
+    assert missing_protected_paths(tmp_path, expected) == ["CLAUDE.md"]
+
+
+def test_alignment_rejects_runner_without_verified_lifecycle(tmp_path, monkeypatch):
+    orchestrator = _orchestrator(tmp_path)
+    spec = orchestrator.spec.agents["developer"]
+    runner = SimpleNamespace(run=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not run")))
+    monkeypatch.setattr(orchestrator, "_select_runner", lambda _role: (runner, spec))
+    monkeypatch.setattr(orchestrator, "_get_budget_tracker", lambda _role: SimpleNamespace(
+        check_budget=lambda: True,
+        add_usage=lambda *_args, **_kwargs: None,
+    ))
+    monkeypatch.setattr(orchestrator, "_build_prompt", lambda *_args, **_kwargs: "task")
+
+    orchestrator._invoke_agent_for_role("developer", 1)
+
+    assert orchestrator.state().halt_signal is True
+    assert "requires a BaseRunner" in (orchestrator.state().halt_reason or "")
+
+
 def test_protected_deletion_restores_workspace_snapshot_and_halts(tmp_path):
     orchestrator = _orchestrator(tmp_path)
     snapshot = orchestrator._snapshot_mgr.snapshot(
@@ -75,10 +122,7 @@ def test_invoke_path_writes_contract_bound_execution_summary(tmp_path, monkeypat
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-m", "baseline"], cwd=tmp_path, check=True, capture_output=True)
     spec = orchestrator.spec.agents["developer"]
-    runner = SimpleNamespace(run=lambda **_kwargs: AgentResult(
-        success=True, exit_code=0, duration=0.1, stdout_tail="untrusted", stderr_tail="",
-        log_path=tmp_path / "agent.log",
-    ))
+    runner = _ProtectedDeleteRunner(binary=sys.executable)
     monkeypatch.setattr(orchestrator, "_select_runner", lambda _role: (runner, spec))
     monkeypatch.setattr(orchestrator, "_get_budget_tracker", lambda _role: SimpleNamespace(
         check_budget=lambda: True,
@@ -96,7 +140,7 @@ def test_invoke_path_writes_contract_bound_execution_summary(tmp_path, monkeypat
         (tmp_path / "src" / "new.py").write_text("x = 1\n", encoding="utf-8")
         return AgentResult(True, 0, 0.1, "untrusted", "", tmp_path / "agent.log")
 
-    runner.run = create_source
+    monkeypatch.setattr(runner, "_run_command", create_source)
     orchestrator._invoke_agent_for_role("developer", 1)
 
     summaries = list(
@@ -111,18 +155,15 @@ def test_invoke_path_writes_contract_bound_execution_summary(tmp_path, monkeypat
     assert "untrusted" not in json.dumps(summary)
 
 
-def test_invoke_path_restores_protected_deletion_and_halts(tmp_path, monkeypatch):
+def test_invoke_path_restores_untracked_protected_deletion_and_halts(tmp_path, monkeypatch):
     orchestrator = _orchestrator(tmp_path)
     subprocess.run(["git", "init", "-b", "master"], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "pipeline.yaml", "prompts"], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-m", "baseline"], cwd=tmp_path, check=True, capture_output=True)
     spec = orchestrator.spec.agents["developer"]
-    runner = SimpleNamespace(run=lambda **_kwargs: AgentResult(
-        success=True, exit_code=0, duration=0.1, stdout_tail="", stderr_tail="",
-        log_path=tmp_path / "agent.log",
-    ))
+    runner = _ProtectedDeleteRunner(binary=sys.executable)
     monkeypatch.setattr(orchestrator, "_select_runner", lambda _role: (runner, spec))
     monkeypatch.setattr(orchestrator, "_get_budget_tracker", lambda _role: SimpleNamespace(
         check_budget=lambda: True,
@@ -130,16 +171,7 @@ def test_invoke_path_restores_protected_deletion_and_halts(tmp_path, monkeypatch
     ))
     monkeypatch.setattr(orchestrator, "_build_prompt", lambda *_args, **_kwargs: "task")
     monkeypatch.setattr(orchestrator._detector, "_get_commit", lambda _root: "baseline")
-    monkeypatch.setattr(orchestrator._detector, "detect", lambda **_kwargs: AgentResult(
-        success=True, exit_code=0, duration=0.1, stdout_tail="", stderr_tail="",
-        log_path=tmp_path / "agent.log",
-    ))
 
-    def delete_governance(*_args, **_kwargs):
-        (tmp_path / "CLAUDE.md").unlink()
-        return AgentResult(True, 0, 0.1, "", "", tmp_path / "agent.log")
-
-    runner.run = delete_governance
     orchestrator._invoke_agent_for_role("developer", 1)
 
     assert orchestrator.state().halt_signal is True
