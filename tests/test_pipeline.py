@@ -2090,6 +2090,64 @@ execution:
             "run_declared_verification",
         )
 
+
+    def test_claude_control_authority_accepts_reviewer_only_require_review_policy(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: claude
+  allow_require_review: true
+  review:
+    roles: [reviewer]
+    directives: [review_goal_alignment]
+""",
+        )
+
+        observer = PipelineLoader().load(path).llm_observer
+
+        assert observer.allow_require_review is True
+        assert observer.review_roles == ("reviewer",)
+        assert observer.review_directives == ("review_goal_alignment",)
+
+
+    def test_require_review_authority_requires_exactly_one_reviewer_agent(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: claude
+  allow_require_review: true
+  review:
+    roles: [reviewer]
+    directives: [review_goal_alignment]
+""",
+        )
+        text = path.read_text(encoding="utf-8").replace(
+            "llm_observer:\n",
+            "  second_reviewer:\n    role: reviewer\n    runtime: codex\n    system_prompt_path: prompts/reviewer.md\nllm_observer:\n",
+        )
+        path.write_text(text, encoding="utf-8")
+
+        with pytest.raises(PipelineValidationError, match="exactly one reviewer"):
+            PipelineLoader().load(path)
+
+    def test_require_review_policy_rejects_non_reviewer_target(self, tmp_path):
+        path = self._write_pipeline(
+            tmp_path,
+            """llm_observer:
+  enabled: true
+  runtime: claude
+  allow_require_review: true
+  review:
+    roles: [developer]
+    directives: [review_goal_alignment]
+""",
+        )
+
+        with pytest.raises(PipelineValidationError, match="review.roles must contain only reviewer"):
+            PipelineLoader().load(path)
+
     def test_hermes_control_authority_remains_rejected(self, tmp_path):
         path = self._write_pipeline(
             tmp_path,

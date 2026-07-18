@@ -59,6 +59,7 @@ from unison.interfaces import (
     GreenfieldConfig,
     LlmObserverConfig,
     CONTROLLED_REDIRECT_DIRECTIVES,
+    CONTROLLED_REQUIRE_REVIEW_DIRECTIVES,
     MOA_MODES,
     MoaConfig,
     PipelineMode,
@@ -455,7 +456,8 @@ class PipelineLoader:
         if not isinstance(raw, dict):
             raise PipelineValidationError("llm_observer must be a mapping")
         allowed_fields = {
-            "enabled", "runtime", "provider", "model", "allow_halt", "allow_redirect", "redirect",
+            "enabled", "runtime", "provider", "model", "allow_halt", "allow_redirect",
+            "allow_require_review", "redirect", "review",
         }
         unknown_fields = set(raw) - allowed_fields
         if unknown_fields:
@@ -484,11 +486,14 @@ class PipelineLoader:
             raise PipelineValidationError("llm_observer.model is required for hermes")
         allow_halt = raw.get("allow_halt", False)
         allow_redirect = raw.get("allow_redirect", False)
+        allow_require_review = raw.get("allow_require_review", False)
         if not isinstance(allow_halt, bool):
             raise PipelineValidationError("llm_observer.allow_halt must be a boolean")
         if not isinstance(allow_redirect, bool):
             raise PipelineValidationError("llm_observer.allow_redirect must be a boolean")
-        if (allow_halt or allow_redirect) and runtime != "claude":
+        if not isinstance(allow_require_review, bool):
+            raise PipelineValidationError("llm_observer.allow_require_review must be a boolean")
+        if (allow_halt or allow_redirect or allow_require_review) and runtime != "claude":
             raise PipelineValidationError(
                 "llm_observer control authority requires the verified Claude structured binding"
             )
@@ -518,6 +523,32 @@ class PipelineLoader:
             redirect_directives = tuple(dict.fromkeys(directives))
         elif redirect is not None:
             raise PipelineValidationError("llm_observer.redirect requires allow_redirect true")
+        review_roles: tuple[str, ...] = ()
+        review_directives: tuple[str, ...] = ()
+        review = raw.get("review")
+        if allow_require_review:
+            if not isinstance(review, dict):
+                raise PipelineValidationError("llm_observer.review is required when allow_require_review is true")
+            if set(review) != {"roles", "directives"}:
+                raise PipelineValidationError("llm_observer.review allows only roles and directives")
+            roles = review["roles"]
+            directives = review["directives"]
+            if (
+                not isinstance(roles, list)
+                or not roles
+                or any(not isinstance(role, str) or role != "reviewer" for role in roles)
+            ):
+                raise PipelineValidationError("llm_observer.review.roles must contain only reviewer")
+            if (
+                not isinstance(directives, list)
+                or not directives
+                or any(not isinstance(code, str) or code not in CONTROLLED_REQUIRE_REVIEW_DIRECTIVES for code in directives)
+            ):
+                raise PipelineValidationError("llm_observer.review.directives contains an unsupported directive")
+            review_roles = tuple(dict.fromkeys(roles))
+            review_directives = tuple(dict.fromkeys(directives))
+        elif review is not None:
+            raise PipelineValidationError("llm_observer.review requires allow_require_review true")
         return LlmObserverConfig(
             enabled=True,
             runtime=runtime,
@@ -525,8 +556,11 @@ class PipelineLoader:
             model=model,
             allow_halt=allow_halt,
             allow_redirect=allow_redirect,
+            allow_require_review=allow_require_review,
             redirect_roles=redirect_roles,
             redirect_directives=redirect_directives,
+            review_roles=review_roles,
+            review_directives=review_directives,
         )
 
     @staticmethod
@@ -547,7 +581,11 @@ class PipelineLoader:
             raise PipelineValidationError(
                 "llm_observer cannot run with foreground_manual execution"
             )
-        if spec.llm_observer.enabled and (spec.llm_observer.allow_halt or spec.llm_observer.allow_redirect):
+        if spec.llm_observer.enabled and (
+            spec.llm_observer.allow_halt
+            or spec.llm_observer.allow_redirect
+            or spec.llm_observer.allow_require_review
+        ):
             if (
                 spec.mode in MOA_MODES
                 or spec.mode == "chain"
@@ -563,6 +601,12 @@ class PipelineLoader:
             ) != 1:
                 raise PipelineValidationError(
                     "llm_observer redirect authority requires exactly one developer agent"
+                )
+            if spec.llm_observer.allow_require_review and sum(
+                agent.effective_role == "reviewer" for agent in spec.agents.values()
+            ) != 1:
+                raise PipelineValidationError(
+                    "llm_observer require_review authority requires exactly one reviewer agent"
                 )
         crush_agents = [
             (key, agent) for key, agent in spec.agents.items() if agent.runtime == "crush"

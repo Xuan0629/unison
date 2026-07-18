@@ -243,9 +243,9 @@ Control endpoint 使用生成的 session token，token 文件只允许 owner 读
 
 ## Observer 权限
 
-Observer 是显式开启、仅适用于 headless 模式的监督策略，不是常驻聊天 Agent。当前 `master` 支持独立的 Hermes/Claude 纯观察汇报，以及串行 dispatch 边界上的狭窄 Claude structured-control：基于证据的 `halt`，或仅对唯一 Developer 注入一条本地编译的固定 redirect 指令。每条 proposal 都绑定 project、pipeline、run、phase、iteration、manifest digest 和 allowlist evidence；动作前写入 digest-keyed receipt，receipt 会阻止重放。
+Observer 是显式开启、仅适用于 headless 模式的监督策略，不是常驻聊天 Agent。当前 `master` 支持独立的 Hermes/Claude 纯观察汇报，以及串行 dispatch 边界上的 Claude structured control：基于证据的 `halt`、仅对唯一 Developer 注入一条本地编译的固定 redirect 指令，以及对唯一 YAML 声明 Reviewer 的 `require_review`。每条 proposal 都绑定 project、pipeline、run、phase、iteration、manifest digest 和 allowlist evidence；动作前写入 digest-keyed receipt，receipt 会阻止重放。Observer 只能读取 Unison 自己生成、digest 验证过的 completed-role summary receipt 的受限投影，绝不读取 Agent 原始输出或日志。
 
-已批准的 v1.1 方向分三级：**L0 观察/汇报**、**L1 证据干预**（暂停、终止、要求复核、受限角色总结读取）、**L2 世界线修正**（仅 versioned YAML allowlist 中的 runtime/model/timeout/retry policy 变更，配套独立 receipt 与 rollback）。L2 是设计承诺，不是当前能力。Observer 永远不运行在 interactive foreground 模式。
+已批准的 v1.1 方向分三级：**L0 观察/汇报**、**L1 证据干预**（已实现 `halt`、固定 redirect、`require_review` 与受限角色 summary receipt 读取）、**L2 世界线修正**（仅 versioned YAML allowlist 中的 runtime/model/timeout/retry policy 变更，配套独立 receipt 与 rollback）。L2 是设计承诺，不是当前能力。L1 明确不包含 pause/resume、rerun/replacement/reconcile、进程控制、terminal input、配置修改、凭据、权限、shell 动作或 LLM 自由文本 prompt 注入。Observer 永远不运行在 interactive foreground 模式。
 
 ## CLI 速查
 

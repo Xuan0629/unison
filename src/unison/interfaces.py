@@ -145,6 +145,11 @@ CONTROLLED_REDIRECT_DIRECTIVES = frozenset({
     "address_reviewer_findings",
     "run_declared_verification",
 })
+CONTROLLED_REQUIRE_REVIEW_DIRECTIVES = frozenset({
+    "review_goal_alignment",
+    "review_safety_evidence",
+    "review_verification_failure",
+})
 
 
 @dataclass(frozen=True)
@@ -157,8 +162,11 @@ class LlmObserverConfig:
     model: str = ""
     allow_halt: bool = False
     allow_redirect: bool = False
+    allow_require_review: bool = False
     redirect_roles: tuple[str, ...] = ()
     redirect_directives: tuple[str, ...] = ()
+    review_roles: tuple[str, ...] = ()
+    review_directives: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

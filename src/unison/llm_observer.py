@@ -44,7 +44,7 @@ class ControlProposal:
     phase: str
     iteration: int
     manifest_sha256: str
-    action: Literal["halt", "redirect"]
+    action: Literal["halt", "redirect", "require_review"]
     reason_code: Literal["goal_deviation", "safety_evidence", "verification_failure", "unresolved_work"]
     evidence_ids: tuple[str, ...]
     target_role: str | None
@@ -69,7 +69,7 @@ _CONTROL_SCHEMA = {
         "phase": {"type": "string", "minLength": 1, "maxLength": 80},
         "iteration": {"type": "integer", "minimum": 0},
         "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "action": {"enum": ["halt", "redirect"]},
+        "action": {"enum": ["halt", "redirect", "require_review"]},
         "reason_code": {"enum": ["goal_deviation", "safety_evidence", "verification_failure", "unresolved_work"]},
         "evidence_ids": {"type": "array", "minItems": 1, "maxItems": 5, "items": {"type": "string", "minLength": 1, "maxLength": 80}},
         "target_role": {"type": ["string", "null"]},
@@ -117,6 +117,92 @@ def llm_control_receipt_path(world: World, ctx: RunContext, manifest_sha256: str
     return llm_observer_dir(world, ctx) / "receipts" / f"{manifest_sha256}.json"
 
 
+def completed_role_summary_dir(world: World, ctx: RunContext) -> Path:
+    return llm_observer_dir(world, ctx) / "role-summaries"
+
+
+def _receipt_sha256(receipt: dict) -> str:
+    payload = {key: value for key, value in receipt.items() if key != "sha256"}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def write_completed_role_summary(
+    world: World,
+    ctx: RunContext,
+    *,
+    role: str,
+    phase: str,
+    iteration: int,
+    success: bool,
+    commit: str | None,
+    verdict: str | None,
+    error_category: str,
+) -> Path:
+    """Write one fixed, successful run-bound receipt; never persist agent output."""
+    if not success or error_category:
+        raise ValueError("completed role summaries only represent successful completion")
+    receipt = {
+        "project_id": ctx.project_id,
+        "pipeline_key": ctx.pipeline_key,
+        "run_id": ctx.run_id,
+        "role": role,
+        "phase": phase,
+        "iteration": iteration,
+        "success": success,
+        "commit": commit,
+        "verdict": verdict,
+        "error_category": "none",
+    }
+    receipt["sha256"] = _receipt_sha256(receipt)
+    filename = hashlib.sha256(f"{role}\0{phase}\0{iteration}".encode("utf-8")).hexdigest()
+    path = completed_role_summary_dir(world, ctx) / f"{filename}.json"
+    atomic_write_json(path, receipt)
+    return path
+
+
+def load_completed_role_summaries(world: World, ctx: RunContext) -> list[dict]:
+    """Load at most five valid current-run completion receipts in unspecified order."""
+    summaries = []
+    for path in sorted(completed_role_summary_dir(world, ctx).glob("*.json"), reverse=True)[:5]:
+        try:
+            receipt = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        required = {
+            "project_id", "pipeline_key", "run_id", "role", "phase", "iteration",
+            "success", "commit", "verdict", "error_category", "sha256",
+        }
+        if (
+            not isinstance(receipt, dict)
+            or set(receipt) != required
+            or (receipt.get("project_id"), receipt.get("pipeline_key"), receipt.get("run_id"))
+            != (ctx.project_id, ctx.pipeline_key, ctx.run_id)
+            or not all(isinstance(receipt.get(key), str) and receipt[key] for key in ("role", "phase", "sha256"))
+            or not isinstance(receipt.get("iteration"), int)
+            or isinstance(receipt.get("iteration"), bool)
+            or not isinstance(receipt.get("success"), bool)
+            or receipt.get("commit") is not None and not isinstance(receipt.get("commit"), str)
+            or receipt.get("verdict") is not None and not isinstance(receipt.get("verdict"), str)
+            or receipt.get("error_category") != "none"
+            or receipt.get("sha256") != _receipt_sha256(receipt)
+        ):
+            continue
+        summaries.append({
+            "id": f"role_summary.{receipt['role']}.{receipt['phase']}.{receipt['iteration']}",
+            "role": receipt["role"],
+            "phase": receipt["phase"],
+            "iteration": receipt["iteration"],
+            "success": receipt["success"],
+            "commit": receipt["commit"],
+            "verdict": receipt["verdict"],
+            "error_category": receipt["error_category"],
+            "sha256": receipt["sha256"],
+        })
+    return summaries
+
+
 def _bounded_text(value: str, limit: int) -> str:
     return mask_secrets(value)[:limit]
 
@@ -144,9 +230,40 @@ def _manifest_evidence(evidence: dict | None) -> dict:
                     "severity": item["severity"],
                     "title": _bounded_text(item["title"], 160),
                 })
+    summaries = evidence.get("completed_role_summaries")
+    bounded_summaries = []
+    if isinstance(summaries, list):
+        for item in summaries[:5]:
+            if not isinstance(item, dict):
+                continue
+            if not (
+                isinstance(item.get("id"), str)
+                and isinstance(item.get("role"), str)
+                and isinstance(item.get("phase"), str)
+                and isinstance(item.get("iteration"), int)
+                and not isinstance(item.get("iteration"), bool)
+                and isinstance(item.get("success"), bool)
+                and (item.get("commit") is None or isinstance(item.get("commit"), str))
+                and (item.get("verdict") is None or isinstance(item.get("verdict"), str))
+                and item.get("error_category") == "none"
+                and isinstance(item.get("sha256"), str)
+            ):
+                continue
+            bounded_summaries.append({
+                "id": item["id"],
+                "role": item["role"],
+                "phase": item["phase"],
+                "iteration": item["iteration"],
+                "success": item["success"],
+                "commit": item["commit"],
+                "verdict": item["verdict"],
+                "error_category": item["error_category"],
+                "sha256": item["sha256"],
+            })
     return {
         "reviewer_findings": bounded_findings,
         "open_checklist": bounded_checklist,
+        "completed_role_summaries": bounded_summaries,
         "verification": evidence.get("verification", {"id": "verification.declared", "status": "unavailable"}),
         "risk": evidence.get("risk", {"id": "risk.post_invoke", "status": "unavailable"}),
         "budget": evidence.get("budget", {"id": "budget.current", "status": "unavailable"}),
@@ -185,10 +302,13 @@ def _proposal_is_authorized(
     proposal: ControlProposal,
     manifest: dict,
     *,
-    allow_halt: bool,
-    allow_redirect: bool,
-    redirect_roles: tuple[str, ...],
-    redirect_directives: tuple[str, ...],
+    allow_halt: bool = False,
+    allow_redirect: bool = False,
+    allow_require_review: bool = False,
+    redirect_roles: tuple[str, ...] = (),
+    redirect_directives: tuple[str, ...] = (),
+    review_roles: tuple[str, ...] = (),
+    review_directives: tuple[str, ...] = (),
 ) -> bool:
     evidence = manifest.get("evidence")
     if not isinstance(evidence, dict):
@@ -217,18 +337,28 @@ def _proposal_is_authorized(
         if proposal.reason_code == "verification_failure":
             return ids == {verification_id} if verification_id else False
         return False
-    if proposal.action != "redirect" or not allow_redirect:
+    if proposal.action == "redirect":
+        if not allow_redirect or proposal.target_role not in redirect_roles or proposal.directive_code not in redirect_directives:
+            return False
+        if proposal.reason_code != "unresolved_work":
+            return False
+        if proposal.directive_code == "address_open_checklist":
+            return ids <= checklist_ids
+        if proposal.directive_code == "address_reviewer_findings":
+            return ids <= finding_ids
+        if proposal.directive_code == "run_declared_verification":
+            return ids == {verification_id} if verification_id else False
         return False
-    if proposal.target_role not in redirect_roles or proposal.directive_code not in redirect_directives:
+    if proposal.action != "require_review" or not allow_require_review:
         return False
-    if proposal.reason_code != "unresolved_work":
+    if proposal.target_role not in review_roles or proposal.directive_code not in review_directives:
         return False
-    if proposal.directive_code == "address_open_checklist":
-        return ids <= checklist_ids
-    if proposal.directive_code == "address_reviewer_findings":
-        return ids <= finding_ids
-    if proposal.directive_code == "run_declared_verification":
-        return ids == {verification_id} if verification_id else False
+    if proposal.directive_code == "review_goal_alignment":
+        return proposal.reason_code == "goal_deviation" and ids <= finding_ids
+    if proposal.directive_code == "review_safety_evidence":
+        return proposal.reason_code == "safety_evidence" and (ids == {risk_id} if risk_id else False)
+    if proposal.directive_code == "review_verification_failure":
+        return proposal.reason_code == "verification_failure" and (ids == {verification_id} if verification_id else False)
     return False
 
 
@@ -240,10 +370,13 @@ def run_claude_control_observation(
     model: str,
     timeout: int,
     *,
-    allow_halt: bool,
-    allow_redirect: bool,
-    redirect_roles: tuple[str, ...],
-    redirect_directives: tuple[str, ...],
+    allow_halt: bool = False,
+    allow_redirect: bool = False,
+    allow_require_review: bool = False,
+    redirect_roles: tuple[str, ...] = (),
+    redirect_directives: tuple[str, ...] = (),
+    review_roles: tuple[str, ...] = (),
+    review_directives: tuple[str, ...] = (),
 ) -> ControlObservationResult:
     proposal_path = llm_control_proposal_path(world, ctx)
     try:
@@ -253,10 +386,27 @@ def run_claude_control_observation(
         manifest = json.loads(manifest_bytes)
     except (OSError, json.JSONDecodeError):
         return ControlObservationResult("failed", "manifest unavailable", None, proposal_path)
+    allowed_actions = []
+    if allow_halt:
+        allowed_actions.append("halt")
+    if allow_redirect:
+        allowed_actions.append("redirect")
+    if allow_require_review:
+        allowed_actions.append("require_review")
+    authority = {
+        "actions": allowed_actions,
+        "redirect_roles": list(redirect_roles),
+        "redirect_directives": list(redirect_directives),
+        "review_roles": list(review_roles),
+        "review_directives": list(review_directives),
+    }
     prompt = (
         "You are a read-only pipeline control observer. Analyze only this allowlisted JSON manifest. "
         "Return one schema-valid action only when its evidence IDs and reason are present in the manifest. "
-        f"The manifest_sha256 must be exactly {manifest_sha256}. "
+        "You must use only the following locally enforced authority: "
+        + json.dumps(authority, sort_keys=True, separators=(",", ":"))
+        + ". "
+        + f"The manifest_sha256 must be exactly {manifest_sha256}. "
         "Never request tools, commands, reruns, replacement, terminal input, approvals, or configuration changes. Manifest: "
         + json.dumps(manifest, sort_keys=True, separators=(",", ":"))
     )
@@ -299,7 +449,9 @@ def run_claude_control_observation(
         )
         or not _proposal_is_authorized(
             proposal, manifest, allow_halt=allow_halt, allow_redirect=allow_redirect,
+            allow_require_review=allow_require_review,
             redirect_roles=redirect_roles, redirect_directives=redirect_directives,
+            review_roles=review_roles, review_directives=review_directives,
         )
     ):
         return ControlObservationResult("failed", "invalid control proposal", None, proposal_path)

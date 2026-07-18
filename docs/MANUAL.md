@@ -1098,26 +1098,20 @@ Observer is explicitly enabled only for headless execution. It runs independentl
 Current implementation:
 
 - **L0 observe/report:** Hermes or Claude performs a no-tool independent observation and persists only a bounded status/summary plus append-only audit metadata.
-- **Narrow L1 subset:** only the verified Claude structured binding may propose an evidence-bound `halt`, or redirect the one configured developer through a fixed locally compiled directive. A proposal binds project, pipeline, run, phase, iteration, manifest SHA-256, and evidence IDs. A digest-keyed receipt is persisted before consumption and blocks replay.
+- **L1 evidence intervention:** only the verified Claude structured binding may propose evidence-bound `halt`, redirect the one configured developer through a fixed locally compiled directive, or `require_review` from the one configured reviewer through a fixed locally compiled directive. `require_review` is consumed only at the already-scheduled reviewer serial boundary; it does not pause, add a phase, rerun, or replace an invocation. A proposal binds project, pipeline, run, phase, iteration, manifest SHA-256, and evidence IDs. A digest-keyed receipt is persisted before consumption and blocks replay. The manifest may project at most five digest-verified, run-scoped Unison completion receipts; it never reads agent raw output/logs, arbitrary files, or agent-authored notes.
 - Typed control is rejected for foreground, MoA, chain, DAG, and parallel-development dispatch. It cannot approve terminal prompts, send terminal input, kill/attach processes, run `reconcile`/`resume`, mutate runtime configuration, or treat model output as proof of liveness/completion/safety.
 
-Approved design direction, not yet implemented:
-
-- **L1 evidence intervention:** pause, halt, require independent re-review, and read bounded per-role work summaries.
-- **L2 worldline correction:** change only versioned YAML-allowlisted runtime/model/timeout/retry policy, write an independent receipt before action, retain the prior policy for rollback, and bind the correction to a fresh evidence manifest. Free-form LLM text never becomes a command, prompt, configuration value, credential, or permission grant.
+L2 is approved as a future design only: versioned YAML allowlisted runtime/model/timeout/retry policy changes require an independent receipt, rollback, and a fresh evidence manifest. Free-form LLM text never becomes a command, prompt, configuration value, credential, or permission grant.
 
 Observer 是仅在 headless execution 下显式开启的监督策略。它独立于 Agent session 运行，只消费 run-bound、已脱敏的 manifest，不读取环境聊天状态；`foreground_manual` 时不能运行。
 
 当前实现：
 
 - **L0 观察/汇报：** Hermes 或 Claude 执行无工具的独立观察，只持久化受限的 status/summary 与 append-only audit metadata。
-- **狭窄 L1 子集：** 只有经过验证的 Claude structured binding 能基于证据提议 `halt`，或通过本地编译的固定 directive 重定向唯一已配置 Developer。proposal 绑定 project、pipeline、run、phase、iteration、manifest SHA-256 和 evidence ID；动作前持久化 digest-keyed receipt，receipt 会阻止重放。
+- **L1 证据干预：** 只有经过验证的 Claude structured binding 能基于证据提议 `halt`、通过本地编译的固定 directive 重定向唯一已配置 Developer，或向唯一已配置 Reviewer 发出 `require_review`。`require_review` 只能在该 Reviewer 已经排定的串行 dispatch 边界消费；它不会 pause、添加 phase、rerun 或 replacement invocation。proposal 绑定 project、pipeline、run、phase、iteration、manifest SHA-256 和 evidence ID；动作前持久化 digest-keyed receipt，receipt 会阻止重放。manifest 最多投影五个 digest 验证过、run-scoped 的 Unison completion receipt；绝不读取 Agent 原始输出/日志、任意文件或 Agent 自写 notes。
 - typed control 会在 foreground、MoA、chain、DAG、parallel-development dispatch 中被拒绝；它不能批准 terminal prompt、写入 terminal input、kill/attach process、执行 `reconcile`/`resume`、修改 runtime config，也不能将模型输出当成存活/完成/安全状态的证明。
 
-已批准但尚未实现的设计方向：
-
-- **L1 证据干预：** pause、halt、要求独立 re-review，以及读取受限的按角色工作总结。
-- **L2 世界线修正：** 仅修改 versioned YAML allowlist 中的 runtime/model/timeout/retry policy；动作前写独立 receipt、保留旧 policy 以供 rollback，并将修正绑定到新的 evidence manifest。LLM 自由文本永远不能成为 command、prompt、config value、credential 或 permission grant。
+L2 仅作为已批准的未来设计：versioned YAML allowlist 中的 runtime/model/timeout/retry policy 变更必须有独立 receipt、rollback 和新的 evidence manifest。LLM 自由文本永远不能成为 command、prompt、config value、credential 或 permission grant。
 
 
 ---

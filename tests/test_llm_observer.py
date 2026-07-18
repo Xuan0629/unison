@@ -7,10 +7,12 @@ from unison.llm_observer import (
     ControlProposal,
     append_audit,
     llm_control_receipt_path,
+    load_completed_role_summaries,
     llm_observation_path,
     run_claude_control_observation,
     run_claude_observation,
     run_hermes_observation,
+    write_completed_role_summary,
     write_manifest,
 )
 from unison.checklist import ChecklistItem, ChecklistStatus
@@ -51,6 +53,114 @@ def test_manifest_is_run_scoped_and_contains_only_allowlisted_state(tmp_path):
     assert manifest["transition_count"] == 1
     assert "history" not in manifest
     assert "runtime_agents" not in manifest
+
+
+
+
+def test_completed_role_summary_records_none_error_category_for_success(tmp_path):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    path = write_completed_role_summary(
+        world, ctx, role="developer", phase="dev_active", iteration=2,
+        success=True, commit=None, verdict=None, error_category="",
+    )
+
+    receipt = json.loads(path.read_text(encoding="utf-8"))
+
+    assert receipt["error_category"] == "none"
+
+
+def test_completed_role_summary_is_run_scoped_bounded_and_tamper_rejected(tmp_path):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    other_ctx = RunContext(
+        project_id=world.project_id,
+        pipeline_key=ctx.pipeline_key,
+        run_id="other-run",
+        pipeline_name=ctx.pipeline_name,
+    )
+    write_completed_role_summary(
+        world, ctx, role="developer", phase="dev_active", iteration=2,
+        success=True, commit="a" * 40, verdict=None, error_category="",
+    )
+    write_completed_role_summary(
+        world, other_ctx, role="reviewer", phase="dev_review", iteration=2,
+        success=True, commit=None, verdict="PASS", error_category="",
+    )
+    summary_path = next((world.unison_run_dir_for(ctx) / "llm-observer" / "role-summaries").glob("*.json"))
+    receipt = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert set(receipt) == {
+        "project_id", "pipeline_key", "run_id", "role", "phase", "iteration",
+        "success", "commit", "verdict", "error_category", "sha256",
+    }
+    assert receipt["run_id"] == ctx.run_id
+    assert receipt["sha256"]
+    assert load_completed_role_summaries(world, ctx) == [{
+        "id": "role_summary.developer.dev_active.2",
+        "role": "developer",
+        "phase": "dev_active",
+        "iteration": 2,
+        "success": True,
+        "commit": "a" * 40,
+        "verdict": None,
+        "error_category": "none",
+        "sha256": receipt["sha256"],
+    }]
+    receipt["commit"] = "tampered"
+    summary_path.write_text(json.dumps(receipt), encoding="utf-8")
+    assert load_completed_role_summaries(world, ctx) == []
+
+
+
+def test_completed_role_summary_filename_cannot_escape_receipt_directory(tmp_path):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    path = write_completed_role_summary(
+        world, ctx, role="../../outside", phase="../phase", iteration=2,
+        success=True, commit=None, verdict=None, error_category="",
+    )
+
+    assert path.parent == world.unison_run_dir_for(ctx) / "llm-observer" / "role-summaries"
+    assert path.suffix == ".json"
+    assert len(path.stem) == 64
+
+
+def test_manifest_projects_only_completed_role_summary_allowlist(tmp_path):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    evidence = {
+        "completed_role_summaries": [{
+            "id": "role_summary.developer.dev_active.2",
+            "role": "developer",
+            "phase": "dev_active",
+            "iteration": 2,
+            "success": True,
+            "commit": "a" * 40,
+            "verdict": None,
+            "error_category": "none",
+            "sha256": "b" * 64,
+            "stdout": "must not persist",
+            "path": "/outside/must-not-persist",
+        }],
+    }
+
+    path, _ = write_manifest(world, ctx, State(), evidence=evidence)
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+
+    assert manifest["evidence"]["completed_role_summaries"] == [{
+        "id": "role_summary.developer.dev_active.2",
+        "role": "developer",
+        "phase": "dev_active",
+        "iteration": 2,
+        "success": True,
+        "commit": "a" * 40,
+        "verdict": None,
+        "error_category": "none",
+        "sha256": "b" * 64,
+    }]
+    serialized = json.dumps(manifest)
+    assert "must not persist" not in serialized
+    assert "/outside" not in serialized
 
 
 def test_control_manifest_bounds_and_redacts_allowlisted_evidence(tmp_path):
@@ -124,6 +234,8 @@ def test_claude_control_observer_persists_only_valid_typed_proposal(tmp_path, mo
     assert captured["command"][captured["command"].index("--tools") + 1] == ""
     assert captured["command"][captured["command"].index("--max-budget-usd") + 1] == "0.10"
     assert f"manifest_sha256 must be exactly {digest}" in captured["command"][-1]
+    assert '"actions":["halt"]' in captured["command"][-1]
+    assert '"review_directives":[]' in captured["command"][-1]
     persisted = json.loads(result.path.read_text(encoding="utf-8"))
     assert persisted["manifest_sha256"] == digest
     assert persisted["project_id"] == ctx.project_id
@@ -228,6 +340,87 @@ def test_claude_control_observer_rejects_cross_phase_proposal(tmp_path, monkeypa
 
     assert result.status == "failed"
     assert result.summary == "invalid control proposal"
+    assert not result.path.exists()
+
+
+
+def test_claude_control_observer_accepts_only_declared_require_review(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    manifest_path, digest = write_manifest(
+        world, ctx, State(), evidence={
+            "reviewer_findings": [{"id": "review.finding.1", "text": "scope differs from approved goal"}],
+        },
+    )
+    monkeypatch.setattr(
+        "unison.llm_observer.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"structured_output": {
+                "project_id": ctx.project_id,
+                "pipeline_key": ctx.pipeline_key,
+                "run_id": ctx.run_id,
+                "phase": "init",
+                "iteration": 0,
+                "manifest_sha256": digest,
+                "action": "require_review",
+                "reason_code": "goal_deviation",
+                "evidence_ids": ["review.finding.1"],
+                "target_role": "reviewer",
+                "directive_code": "review_goal_alignment",
+            }}),
+            stderr="",
+        ),
+    )
+
+    result = run_claude_control_observation(
+        world, ctx, manifest_path, digest, "deepseek-v4-pro", 30,
+        allow_require_review=True,
+        review_roles=("reviewer",), review_directives=("review_goal_alignment",),
+    )
+
+    assert result.status == "proposed"
+    assert result.proposal is not None
+    assert result.proposal.action == "require_review"
+    assert result.proposal.target_role == "reviewer"
+
+
+def test_claude_control_observer_rejects_require_review_for_non_reviewer(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    ctx = _ctx(world)
+    manifest_path, digest = write_manifest(
+        world, ctx, State(), evidence={
+            "reviewer_findings": [{"id": "review.finding.1", "text": "scope differs from approved goal"}],
+        },
+    )
+    monkeypatch.setattr(
+        "unison.llm_observer.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"structured_output": {
+                "project_id": ctx.project_id,
+                "pipeline_key": ctx.pipeline_key,
+                "run_id": ctx.run_id,
+                "phase": "init",
+                "iteration": 0,
+                "manifest_sha256": digest,
+                "action": "require_review",
+                "reason_code": "goal_deviation",
+                "evidence_ids": ["review.finding.1"],
+                "target_role": "developer",
+                "directive_code": "review_goal_alignment",
+            }}),
+            stderr="",
+        ),
+    )
+
+    result = run_claude_control_observation(
+        world, ctx, manifest_path, digest, "deepseek-v4-pro", 30,
+        allow_require_review=True,
+        review_roles=("reviewer",), review_directives=("review_goal_alignment",),
+    )
+
+    assert result.status == "failed"
     assert not result.path.exists()
 
 
@@ -360,9 +553,13 @@ llm_observer:
   model: deepseek-v4-pro
   allow_halt: true
   allow_redirect: true
+  allow_require_review: true
   redirect:
     roles: [developer]
     directives: [address_open_checklist]
+  review:
+    roles: [reviewer]
+    directives: [review_goal_alignment]
 """,
         encoding="utf-8",
     )
@@ -486,6 +683,43 @@ def test_orchestrator_compiles_redirect_without_llm_prompt_text(tmp_path, monkey
         "Address the listed unresolved checklist items before the next review. Evidence IDs: checklist.P1"
     )
     assert "untrusted free text" not in orchestrator._llm_redirect_directive
+
+
+
+def test_orchestrator_consumes_require_review_only_at_reviewer_boundary(tmp_path, monkeypatch):
+    orchestrator = _control_orchestrator(tmp_path)
+
+    def fake_control(world, ctx, manifest_path, digest, *args, **kwargs):
+        proposal = ControlProposal(
+            project_id=ctx.project_id, pipeline_key=ctx.pipeline_key, run_id=ctx.run_id,
+            phase=orchestrator._state.phase, iteration=orchestrator._state.iteration,
+            manifest_sha256=digest, action="require_review", reason_code="goal_deviation",
+            evidence_ids=("review.finding.1",), target_role="reviewer",
+            directive_code="review_goal_alignment",
+        )
+        return ControlObservationResult("proposed", "untrusted free text", proposal, tmp_path / "proposal.json")
+
+    monkeypatch.setattr("unison.orchestrator.run_claude_control_observation", fake_control)
+    monkeypatch.setattr(orchestrator, "_llm_control_evidence", lambda: {
+        "reviewer_findings": [{"id": "review.finding.1", "text": "scope mismatch"}],
+    })
+    monkeypatch.setattr(orchestrator, "_save_checkpoint", lambda *args: None)
+
+    assert orchestrator._run_llm_control_boundary(role="developer", iteration=1) is True
+    assert orchestrator._llm_redirect_directive == ""
+    assert orchestrator._run_llm_control_boundary(role="reviewer", iteration=1) is True
+    assert orchestrator._llm_redirect_directive == (
+        "Independently review the listed evidence for alignment with the approved goal. "
+        "Evidence IDs: review.finding.1"
+    )
+    receipt_paths = list((orchestrator.spec.world.unison_run_dir_for(orchestrator._run_ctx) / "llm-observer" / "receipts").glob("*.json"))
+    assert len(receipt_paths) == 1
+    receipt = json.loads(receipt_paths[0].read_text(encoding="utf-8"))
+    assert receipt["action"] == "require_review"
+    assert "untrusted free text" not in receipt_paths[0].read_text(encoding="utf-8")
+    assert orchestrator._run_llm_control_boundary(role="reviewer", iteration=1) is False
+    assert orchestrator._state.halt_signal is True
+    assert "receipt already exists" in (orchestrator._state.halt_reason or "")
 
 
 def test_orchestrator_control_evidence_excludes_pipeline_global_checklist(tmp_path):

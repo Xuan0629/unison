@@ -49,7 +49,9 @@ from unison.io import atomic_read_json, atomic_write_json
 from unison.llm_observer import (
     append_audit,
     llm_control_receipt_path,
+    load_completed_role_summaries,
     run_claude_control_observation,
+    write_completed_role_summary,
     run_claude_observation,
     run_hermes_observation,
     write_manifest,
@@ -640,6 +642,7 @@ class Orchestrator:
                 {"id": item.id, "severity": item.severity, "title": item.title}
                 for item in checklist.pending_items
             ],
+            "completed_role_summaries": load_completed_role_summaries(self.spec.world, self._run_ctx),
             "verification": {"id": "verification.declared", "status": "unavailable"},
             "risk": {"id": "risk.post_invoke", "status": "unavailable"},
             "budget": {"id": "budget.current", "status": "unavailable"},
@@ -650,6 +653,9 @@ class Orchestrator:
             "address_open_checklist": "Address the listed unresolved checklist items before the next review.",
             "address_reviewer_findings": "Address the listed reviewer findings before the next review.",
             "run_declared_verification": "Run the declared verification and record its result before the next review.",
+            "review_goal_alignment": "Independently review the listed evidence for alignment with the approved goal.",
+            "review_safety_evidence": "Independently review the listed failed safety evidence before any further work.",
+            "review_verification_failure": "Independently review the listed failed verification evidence before any further work.",
         }
         return labels[directive_code] + " Evidence IDs: " + ", ".join(evidence_ids)
 
@@ -659,7 +665,7 @@ class Orchestrator:
         if (
             not config.enabled
             or config.runtime != "claude"
-            or not (config.allow_halt or config.allow_redirect)
+            or not (config.allow_halt or config.allow_redirect or config.allow_require_review)
             or self._state.active_foreground_invocation is not None
         ):
             return True
@@ -681,13 +687,20 @@ class Orchestrator:
         result = run_claude_control_observation(
             self.spec.world, self._run_ctx, manifest_path, digest, config.model,
             min(self.spec.per_agent_timeout, 120), allow_halt=config.allow_halt,
-            allow_redirect=config.allow_redirect, redirect_roles=config.redirect_roles,
+            allow_redirect=config.allow_redirect,
+            allow_require_review=config.allow_require_review,
+            redirect_roles=config.redirect_roles,
             redirect_directives=config.redirect_directives,
+            review_roles=config.review_roles,
+            review_directives=config.review_directives,
         )
         if result.status != "proposed" or result.proposal is None or (
-            result.proposal.action == "redirect" and result.proposal.target_role != role
+            result.proposal.action in {"redirect", "require_review"} and result.proposal.target_role != role
         ):
-            detail = result.summary if result.proposal is None else "redirect target does not match boundary role"
+            detail = (
+                result.summary if result.proposal is None
+                else f"{result.proposal.action} target does not match boundary role"
+            )
             append_audit(
                 self.spec.world, self._run_ctx, event="action_rejected", manifest_sha256=digest,
                 runtime=config.runtime, model=config.model, detail=detail,
@@ -2647,6 +2660,18 @@ class Orchestrator:
 
         if detected.commit:
             self._state.last_dev_commit = detected.commit
+        if detected.success:
+            write_completed_role_summary(
+                world,
+                self._run_ctx,
+                role=role,
+                phase=self._state.phase,
+                iteration=iteration,
+                success=True,
+                commit=detected.commit if isinstance(detected.commit, str) else None,
+                verdict=detected.verdict if isinstance(detected.verdict, str) else None,
+                error_category="",
+            )
 
         # Halt on consecutive failure (ARCHITECTURE.md §3 halt conditions)
         if not detected.success:
