@@ -15,7 +15,7 @@ Unison 是一个协调命令行 AI Agent 的**本地优先、文件驱动 Loop E
 
 它不是 LLM provider，不是聊天界面，也不替代 Claude Code、Codex、Hermes 或 OpenClaw。它是围绕这些 Agent 构建的编排与可靠性层。
 
-- **已发布版本：** 1.0.0。`master` 是未发布的 v1.1 开发源码；在 release gate 完成并打 tag 前，不得把它当作已版本化发布包。
+- **已发布版本：** 1.0.0。`master` 是未发布的 v1.1 候选源码；实现与 Linux 验证已完成，但仍等待共同开发人员在真实 macOS Terminal.app 中完成 Claude、Codex 的 foreground 验证并交回结果。证据审查前不得 version bump、打 tag 或发布。
 - **平台：** Linux、macOS；Windows 通过 WSL。核心锁使用 `fcntl.flock`，因此不支持原生 Windows。
 - **运行方式：** 本地子进程 + 文件；不依赖 LangChain、CrewAI 或 AutoGen。
 - **许可证：** Apache License 2.0
@@ -245,7 +245,7 @@ Control endpoint 使用生成的 session token，token 文件只允许 owner 读
 
 Observer 是显式开启、仅适用于 headless 模式的监督策略，不是常驻聊天 Agent。当前 `master` 支持独立的 Hermes/Claude 纯观察汇报，以及串行 dispatch 边界上的 Claude structured control：基于证据的 `halt`、仅对唯一 Developer 注入一条本地编译的固定 redirect 指令，以及对唯一 YAML 声明 Reviewer 的 `require_review`。每条 proposal 都绑定 project、pipeline、run、phase、iteration、manifest digest 和 allowlist evidence；动作前写入 digest-keyed receipt，receipt 会阻止重放。Observer 只能读取 Unison 自己生成、digest 验证过的 completed-role summary receipt 的受限投影，绝不读取 Agent 原始输出或日志。
 
-已批准的 v1.1 方向分三级：**L0 观察/汇报**、**L1 证据干预**（已实现 `halt`、固定 redirect、`require_review` 与受限角色 summary receipt 读取）、**L2 世界线修正**（仅 versioned YAML allowlist 中的 runtime/model/timeout/retry policy 变更，配套独立 receipt 与 rollback）。L2 是设计承诺，不是当前能力。L1 明确不包含 pause/resume、rerun/replacement/reconcile、进程控制、terminal input、配置修改、凭据、权限、shell 动作或 LLM 自由文本 prompt 注入。Observer 永远不运行在 interactive foreground 模式。
+L2-A Active Alignment 已为合格的非 foreground、非 MoA、串行 headless `BaseRunner` dispatch 实现。它以确定性的输入 digest 校验项目内 canonical binding；发生已验证漂移时，恢复调用前 snapshot，并在持久 correction budget 内 halt 或只按原 canonical binding 重新 dispatch。它不评价代码质量、不把 Agent prose 视为 authority、不改变 runtime/model/provider/timeout，也不在 interactive foreground 模式运行。L1 明确不包含 pause/resume、任意 rerun/replacement/reconcile、terminal input、配置修改、凭据、权限、shell 动作或 LLM 自由文本 prompt 注入。
 
 ## CLI 速查
 
@@ -284,7 +284,7 @@ Unison 1.0 已能把有限的角色、模型、阶段、产物和审查循环围
 4. 受约束的 Runtime Adapter Framework；已验证的 Crush adapter 严格限于串行 `headless_bypass` dispatch、每次调用独立状态、禁止 session reuse、基于信号的取消；当上游 session 缺少完整 provider 用量明细时，token/cost provenance 标记为 `unavailable`；
 5. 已实现、诚实标注为 `actual`、`estimated` 或 `unavailable` 的 Usage Reporting；
 6. 已实现 Foreground heartbeat/reconcile/dead-only `resume` recovery，并已有真实 Linux native-approval 证据；macOS Terminal.app validation 仍是 release blocker；以及
-7. 已实现分模式 LLM Observer 汇报与仅 Claude 可用的 typed control，范围限于串行自动化 dispatch。Interactive foreground、MoA、chain、DAG 与 parallel development 均拒绝 typed control；任何 rerun/replacement 仍须用户确认。
+7. 已实现分模式 LLM Observer 汇报、仅 Claude 可用的串行自动化 typed control，以及合格串行 headless `BaseRunner` dispatch 的 L2-A 主动对齐。L2-A 只检测确定性的 canonical-input 漂移、恢复 snapshot，并在 correction budget 内 halt 或只按原 binding 重新 dispatch；它不改变 runtime/model/provider/timeout。Interactive foreground、MoA、chain、DAG 与 parallel development 会按适用边界拒绝 typed control 或主动对齐；任何 rerun/replacement 仍须用户确认。
 
 在这些合同真正实现并经过测试前，v1.0 会明确拒绝任意 Runtime key，而不是假装只写 YAML 就完成了集成。SQLiteChannel 只保留为证据触发型候选项：必须先有可复现的 FileChannel 局限，并在设计或实施前获得维护者的单独批准。Unison 坚持本地优先、单操作者定位；不规划 SaaS/多用户 WebUI、identity federation 或独立的 Unison plugin ecosystem。
 

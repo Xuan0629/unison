@@ -2,9 +2,9 @@
 
 [English README](../README.md) · [中文 README](../README_CN.md)
 
-This manual documents the current `master` development source. The published package is 1.0.0; `master` contains unreleased v1.1 work and must not be treated as a tagged release until its release gates are complete.
+This manual documents the current `master` release candidate. The published package is 1.0.0. Implementation and Linux validation for v1.1 are complete, but release is waiting for a collaborating developer’s real macOS Terminal.app foreground-validation result for both Claude and Codex. Do not change the package version, tag, or publish until that evidence is reviewed.
 
-本手册描述当前 `master` 开发源码。已发布包是 1.0.0；`master` 包含未发布的 v1.1 工作，在 release gate 完成前不得把它当作已打 tag 的正式发布版。
+本手册描述当前 `master` 候选源码。已发布包是 1.0.0；v1.1 的实现与 Linux 验证已完成，但仍等待共同开发人员在真实 macOS Terminal.app 中完成 Claude、Codex 的 foreground 验证并交回结果。证据审查前不得修改版本、打 tag 或发布。
 
 > [!WARNING]
 > Unison coordinates autonomous CLI agents that may bypass their own permission prompts. Read [Chapter 3: Safety model](#3-safety-model--安全模型) before running it on a real repository.
@@ -737,7 +737,7 @@ Controls are consumed at orchestrator boundaries, not as arbitrary process signa
 
 ### 8.5 Foreground recovery · 前台执行恢复
 
-The `interactive` execution policy may dispatch Claude or Codex into a visible native terminal. It never auto-approves prompts, injects terminal input, retries a foreground invocation, or falls back to headless execution. Foreground is sequential and rejects MoA, chain, DAG, parallel development, Hermes, OpenClaw, and Crush.
+The `interactive` execution policy may dispatch Claude or Codex into a visible native terminal. It never auto-approves prompts, injects terminal input, retries a foreground invocation, or falls back to headless execution. Foreground is sequential and rejects MoA, chain, DAG, parallel development, Hermes, OpenClaw, and Crush. Linux disposable-repository evidence for Claude and Codex is complete. The macOS Terminal.app launcher is implemented, but v1.1 release remains waiting for a collaborating developer to run and return the documented real-GUI validation result for both runtimes.
 
 ```bash
 # Verify a completed foreground invocation and continue its persisted serial state
@@ -747,11 +747,11 @@ unison reconcile --pipeline ./pipeline.yaml
 unison resume --pipeline ./pipeline.yaml
 ```
 
-`reconcile` consumes only matching durable result evidence and is idempotent. Missing, malformed, stale, or identity-mismatched result evidence fails closed. `resume` is not a retry: it records an old-to-new invocation lineage and rechecks liveness immediately before replacement. macOS Terminal.app launcher code exists in `master`, but real macOS GUI validation remains a release gate.
+`reconcile` consumes only matching durable result evidence and is idempotent. Missing, malformed, stale, or identity-mismatched result evidence fails closed. `resume` is not a retry: it records an old-to-new invocation lineage and rechecks liveness immediately before replacement. The remaining release gate is review of the collaborating developer's real macOS Terminal.app validation result for Claude and Codex, performed with [the validation pack](foreground-execution-macos-validation.md). Do not bump the version, tag, or publish until it is reviewed.
 
 `interactive` execution policy 可以将 Claude 或 Codex dispatch 到可见 native terminal。它绝不会自动批准 prompt、写入 terminal input、重试 foreground invocation 或回退到 headless execution。Foreground 是串行的，会拒绝 MoA、chain、DAG、parallel development、Hermes、OpenClaw 与 Crush。
 
-`reconcile` 只消费匹配的持久 result evidence，并且幂等；缺失、畸形、过期或 identity 不匹配的 result evidence 会 fail closed。`resume` 不是 retry：它记录 old-to-new invocation lineage，并在 replacement 前立即复查 liveness。`master` 中已有 macOS Terminal.app launcher 代码，但真实 macOS GUI 验证仍是 release gate。
+`reconcile` 只消费匹配的持久 result evidence，并且幂等；缺失、畸形、过期或 identity 不匹配的 result evidence 会 fail closed。`resume` 不是 retry：它记录 old-to-new invocation lineage，并在 replacement 前立即复查 liveness。剩余 release gate 是共同开发人员使用[验证包](foreground-execution-macos-validation.md)在真实 macOS Terminal.app 中完成 Claude、Codex 测试并交回结果，待审查后才能推进；此前不得 version bump、打 tag 或发布。
 
 ---
 
@@ -1101,7 +1101,7 @@ Current implementation:
 - **L1 evidence intervention:** only the verified Claude structured binding may propose evidence-bound `halt`, redirect the one configured developer through a fixed locally compiled directive, or `require_review` from the one configured reviewer through a fixed locally compiled directive. `require_review` is consumed only at the already-scheduled reviewer serial boundary; it does not pause, add a phase, rerun, or replace an invocation. A proposal binds project, pipeline, run, phase, iteration, manifest SHA-256, and evidence IDs. A digest-keyed receipt is persisted before consumption and blocks replay. The manifest may project at most five digest-verified, run-scoped Unison completion receipts; it never reads agent raw output/logs, arbitrary files, or agent-authored notes.
 - Typed control is rejected for foreground, MoA, chain, DAG, and parallel-development dispatch. It cannot approve terminal prompts, send terminal input, kill/attach processes, run `reconcile`/`resume`, mutate runtime configuration, or treat model output as proof of liveness/completion/safety.
 
-L2 is approved as a future design only: versioned YAML allowlisted runtime/model/timeout/retry policy changes require an independent receipt, rollback, and a fresh evidence manifest. Free-form LLM text never becomes a command, prompt, configuration value, credential, or permission grant.
+- **L2-A active alignment:** eligible non-foreground, non-MoA serial headless `BaseRunner` dispatch builds a canonical project-local binding contract and verifies only its deterministic input digests. Verified drift restores the pre-dispatch snapshot, then halts or re-dispatches only the original canonical binding within the persisted correction budget. It does not assess code quality, consume agent prose as authority, alter runtime/model/provider/timeout, or run in interactive foreground mode.
 
 Observer 是仅在 headless execution 下显式开启的监督策略。它独立于 Agent session 运行，只消费 run-bound、已脱敏的 manifest，不读取环境聊天状态；`foreground_manual` 时不能运行。
 
@@ -1111,7 +1111,7 @@ Observer 是仅在 headless execution 下显式开启的监督策略。它独立
 - **L1 证据干预：** 只有经过验证的 Claude structured binding 能基于证据提议 `halt`、通过本地编译的固定 directive 重定向唯一已配置 Developer，或向唯一已配置 Reviewer 发出 `require_review`。`require_review` 只能在该 Reviewer 已经排定的串行 dispatch 边界消费；它不会 pause、添加 phase、rerun 或 replacement invocation。proposal 绑定 project、pipeline、run、phase、iteration、manifest SHA-256 和 evidence ID；动作前持久化 digest-keyed receipt，receipt 会阻止重放。manifest 最多投影五个 digest 验证过、run-scoped 的 Unison completion receipt；绝不读取 Agent 原始输出/日志、任意文件或 Agent 自写 notes。
 - typed control 会在 foreground、MoA、chain、DAG、parallel-development dispatch 中被拒绝；它不能批准 terminal prompt、写入 terminal input、kill/attach process、执行 `reconcile`/`resume`、修改 runtime config，也不能将模型输出当成存活/完成/安全状态的证明。
 
-L2 仅作为已批准的未来设计：versioned YAML allowlist 中的 runtime/model/timeout/retry policy 变更必须有独立 receipt、rollback 和新的 evidence manifest。LLM 自由文本永远不能成为 command、prompt、config value、credential 或 permission grant。
+- **L2-A 主动对齐：** 合格的非 foreground、非 MoA、串行 headless `BaseRunner` dispatch 会构建 canonical 的项目内 binding contract，并只校验其中确定性的输入 digest。发现已验证漂移时，恢复调用前 snapshot，然后在持久 correction budget 内 halt 或只按原 canonical binding 重新 dispatch；它不评价代码质量、不把 Agent prose 当作 authority、不改变 runtime/model/provider/timeout，也不在 interactive foreground 模式运行。
 
 
 ---
@@ -1206,6 +1206,7 @@ Before treating a pipeline result as release-ready:
 - [ ] Producer and reviewer responsibilities are independent enough for the risk.
 - [ ] Acceptance criteria are frozen and all required artifacts exist.
 - [ ] Targeted tests and the full project suite pass from a clean checkout.
+- [ ] The collaborating developer's real macOS Terminal.app foreground-validation evidence for Claude and Codex is reviewed; until then, do not change the package version, tag, or publish.
 - [ ] Build artifacts install in an isolated target and report the intended version.
 - [ ] Git diff contains no unrelated formatting, runtime state, logs, or generated secrets.
 - [ ] Repository current tree and reachable public history pass privacy/credential scans.
@@ -1222,6 +1223,7 @@ Before treating a pipeline result as release-ready:
 - [ ] 生产者与 Reviewer 的独立性符合风险等级。
 - [ ] 验收标准已冻结，所有必需产物存在。
 - [ ] 在 clean checkout 中，目标测试和完整测试均通过。
+- [ ] 已审查共同开发人员交回的 Claude、Codex 真实 macOS Terminal.app foreground 验证证据；在此之前不得修改版本、打 tag 或发布。
 - [ ] 构建产物可隔离安装，版本一致。
 - [ ] Git diff 不含无关格式化、runtime state、日志或生成 secret。
 - [ ] 当前树和所有公开可达历史通过隐私/凭据扫描。

@@ -15,7 +15,7 @@ Unison is a **local-first, file-driven Loop Engineering pipeline** for coordinat
 
 It is not an LLM provider, a chat UI, or a replacement for Claude Code, Codex, Hermes, or OpenClaw. It is the orchestration and reliability layer around them.
 
-- **Published release:** 1.0.0. The `master` branch is the unreleased v1.1 development source; do not treat it as a versioned release until its release gates and tag are complete.
+- **Published release:** 1.0.0. `master` is the unreleased v1.1 release candidate. Its implementation and Linux validation are complete, but the release is waiting for a collaborating developer’s real macOS Terminal.app foreground-validation result for both Claude and Codex. Do not bump the version, tag, or publish until that evidence is reviewed.
 - **Platforms:** Linux and macOS; Windows through WSL. Native Windows is not supported because core locking uses `fcntl.flock`.
 - **Runtime model:** local subprocesses and files; no LangChain, CrewAI, or AutoGen dependency.
 - **License:** Apache License 2.0
@@ -245,7 +245,7 @@ Control endpoints use a generated session token stored with owner-only permissio
 
 Observer is an explicit headless-only supervisory policy, not an ambient chat agent. Current `master` supports report-only independent Hermes/Claude observations and Claude structured control at serial dispatch boundaries: evidence-bound `halt`, one fixed locally compiled redirect directive for the sole developer, and `require_review` for the sole YAML-declared reviewer. Every proposal binds the project, pipeline, run, phase, iteration, manifest digest, and allowlisted evidence; a digest-keyed receipt is written before action and blocks replay. Observer may read only a bounded projection of Unison-generated, digest-verified completed-role summary receipts, never raw agent output or logs.
 
-The approved v1.1 direction is three levels: **L0 observe/report**, **L1 evidence intervention** (implemented `halt`, fixed redirect, `require_review`, and bounded role-summary receipt access), and **L2 worldline correction** (only versioned YAML-allowlisted runtime/model/timeout/retry policy changes with an independent receipt and rollback). L2 is a design commitment, not current behavior. L1 deliberately excludes pause/resume, rerun/replacement/reconcile, process control, terminal input, configuration mutation, credentials, permissions, shell actions, and LLM free-text prompt injection. Observer never operates in interactive foreground mode.
+L2-A active alignment is implemented for eligible non-foreground, non-MoA serial headless `BaseRunner` dispatch. It verifies a canonical project-local binding contract using deterministic input digests; on verified drift it restores the pre-dispatch snapshot and halts or re-dispatches only the original canonical binding within the persisted correction budget. It never evaluates code quality, reads agent prose as authority, changes runtime/model/provider/timeout, or runs in interactive foreground mode. L1 deliberately excludes pause/resume, arbitrary rerun/replacement/reconcile, terminal input, configuration mutation, credentials, permissions, shell actions, and LLM free-text prompt injection.
 
 ## CLI reference
 
@@ -284,7 +284,7 @@ Unison 1.0 composes bounded roles, models, phases, artifacts, and review loops a
 4. a constrained Runtime adapter framework, with the verified Crush adapter limited to serial `headless_bypass` dispatch, isolated per-invocation state, no session reuse, signal-based cancellation, and `unavailable` token/cost provenance when the upstream session lacks a complete provider breakdown;
 5. implemented truthful usage reporting (`actual`, `estimated`, or `unavailable`);
 6. implemented foreground heartbeat/reconcile/dead-only `resume` recovery with real Linux native-approval evidence; macOS Terminal.app validation remains a release blocker; and
-7. implemented mode-specific LLM Observer reporting plus Claude-only typed control for serial automated dispatch. Interactive foreground, MoA, chain, DAG, and parallel development reject typed control; rerun/replacement always requires user confirmation.
+7. implemented mode-specific LLM Observer reporting, Claude-only typed control for serial automated dispatch, and L2-A active alignment for eligible serial headless `BaseRunner` dispatch. L2-A detects only deterministic canonical-input drift, restores snapshots, and halts or re-dispatches only the original binding within its correction budget; it does not change runtime/model/provider/timeout. Interactive foreground, MoA, chain, DAG, and parallel development reject typed control or active alignment as applicable; rerun/replacement always requires user confirmation.
 
 Until these contracts are implemented and tested, v1.0 intentionally rejects arbitrary Runtime keys rather than pretending that YAML alone creates a working integration. SQLiteChannel remains an evidence-gated possibility: it may be proposed only after reproducible FileChannel limitations and requires separate maintainer approval before design or implementation. Unison remains local-first and single-operator; SaaS/multi-user WebUI, identity federation, and a separate Unison plugin ecosystem are not planned.
 
