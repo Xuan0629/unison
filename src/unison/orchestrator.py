@@ -78,6 +78,7 @@ from unison.runners.hermes import HermesRunner
 from unison.runners.crush import CrushRunner
 from unison.runners.openclaw import OpenClawRunner
 from unison.run_history import RunHistoryStore
+from unison.run_lifecycle import RunLifecyclePersistence
 from unison.risk_engine import RuleEngineRiskEvaluator
 from unison.snapshot import FileSnapshotManager, SnapshotBoundaryError
 from unison.world import RunContext
@@ -154,6 +155,11 @@ class Orchestrator:
         )
         self._checkpoint_mgr = FileCheckpointManager(
             base_dir=Path.home() / ".unison" / "checkpoints"
+        )
+        self._lifecycle_persistence = RunLifecyclePersistence(
+            world=self.spec.world,
+            checkpoint_manager=self._checkpoint_mgr,
+            run_history=self._run_history,
         )
 
         # F1: Risk matrix + snapshot safety net
@@ -445,42 +451,18 @@ class Orchestrator:
         verdict: str = "",
         summary: str = "",
     ) -> None:
-        """P10: Write a lifecycle event directly to ``notifications.jsonl``.
-
-        This is the **canonical source** for structured pipeline events
-        (per MoA Disagreement #2 resolution).  When the Observer runs as
-        a separate subprocess, the in-process event bus is unreachable;
-        this method ensures lifecycle records are always durably written.
-
-        The Observer's file-watcher path picks up new lines from
-        ``notifications.jsonl`` on the next poll cycle.
-        """
-        import json as _json
-        nf = self.spec.world.notifications_file
-        nf.parent.mkdir(parents=True, exist_ok=True)
-
-        ts = datetime.now(timezone.utc).isoformat()
-        it = iteration if iteration is not None else self._state.iteration
-
-        record: dict = {
-            "timestamp": ts,
-            "phase": phase or self._state.phase,
-            "severity": severity,
-            "title": title,
-            "body": body,
-            "event_type": event_type,
-            "pipeline": self._state.pipeline_name,
-            "iteration": it,
-            "verdict": verdict,
-            "summary": summary or body,
-            "language": self._state.observer_language,
-        }
-
-        try:
-            with open(nf, "a", encoding="utf-8") as fh:
-                fh.write(_json.dumps(record, ensure_ascii=False) + "\n")
-        except OSError:
-            logger.warning("Failed to write lifecycle notification to %s", nf)
+        """Compatibility façade for canonical lifecycle notification writes."""
+        self._lifecycle_persistence.write_notification(
+            self._state,
+            event_type=event_type,
+            phase=phase,
+            severity=severity,
+            title=title,
+            body=body,
+            iteration=iteration,
+            verdict=verdict,
+            summary=summary,
+        )
 
     def _start_run_history(self) -> None:
         if self._run_history_started:
@@ -488,34 +470,16 @@ class Orchestrator:
         if getattr(self, "_reconcile_resume", False):
             self._run_history_started = True
             return
-        try:
-            self._run_history.start(
-                self._run_id,
-                pipeline_name=self.spec.pipeline_name,
-                mode=self.spec.mode or "code-dev",
-            )
-            self._run_history_started = True
-        except OSError:
-            pass
+        self._run_history_started = self._lifecycle_persistence.start_run(
+            self._run_id,
+            self.spec.pipeline_name,
+            self.spec.mode or "code-dev",
+        )
 
     def _finish_run_history(self) -> None:
         if not self._run_history_started:
             return
-        status = "halted" if self._state.halt_signal else (
-            "done" if self._state.phase == "done" else "unknown"
-        )
-        try:
-            self._run_history.finish(
-                self._run_id,
-                status=status,
-                phase=self._state.phase,
-                iteration=self._state.iteration,
-                verdict=self._state.last_review_verdict,
-                commit=self._state.last_dev_commit,
-                halt_reason=self._state.halt_reason,
-            )
-        except OSError:
-            pass
+        self._lifecycle_persistence.finish_run(self._run_id, self._state)
 
     def pre_invoke_cleanup(self) -> None:
         """P0-1: No-op.  Previously ran ``git reset --hard HEAD && git clean -fd``
@@ -6070,30 +6034,11 @@ class Orchestrator:
             iteration: Explicit iter_n from the loop (L1 fix #5).
                 When ``None``, falls back to ``self._state.iteration``.
         """
-        iter_n = iteration if iteration is not None else self._state.iteration
-        # P12c: Use project_id hash instead of basename to prevent same-name
-        # project collision.  Preserves pipeline/run context in the checkpoint.
-        self._checkpoint_mgr.save(
-            project=self.spec.world.project_id,
-            state=self._state,
-            iter_n=iter_n,
-            commit=self._state.last_dev_commit,
+        self._lifecycle_persistence.save_checkpoint(
+            self._state,
+            getattr(self, "_run_ctx", None),
+            iteration=iteration,
         )
-        # P12c: Write state to run-scoped path (canonical) AND global path
-        # (Observer/WebUI compatibility).  The run-scoped copy is the
-        # authoritative record; the global copy is a latest-projection pointer.
-        ctx = getattr(self, "_run_ctx", None)
-        if ctx is not None:
-            scoped = self.spec.world.run_state_file(ctx)
-            try:
-                self._state.atomic_write(scoped)
-            except Exception:
-                pass
-        global_state = self.spec.world.unison_dir / "state.json"
-        try:
-            self._state.atomic_write(global_state)
-        except Exception:
-            pass  # best-effort; checkpoint is the authoritative copy
 
     # ==================================================================
     # P9: Structured checklist
