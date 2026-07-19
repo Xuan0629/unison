@@ -15,13 +15,13 @@ Unison 是一个协调命令行 AI Agent 的**本地优先、文件驱动 Loop E
 
 它不是 LLM provider，不是聊天界面，也不替代 Claude Code、Codex、Hermes 或 OpenClaw。它是围绕这些 Agent 构建的编排与可靠性层。
 
-- **已发布版本：** 1.0.0。`master` 是未发布的 v1.1 候选源码；实现与 Linux 验证已完成，但仍等待共同开发人员在真实 macOS Terminal.app 中完成 Claude、Codex 的 foreground 验证并交回结果。证据审查前不得 version bump、打 tag 或发布。
+- **已发布版本：** [v1.0.0](https://github.com/Xuan0629/unison/releases/tag/v1.0.0)。已发布版本状态请查看 [GitHub Releases](https://github.com/Xuan0629/unison/releases)。
 - **平台：** Linux、macOS；Windows 通过 WSL。核心锁使用 `fcntl.flock`，因此不支持原生 Windows。
 - **运行方式：** 本地子进程 + 文件；不依赖 LangChain、CrewAI 或 AutoGen。
 - **许可证：** Apache License 2.0
 
 > [!WARNING]
-> 自主运行时可能使用 `--dangerously-skip-permissions`、`--dangerously-bypass-approvals-and-sandbox`、`--yolo` 等绕过权限确认的参数。Unison 增加了锁、快照、风险检查、预算、审计日志、超时和有界审查循环，但这些措施不能把不可信工作区变安全。请在隔离的 Git 仓库中运行、审查 diff、保护凭据；没有人工监督时，不要让 Unison 直接操作生产系统。
+> `automatic` 使用 `headless_bypass`：adapter 可能使用 Runtime 的权限绕过参数，包括 Claude 的 `--dangerously-skip-permissions`、Codex 的 `--dangerously-bypass-approvals-and-sandbox` 和 Hermes 的 `--yolo`。`interactive` 使用 `foreground_manual`，仅支持在可见 native terminal 中运行 Claude/Codex 并保留其正常审批 UI；Unison 不会自动批准或注入 terminal input。Hermes、OpenClaw 与 Crush 仅支持 headless。两条路径都不能让不可信工作区或生产系统变安全：请在隔离 Git 仓库中运行、保护凭据、审查 diff 和测试证据，并保留人工监督。
 
 ## 名字为什么叫“万物一心”
 
@@ -241,6 +241,18 @@ Control endpoint 使用生成的 session token，token 文件只允许 owner 读
 9. **发布前审查 Git diff 和测试证据。** Pipeline `PASS` 是证据，不代表它拥有最终发布决定权。
 10. **WebUI 用于观察，不作为真相源。** 权威输入仍是磁盘上的 pipeline YAML 和 run state。
 
+### 最可控运行方式
+
+如需尽量可控地使用 Unison，按以下顺序操作：
+
+1. 使用一次性 VM/container 或专用 Git worktree，并从干净、已提交的 baseline 开始。
+2. 仅暴露当前任务必需的凭据和网络/部署权限；secret 不进入 prompt、pipeline YAML 或仓库。
+3. 先运行 `unison dry-run --pipeline pipeline.yaml`，再检查解析后的路径、角色、runtime、prompt、上限和 execution policy。
+4. 使用保守的 iteration、timeout 和 budget 上限；除非明确需要并审查可写范围与复核路径，否则保持 self-heal 关闭。
+5. 需要人工批准 native tool action 的明确 Claude/Codex 任务，选择 `interactive`；只有明确接受所选 headless runner 的绕过行为时，才选择 `automatic`。
+6. 运行结束后，审查 run record、Reviewer finding、Git diff 和确定性的 test/build 证据。`PASS` 是证据，不是发布授权。
+7. WebUI 保持绑定 `127.0.0.1`，不泄露 token；merge、部署和发布仍由人决定。
+
 ## Observer 权限
 
 Observer 是显式开启、仅适用于 headless 模式的监督策略，不是常驻聊天 Agent。当前 `master` 支持独立的 Hermes/Claude 纯观察汇报，以及串行 dispatch 边界上的 Claude structured control：基于证据的 `halt`、仅对唯一 Developer 注入一条本地编译的固定 redirect 指令，以及对唯一 YAML 声明 Reviewer 的 `require_review`。每条 proposal 都绑定 project、pipeline、run、phase、iteration、manifest digest 和 allowlist evidence；动作前写入 digest-keyed receipt，receipt 会阻止重放。Observer 只能读取 Unison 自己生成、digest 验证过的 completed-role summary receipt 的受限投影，绝不读取 Agent 原始输出或日志。
@@ -274,19 +286,15 @@ unison run --pipeline pipeline.yaml --switch reviewer:claude --save-pref
 
 `--switch` 和 `--model` 的目标是 `agents:` 下的唯一 key，并作用于当前运行。`--save-pref` 会在授权通过后把有效 runtime/model 原子写回所选 YAML。持久化使用 PyYAML，因此可能丢失注释、anchor 和自定义排版；应把配置纳入版本控制并检查 diff。
 
-## 更新计划：v1.1 与“万物”
+## 实现状态与边界
 
-Unison 1.0 已能把有限的角色、模型、阶段、产物和审查循环围绕一个目标重新组合。v1.1 将按以下顺序扩展“万物”一侧：
+当前源码已实现有界 Custom Role 行为、Runtime Capability Metadata、Per-Agent Execution Profile、受约束的内建 Runtime adapter，以及标记为 `actual`、`estimated` 或 `unavailable` 的 Usage Provenance。
 
-1. 有界的 Custom Role 行为；精确到每步 agent key 的绑定仍待 durable cursor/artifact handoff 后再实现；
-2. 已实现的 Runner Capability Metadata；
-3. 已实现的 Per-Agent Execution Profile，用于隔离 prompt、model 与 Hermes 实际支持的 skills/tools；
-4. 受约束的 Runtime Adapter Framework；已验证的 Crush adapter 严格限于串行 `headless_bypass` dispatch、每次调用独立状态、禁止 session reuse、基于信号的取消；当上游 session 缺少完整 provider 用量明细时，token/cost provenance 标记为 `unavailable`；
-5. 已实现、诚实标注为 `actual`、`estimated` 或 `unavailable` 的 Usage Reporting；
-6. 已实现 Foreground heartbeat/reconcile/dead-only `resume` recovery，并已有真实 Linux native-approval 证据；macOS Terminal.app validation 仍是 release blocker；以及
-7. 已实现分模式 LLM Observer 汇报、仅 Claude 可用的串行自动化 typed control，以及合格串行 headless `BaseRunner` dispatch 的 L2-A 主动对齐。L2-A 只检测确定性的 canonical-input 漂移、恢复 snapshot，并在 correction budget 内 halt 或只按原 binding 重新 dispatch；它不改变 runtime/model/provider/timeout。Interactive foreground、MoA、chain、DAG 与 parallel development 会按适用边界拒绝 typed control 或主动对齐；任何 rerun/replacement 仍须用户确认。
-
-在这些合同真正实现并经过测试前，v1.0 会明确拒绝任意 Runtime key，而不是假装只写 YAML 就完成了集成。SQLiteChannel 只保留为证据触发型候选项：必须先有可复现的 FileChannel 局限，并在设计或实施前获得维护者的单独批准。Unison 坚持本地优先、单操作者定位；不规划 SaaS/多用户 WebUI、identity federation 或独立的 Unison plugin ecosystem。
+- **Foreground 生命周期：** Claude/Codex 的 `foreground_manual` 已实现 heartbeat supervision、已验证的 `reconcile` 和明确的 dead-only `resume`。它串行、fail-closed：不自动批准、不注入 terminal input、不自动重试、不回退 headless。Hermes、OpenClaw 和 Crush 仅支持 headless。
+- **Crush adapter：** 严格限于串行 `headless_bypass`、每次调用隔离 state、禁止 session reuse、基于 signal 取消；除非上游提供完整且可验证的 breakdown，否则 usage/cost 为 `unavailable`。
+- **Observer：** 已实现分模式报告、适用于合格串行自动 dispatch 的 Claude-only typed control，以及 L2-A Active Alignment。L2-A 只检查确定性的 canonical-input 漂移；它恢复 snapshot，并在 correction budget 内 halt 或重新 dispatch 原 binding，绝不改变 runtime、model、provider 或 timeout。
+- **需单独证据与批准的延后项：** 精确到每步的 Custom Role agent-key binding 需要 durable cursor/artifact handoff；SQLiteChannel 必须先有可复现的 FileChannel 局限才可设计或实施；native Windows locking 仍不在支持的平台合同内。
+- **范围外：** Unison 保持 local-first、单操作者定位；不规划 SaaS/多用户 WebUI、identity federation 或独立 Unison plugin ecosystem。
 
 ## 文档
 

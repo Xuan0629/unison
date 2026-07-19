@@ -2,14 +2,14 @@
 
 [English README](../README.md) · [中文 README](../README_CN.md)
 
-This manual documents the current `master` release candidate. The published package is 1.0.0. Implementation and Linux validation for v1.1 are complete, but release is waiting for a collaborating developer’s real macOS Terminal.app foreground-validation result for both Claude and Codex. Do not change the package version, tag, or publish until that evidence is reviewed.
+This manual documents the behavior in the current source tree. The latest published package is [v1.0.0](https://github.com/Xuan0629/unison/releases/tag/v1.0.0); see [GitHub Releases](https://github.com/Xuan0629/unison/releases) for published-version status.
 
-本手册描述当前 `master` 候选源码。已发布包是 1.0.0；v1.1 的实现与 Linux 验证已完成，但仍等待共同开发人员在真实 macOS Terminal.app 中完成 Claude、Codex 的 foreground 验证并交回结果。证据审查前不得修改版本、打 tag 或发布。
+本手册说明当前源码的行为。最新已发布包为 [v1.0.0](https://github.com/Xuan0629/unison/releases/tag/v1.0.0)；已发布版本状态请查看 [GitHub Releases](https://github.com/Xuan0629/unison/releases)。
 
 > [!WARNING]
-> Unison coordinates autonomous CLI agents that may bypass their own permission prompts. Read [Chapter 3: Safety model](#3-safety-model--安全模型) before running it on a real repository.
+> Automated `headless_bypass` execution may use a runtime's permission-bypass flags. `foreground_manual` retains native manual approval and supports only Claude/Codex. Read [Chapter 3: Safety model](#3-safety-model--安全模型) before running either path on a real repository.
 >
-> Unison 会协调可能绕过自身权限确认的 CLI Agent。在真实仓库运行前，请先阅读[第 3 章：安全模型](#3-safety-model--安全模型)。
+> 自动化 `headless_bypass` 可能使用 Runtime 的权限绕过参数；`foreground_manual` 保留 native 手动审批，且仅支持 Claude/Codex。在真实仓库运行任一路径前，请先阅读[第 3 章：安全模型](#3-safety-model--安全模型)。
 
 ## Contents · 目录
 
@@ -185,9 +185,13 @@ Runtime 通常读取各自配置和环境变量。Unison CLI 还会从 `~/.herme
 
 ### 3.1 Permission trade-off · 权限权衡
 
-Autonomous loops cannot stop for an approval dialog on every write or command. Built-in runners therefore use high-autonomy flags. This shifts responsibility from each runtime’s interactive prompt to Unison’s process controls and the operator’s environment.
+`automatic` resolves to `headless_bypass`. Its built-in runners may use high-autonomy flags so a bounded automated loop does not stop at every runtime prompt: Claude uses `--dangerously-skip-permissions`, Codex uses `--dangerously-bypass-approvals-and-sandbox`, and Hermes uses `--yolo`. This shifts responsibility from each runtime's interactive prompt to Unison's process controls and the operator's environment.
 
-自主循环不能在每次写文件或执行命令时等待人工确认，因此内建 Runner 使用高自治参数。这会把安全责任从 runtime 的交互确认转移到 Unison 的流程控制和操作者环境。
+`interactive` resolves to `foreground_manual` for Claude/Codex only. It opens a visible native terminal with the runtime's normal approval UI: Unison does not auto-approve, inject terminal input, retry a foreground invocation, or fall back to headless execution. Hermes, OpenClaw, and Crush remain headless-only.
+
+`automatic` 解析为 `headless_bypass`。为避免有界自动化循环在每个 Runtime prompt 停住，内建 Runner 可能使用高自治参数：Claude 使用 `--dangerously-skip-permissions`，Codex 使用 `--dangerously-bypass-approvals-and-sandbox`，Hermes 使用 `--yolo`。安全责任因此从 runtime 的交互确认转移到 Unison 的流程控制和操作者环境。
+
+`interactive` 对 Claude/Codex 解析为 `foreground_manual`。它在可见 native terminal 中保留 Runtime 的正常审批 UI：Unison 不会自动批准、注入 terminal input、重试 foreground invocation 或回退为 headless。Hermes、OpenClaw 和 Crush 仍仅支持 headless。
 
 Use all of the following:
 
@@ -199,6 +203,28 @@ Use all of the following:
 6. Require real tests or another deterministic verification command.
 7. Keep snapshot and audit storage private.
 8. Treat `PASS` as evidence requiring human release approval.
+
+### 3.1.1 Safest controlled operation · 最可控运行方式
+
+Use this checklist when minimizing the authority, blast radius, and ambiguity of a Unison run:
+
+1. Use a disposable VM/container or dedicated Git worktree; begin with a clean, committed baseline.
+2. Grant only task-required credentials and network/deployment access. Keep secrets out of prompts, pipeline YAML, and the repository.
+3. Run `unison dry-run --pipeline pipeline.yaml` and inspect resolved paths, roles, runtimes, prompts, limits, and execution policy before invoking an agent.
+4. Set conservative iteration, timeout, and budget limits. Keep self-heal disabled unless its writable scope and review path are intentional.
+5. Select `interactive` for a scoped Claude/Codex task that needs human approval of native actions. Select `automatic` only when you deliberately accept the chosen headless runner's bypass behavior.
+6. Inspect the run record, reviewer findings, Git diff, and deterministic test/build output before merge, deployment, or release. `PASS` is evidence, not final authority.
+7. Keep WebUI on `127.0.0.1`, keep its token private, and leave merge/deployment/release decisions to a human.
+
+如需将 Unison 运行的权限、影响范围和不确定性降到最低，使用以下检查清单：
+
+1. 使用一次性 VM/container 或专用 Git worktree；从干净、已提交的 baseline 开始。
+2. 仅授予任务所需的凭据和网络/部署权限；secret 不进入 prompt、pipeline YAML 或仓库。
+3. 先运行 `unison dry-run --pipeline pipeline.yaml`，在调用 Agent 前检查解析后的路径、角色、runtime、prompt、上限和 execution policy。
+4. 设置保守的 iteration、timeout 和 budget 上限；除非 self-heal 的可写范围与审查路径是明确意图，否则保持关闭。
+5. 需要人工批准 native action 的明确 Claude/Codex 任务，选择 `interactive`；只有明确接受所选 headless Runner 的绕过行为时，才选择 `automatic`。
+6. 在 merge、部署或发布前，审查 run record、Reviewer finding、Git diff 和确定性的 test/build 输出。`PASS` 是证据，不是最终授权。
+7. WebUI 保持 `127.0.0.1` 绑定，token 保持私密；merge、部署和发布决定由人作出。
 
 ### 3.2 Current controls · 当前控制
 
@@ -737,7 +763,7 @@ Controls are consumed at orchestrator boundaries, not as arbitrary process signa
 
 ### 8.5 Foreground recovery · 前台执行恢复
 
-The `interactive` execution policy may dispatch Claude or Codex into a visible native terminal. It never auto-approves prompts, injects terminal input, retries a foreground invocation, or falls back to headless execution. Foreground is sequential and rejects MoA, chain, DAG, parallel development, Hermes, OpenClaw, and Crush. Linux disposable-repository evidence for Claude and Codex is complete. The macOS Terminal.app launcher is implemented, but v1.1 release remains waiting for a collaborating developer to run and return the documented real-GUI validation result for both runtimes.
+The `interactive` execution policy may dispatch Claude or Codex into a visible native terminal. It never auto-approves prompts, injects terminal input, retries a foreground invocation, or falls back to headless execution. Foreground is sequential and rejects MoA, chain, DAG, parallel development, Hermes, OpenClaw, and Crush.
 
 ```bash
 # Verify a completed foreground invocation and continue its persisted serial state
@@ -747,11 +773,11 @@ unison reconcile --pipeline ./pipeline.yaml
 unison resume --pipeline ./pipeline.yaml
 ```
 
-`reconcile` consumes only matching durable result evidence and is idempotent. Missing, malformed, stale, or identity-mismatched result evidence fails closed. `resume` is not a retry: it records an old-to-new invocation lineage and rechecks liveness immediately before replacement. The remaining release gate is review of the collaborating developer's real macOS Terminal.app validation result for Claude and Codex, performed with [the validation pack](foreground-execution-macos-validation.md). Do not bump the version, tag, or publish until it is reviewed.
+`reconcile` consumes only matching durable result evidence and is idempotent. Missing, malformed, stale, or identity-mismatched result evidence fails closed. `resume` is not a retry: it records an old-to-new invocation lineage and rechecks liveness immediately before replacement. Platform-specific validation procedures are maintained in the [foreground validation pack](foreground-execution-macos-validation.md).
 
 `interactive` execution policy 可以将 Claude 或 Codex dispatch 到可见 native terminal。它绝不会自动批准 prompt、写入 terminal input、重试 foreground invocation 或回退到 headless execution。Foreground 是串行的，会拒绝 MoA、chain、DAG、parallel development、Hermes、OpenClaw 与 Crush。
 
-`reconcile` 只消费匹配的持久 result evidence，并且幂等；缺失、畸形、过期或 identity 不匹配的 result evidence 会 fail closed。`resume` 不是 retry：它记录 old-to-new invocation lineage，并在 replacement 前立即复查 liveness。剩余 release gate 是共同开发人员使用[验证包](foreground-execution-macos-validation.md)在真实 macOS Terminal.app 中完成 Claude、Codex 测试并交回结果，待审查后才能推进；此前不得 version bump、打 tag 或发布。
+`reconcile` 只消费匹配的持久 result evidence，并且幂等；缺失、畸形、过期或 identity 不匹配的 result evidence 会 fail closed。`resume` 不是 retry：它记录 old-to-new invocation lineage，并在 replacement 前立即复查 liveness。平台相关的验证步骤维护在 [foreground 验证包](foreground-execution-macos-validation.md) 中。
 
 ---
 
@@ -1206,7 +1232,7 @@ Before treating a pipeline result as release-ready:
 - [ ] Producer and reviewer responsibilities are independent enough for the risk.
 - [ ] Acceptance criteria are frozen and all required artifacts exist.
 - [ ] Targeted tests and the full project suite pass from a clean checkout.
-- [ ] The collaborating developer's real macOS Terminal.app foreground-validation evidence for Claude and Codex is reviewed; until then, do not change the package version, tag, or publish.
+- [ ] Any required platform-specific foreground validation evidence has been reviewed for the release scope.
 - [ ] Build artifacts install in an isolated target and report the intended version.
 - [ ] Git diff contains no unrelated formatting, runtime state, logs, or generated secrets.
 - [ ] Repository current tree and reachable public history pass privacy/credential scans.
@@ -1223,7 +1249,7 @@ Before treating a pipeline result as release-ready:
 - [ ] 生产者与 Reviewer 的独立性符合风险等级。
 - [ ] 验收标准已冻结，所有必需产物存在。
 - [ ] 在 clean checkout 中，目标测试和完整测试均通过。
-- [ ] 已审查共同开发人员交回的 Claude、Codex 真实 macOS Terminal.app foreground 验证证据；在此之前不得修改版本、打 tag 或发布。
+- [ ] 已按本次发布范围审查所需的平台相关 foreground 验证证据。
 - [ ] 构建产物可隔离安装，版本一致。
 - [ ] Git diff 不含无关格式化、runtime state、日志或生成 secret。
 - [ ] 当前树和所有公开可达历史通过隐私/凭据扫描。

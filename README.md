@@ -15,13 +15,13 @@ Unison is a **local-first, file-driven Loop Engineering pipeline** for coordinat
 
 It is not an LLM provider, a chat UI, or a replacement for Claude Code, Codex, Hermes, or OpenClaw. It is the orchestration and reliability layer around them.
 
-- **Published release:** 1.0.0. `master` is the unreleased v1.1 release candidate. Its implementation and Linux validation are complete, but the release is waiting for a collaborating developer’s real macOS Terminal.app foreground-validation result for both Claude and Codex. Do not bump the version, tag, or publish until that evidence is reviewed.
+- **Published release:** [v1.0.0](https://github.com/Xuan0629/unison/releases/tag/v1.0.0). See [GitHub Releases](https://github.com/Xuan0629/unison/releases) for published-version status.
 - **Platforms:** Linux and macOS; Windows through WSL. Native Windows is not supported because core locking uses `fcntl.flock`.
 - **Runtime model:** local subprocesses and files; no LangChain, CrewAI, or AutoGen dependency.
 - **License:** Apache License 2.0
 
 > [!WARNING]
-> Autonomous runtimes may be launched with permission-bypass flags such as `--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`, or `--yolo`. Unison adds locks, snapshots, risk checks, budgets, audit logs, timeouts, and bounded review loops, but these controls do not make an untrusted workspace safe. Use an isolated Git repository, review diffs, protect credentials, and do not point Unison at production systems without human oversight.
+> `automatic` uses `headless_bypass`: its adapters may use runtime permission-bypass flags, including Claude `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-and-sandbox`, and Hermes `--yolo`. `interactive` uses `foreground_manual` only for Claude and Codex in a visible native terminal with their normal approval UI; Unison never auto-approves or injects terminal input. Hermes, OpenClaw, and Crush are headless-only. Neither path makes an untrusted workspace or production system safe: use an isolated Git repository, protect credentials, review diffs and test evidence, and retain human oversight.
 
 ## The name: “万物一心”
 
@@ -241,6 +241,18 @@ Control endpoints use a generated session token stored with owner-only permissio
 9. **Review the Git diff and test evidence before release.** A pipeline `PASS` is evidence, not ownership of the final decision.
 10. **Use the WebUI as an observer, not the source of truth.** The authoritative inputs remain pipeline YAML and run state on disk.
 
+### Safest controlled operation
+
+For the most controllable operating posture, use this sequence:
+
+1. Create a disposable VM/container or dedicated Git worktree; start from a clean, committed baseline.
+2. Expose only the credentials and network/deployment access required for that task. Never place secrets in prompts, pipeline YAML, or the repository.
+3. Run `unison dry-run --pipeline pipeline.yaml`, then inspect the resolved paths, roles, runtimes, prompts, limits, and execution policy.
+4. Use conservative iteration, timeout, and budget limits. Keep self-heal disabled unless its writable scope and review path are explicitly intended.
+5. Choose `interactive` for a scoped Claude/Codex task when a human must approve native tool actions. Choose `automatic` only when you deliberately accept the selected headless runner's bypass behavior.
+6. After the run, inspect the run record, reviewer findings, Git diff, and deterministic test/build evidence. Treat `PASS` as evidence, not release authority.
+7. Keep the WebUI bound to `127.0.0.1`, do not expose its token, and let a human make merge, deployment, and release decisions.
+
 ## Observer authority
 
 Observer is an explicit headless-only supervisory policy, not an ambient chat agent. Current `master` supports report-only independent Hermes/Claude observations and Claude structured control at serial dispatch boundaries: evidence-bound `halt`, one fixed locally compiled redirect directive for the sole developer, and `require_review` for the sole YAML-declared reviewer. Every proposal binds the project, pipeline, run, phase, iteration, manifest digest, and allowlisted evidence; a digest-keyed receipt is written before action and blocks replay. Observer may read only a bounded projection of Unison-generated, digest-verified completed-role summary receipts, never raw agent output or logs.
@@ -274,19 +286,15 @@ unison run --pipeline pipeline.yaml --switch reviewer:claude --save-pref
 
 `--switch` and `--model` target the unique key under `agents:` and affect the current run. `--save-pref` atomically persists those effective runtime/model values to the selected YAML after authorization. Because persistence uses PyYAML, comments, anchors, and custom formatting may be lost; keep the file under version control and inspect the diff.
 
-## Roadmap: v1.1 and the “All Things” side of Unison
+## Implementation status and boundaries
 
-Unison 1.0 composes bounded roles, models, phases, artifacts, and review loops around one goal. v1.1 will extend the “all things / 万物” side in this order:
+The current source implements bounded custom-role behavior, runtime capability metadata, per-agent execution profiles, constrained built-in runtime adapters, and usage provenance marked as `actual`, `estimated`, or `unavailable`.
 
-1. bounded custom-role behavior, while exact per-step agent-key binding remains deferred pending durable cursor/artifact handoff;
-2. implemented Runner capability metadata;
-3. implemented per-Agent execution profiles for isolated prompts, models, and Hermes-supported skills/tools;
-4. a constrained Runtime adapter framework, with the verified Crush adapter limited to serial `headless_bypass` dispatch, isolated per-invocation state, no session reuse, signal-based cancellation, and `unavailable` token/cost provenance when the upstream session lacks a complete provider breakdown;
-5. implemented truthful usage reporting (`actual`, `estimated`, or `unavailable`);
-6. implemented foreground heartbeat/reconcile/dead-only `resume` recovery with real Linux native-approval evidence; macOS Terminal.app validation remains a release blocker; and
-7. implemented mode-specific LLM Observer reporting, Claude-only typed control for serial automated dispatch, and L2-A active alignment for eligible serial headless `BaseRunner` dispatch. L2-A detects only deterministic canonical-input drift, restores snapshots, and halts or re-dispatches only the original binding within its correction budget; it does not change runtime/model/provider/timeout. Interactive foreground, MoA, chain, DAG, and parallel development reject typed control or active alignment as applicable; rerun/replacement always requires user confirmation.
-
-Until these contracts are implemented and tested, v1.0 intentionally rejects arbitrary Runtime keys rather than pretending that YAML alone creates a working integration. SQLiteChannel remains an evidence-gated possibility: it may be proposed only after reproducible FileChannel limitations and requires separate maintainer approval before design or implementation. Unison remains local-first and single-operator; SaaS/multi-user WebUI, identity federation, and a separate Unison plugin ecosystem are not planned.
+- **Foreground lifecycle:** Claude/Codex `foreground_manual` has heartbeat supervision, verified `reconcile`, and explicit dead-only `resume`. It is serial and fail-closed: no auto-approval, terminal-input injection, automatic retry, or headless fallback. Hermes, OpenClaw, and Crush are headless-only.
+- **Crush adapter:** limited to serial `headless_bypass`, isolated per-invocation state, no session reuse, signal-based cancellation, and `unavailable` usage/cost unless upstream supplies a complete verified breakdown.
+- **Observer:** mode-specific reporting, Claude-only typed control for eligible serial automated dispatch, and L2-A active alignment are implemented. L2-A checks deterministic canonical-input drift only; it restores snapshots and halts or re-dispatches the original binding within its correction budget. It never changes runtime, model, provider, or timeout.
+- **Deferred only with separate evidence and approval:** exact per-step custom-role agent-key binding requires durable cursor/artifact handoff; SQLiteChannel requires reproducible FileChannel limitations before design or implementation; native Windows locking remains outside the supported platform contract.
+- **Out of scope:** Unison remains local-first and single-operator. SaaS/multi-user WebUI, identity federation, and a separate Unison plugin ecosystem are not planned.
 
 ## Documentation
 
