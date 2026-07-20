@@ -1,0 +1,1 @@
+{"schema_version": 1, "invocation_id": "test-nonzero-001", "phase": "dev_active", "role": "developer", "runtime": "codex", "launched_at": "2026-07-20T09:50:00Z", "workdir": "/tmp", "command": ["bash", "-c", "echo hello && exit 42"], "prompt_path": "/tmp/test-nonzero-exit-inv/prompt.txt", "baseline_commit": "abc123"}

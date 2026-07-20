@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "invocation_id": "75c68841-4b59-4177-b34f-c4c071be9971",
+  "phase": "dev_active",
+  "role": "developer",
+  "runtime": "claude",
+  "launched_at": "2026-07-20T09:39:05Z",
+  "workdir": "/private/tmp/unison-test-repo",
+  "command": [
+    "claude",
+    "--permission-mode",
+    "manual",
+    "--model",
+    "gpt-5.6-luna"
+  ],
+  "prompt_path": "/private/tmp/unison-test-repo/.unison/runs/pipeline-claude-c4b0a1/b2004f412248/foreground/75c68841-4b59-4177-b34f-c4c071be9971/prompt.txt",
+  "baseline_commit": "4ea902e0ea741f771c42412a42d39e3a410a8c36"
+}

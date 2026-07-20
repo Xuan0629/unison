@@ -5,6 +5,7 @@ import os
 import pty
 import shlex
 import struct
+import subprocess
 import sys
 import termios
 
@@ -802,19 +803,23 @@ class TestLinuxForegroundLauncher:
         assert launch_foreground_terminal(invocation) == 4321
         launcher.assert_called_once_with(invocation)
 
-    def test_launches_terminal_app_with_wrapper_command_and_returns_handoff_pid(
+    def test_launches_terminal_app_osascript_primary_path(
         self, tmp_path, monkeypatch
     ):
+        """osascript returncode=0 → primary path, no fallback."""
         invocation = self._invocation(tmp_path)
         monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
         monkeypatch.setattr("unison.foreground.shutil.which", lambda name: "/usr/bin/osascript" if name == "osascript" else None)
         process = MagicMock(pid=4321)
+        process.returncode = 0
         spawn = MagicMock(return_value=process)
         monkeypatch.setattr("unison.foreground.subprocess.Popen", spawn)
 
         handoff_pid = launch_foreground_terminal(invocation)
 
         assert handoff_pid == 4321
+        # Only one Popen call (osascript), no fallback
+        assert spawn.call_count == 1
         script = spawn.call_args.args[0]
         assert script[:3] == ["/usr/bin/osascript", "-e", 'tell application "Terminal"']
         assert script[-2:] == ["-e", "end tell"]
@@ -824,7 +829,99 @@ class TestLinuxForegroundLauncher:
         assert "unison.foreground wrapper" in wrapper_command
         assert str(invocation.directory) in wrapper_command
         assert "Unison foreground" not in wrapper_command
-        assert spawn.call_args.kwargs == {"start_new_session": True}
+        assert spawn.call_args.kwargs["start_new_session"] is True
+
+    def test_macos_launcher_falls_back_to_open_on_osascript_failure(
+        self, tmp_path, monkeypatch
+    ):
+        """osascript non-zero exit → fallback to open -a Terminal."""
+        invocation = self._invocation(tmp_path)
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        monkeypatch.setattr("unison.foreground.shutil.which", lambda name: "/usr/bin/osascript" if name == "osascript" else None)
+        # First call: osascript fails
+        osascript_proc = MagicMock(pid=1001)
+        osascript_proc.returncode = 1
+        # Second call: open -a Terminal succeeds
+        open_proc = MagicMock(pid=2002)
+        open_proc.returncode = 0
+        spawn = MagicMock(side_effect=[osascript_proc, open_proc])
+        monkeypatch.setattr("unison.foreground.subprocess.Popen", spawn)
+
+        handoff_pid = launch_foreground_terminal(invocation)
+
+        assert handoff_pid == 2002
+        assert spawn.call_count == 2
+        # Verify second call is open -a Terminal
+        fallback_cmd = spawn.call_args_list[1].args[0]
+        assert fallback_cmd[0] == "open"
+        assert "Terminal" in fallback_cmd
+        # Verify .command file was created
+        cmd_file = invocation.directory / "_launch.command"
+        assert cmd_file.exists()
+        content = cmd_file.read_text()
+        assert "#!/bin/bash" in content
+        assert str(tmp_path) in content
+        assert "unison.foreground wrapper" in content
+
+    def test_macos_launcher_falls_back_on_osascript_oserror(
+        self, tmp_path, monkeypatch
+    ):
+        """osascript Popen raises OSError → fallback to open -a Terminal."""
+        invocation = self._invocation(tmp_path)
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        monkeypatch.setattr("unison.foreground.shutil.which", lambda name: "/usr/bin/osascript" if name == "osascript" else None)
+        open_proc = MagicMock(pid=3003)
+        open_proc.returncode = 0
+        spawn = MagicMock(side_effect=[OSError("permission denied"), open_proc])
+        monkeypatch.setattr("unison.foreground.subprocess.Popen", spawn)
+
+        handoff_pid = launch_foreground_terminal(invocation)
+
+        assert handoff_pid == 3003
+        assert spawn.call_count == 2
+
+    def test_macos_launcher_falls_back_on_osascript_timeout(
+        self, tmp_path, monkeypatch
+    ):
+        """osascript timeout → fallback to open -a Terminal."""
+        invocation = self._invocation(tmp_path)
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        monkeypatch.setattr("unison.foreground.shutil.which", lambda name: "/usr/bin/osascript" if name == "osascript" else None)
+        osascript_proc = MagicMock()
+        # First .wait() call (osascript) raises TimeoutExpired
+        # Second .wait() call (open) returns normally
+        osascript_proc.wait = MagicMock(
+            side_effect=[
+                subprocess.TimeoutExpired(cmd="osascript", timeout=10),
+                None,
+            ]
+        )
+        osascript_proc.kill = MagicMock()
+        open_proc = MagicMock(pid=4004)
+        open_proc.wait = MagicMock(return_value=None)
+        spawn = MagicMock(side_effect=[osascript_proc, open_proc])
+        monkeypatch.setattr("unison.foreground.subprocess.Popen", spawn)
+
+        handoff_pid = launch_foreground_terminal(invocation)
+
+        assert handoff_pid == 4004
+        osascript_proc.kill.assert_called_once()
+        assert spawn.call_count == 2
+
+    def test_macos_launcher_raises_when_osascript_fails_and_open_raises(
+        self, tmp_path, monkeypatch
+    ):
+        """osascript fails + open -a Terminal raises OSError → RuntimeError."""
+        invocation = self._invocation(tmp_path)
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        monkeypatch.setattr("unison.foreground.shutil.which", lambda name: "/usr/bin/osascript" if name == "osascript" else None)
+        osascript_proc = MagicMock(pid=5001)
+        osascript_proc.returncode = 1
+        spawn = MagicMock(side_effect=[osascript_proc, OSError("open not found")])
+        monkeypatch.setattr("unison.foreground.subprocess.Popen", spawn)
+
+        with pytest.raises(RuntimeError, match="could not launch Terminal.app"):
+            launch_foreground_terminal(invocation)
 
     def test_macos_launcher_encodes_special_character_paths_as_one_command(
         self, tmp_path, monkeypatch
@@ -835,12 +932,15 @@ class TestLinuxForegroundLauncher:
             "unison.foreground.shutil.which",
             lambda name: "/usr/bin/osascript" if name == "osascript" else None,
         )
-        spawn = MagicMock(return_value=MagicMock(pid=4321))
+        osascript_proc = MagicMock(pid=6001)
+        osascript_proc.returncode = 0
+        spawn = MagicMock(return_value=osascript_proc)
         monkeypatch.setattr("unison.foreground.subprocess.Popen", spawn)
 
         launch_foreground_terminal(invocation)
 
-        encoded = spawn.call_args.args[0][4].removeprefix("do script ")
+        script = spawn.call_args.args[0]
+        encoded = script[4].removeprefix("do script ")
         assert json.loads(encoded) == shlex.join([
             sys.executable,
             "-m", "unison.foreground", "wrapper",
@@ -890,3 +990,251 @@ class TestForegroundWrapperEntry:
             foreground_main(["wrapper", "--invocation-dir", str(missing)])
 
         assert exc.value.code == 2
+
+
+class TestDarwinProcessIdentity:
+    """Darwin read_process_identity via ps -o lstart=."""
+
+    def test_valid_ps_output_returns_darwin_identity(self, monkeypatch):
+        run_result = MagicMock()
+        run_result.stdout = "Mon Jul 20 10:00:00 2026\n"
+        run_result.returncode = 0
+        monkeypatch.setattr("unison.foreground.subprocess.run", MagicMock(return_value=run_result))
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+
+        from unison.foreground import read_process_identity
+        result = read_process_identity(1234)
+
+        assert result is not None
+        assert result.pid == 1234
+        assert result.start_identity.startswith("darwin:")
+        assert "Mon Jul 20" in result.start_identity
+
+    def test_empty_ps_output_returns_none(self, monkeypatch):
+        run_result = MagicMock()
+        run_result.stdout = "  \n"  # whitespace-only
+        run_result.returncode = 0
+        monkeypatch.setattr("unison.foreground.subprocess.run", MagicMock(return_value=run_result))
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+
+        from unison.foreground import read_process_identity
+        assert read_process_identity(1234) is None
+
+    def test_ps_timeout_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            "unison.foreground.subprocess.run",
+            MagicMock(side_effect=subprocess.TimeoutExpired(cmd="ps", timeout=5)),
+        )
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+
+        from unison.foreground import read_process_identity
+        assert read_process_identity(1234) is None
+
+    def test_ps_oserror_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            "unison.foreground.subprocess.run",
+            MagicMock(side_effect=OSError("ps not found")),
+        )
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+
+        from unison.foreground import read_process_identity
+        assert read_process_identity(1234) is None
+
+    def test_invalid_pid_returns_none(self, monkeypatch):
+        from unison.foreground import read_process_identity
+        assert read_process_identity(-1) is None
+        assert read_process_identity(0) is None
+        assert read_process_identity("abc") is None
+
+    def test_non_darwin_platform_delegates(self, monkeypatch):
+        """Non-darwin, non-linux → None (no platform support)."""
+        monkeypatch.setattr("unison.foreground.sys.platform", "freebsd")
+        from unison.foreground import read_process_identity
+        assert read_process_identity(1234) is None
+
+
+class TestDarwinChildGroupLiveness:
+    """foreground_child_and_group_status on macOS."""
+
+    def _make_invocation(self, tmp_path, invocation_id, child_pid, start_identity, pgid):
+        invocation = ForegroundInvocation(invocation_id, tmp_path / invocation_id)
+        atomic_write_json(invocation.child_path, {
+            "schema_version": 1,
+            "invocation_id": invocation_id,
+            "child_pid": child_pid,
+            "child_start_identity": start_identity,
+            "child_process_group_id": pgid,
+        })
+        return invocation
+
+    def test_live_when_child_identity_matches(self, tmp_path, monkeypatch):
+        invocation = self._make_invocation(tmp_path, "live-test", 1234, "darwin:Mon Jul 20 10:00:00 2026", 1234)
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        # read_process_identity returns same identity → live
+        from unison.foreground import read_process_identity, ProcessIdentity
+        monkeypatch.setattr(
+            "unison.foreground.read_process_identity",
+            lambda pid: ProcessIdentity(pid=pid, start_identity=f"darwin:Mon Jul 20 10:00:00 2026"),
+        )
+
+        assert foreground_child_and_group_status(invocation) == "live"
+
+    def test_dead_when_child_gone_and_group_empty(self, tmp_path, monkeypatch):
+        invocation = self._make_invocation(tmp_path, "dead-test", 1234, "darwin:Mon Jul 20 10:00:00 2026", 1234)
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        # read_process_identity returns None (child gone) → check pgid
+        monkeypatch.setattr("unison.foreground.read_process_identity", lambda pid: None)
+        # _darwin_process_group_alive returns "dead" (ps succeeded, no members)
+        monkeypatch.setattr("unison.foreground._darwin_process_group_alive", lambda gid: "dead")
+
+        assert foreground_child_and_group_status(invocation) == "dead"
+
+    def test_live_when_child_gone_but_group_has_members(self, tmp_path, monkeypatch):
+        invocation = self._make_invocation(tmp_path, "group-alive", 1234, "darwin:Mon Jul 20 10:00:00 2026", 1234)
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        monkeypatch.setattr("unison.foreground.read_process_identity", lambda pid: None)
+        monkeypatch.setattr("unison.foreground._darwin_process_group_alive", lambda gid: "live")
+
+        assert foreground_child_and_group_status(invocation) == "live"
+
+    def test_unknown_when_helper_raises(self, tmp_path, monkeypatch):
+        """Helper-level raise still yields unknown (defensive)."""
+        invocation = self._make_invocation(tmp_path, "unknown-test", 1234, "darwin:Mon Jul 20 10:00:00 2026", 1234)
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        monkeypatch.setattr("unison.foreground.read_process_identity", lambda pid: None)
+        # _darwin_process_group_alive itself raises (should not happen after fix, but defensive)
+        def _raise_oserror(gid):
+            raise OSError("ps failed")
+        monkeypatch.setattr(
+            "unison.foreground._darwin_process_group_alive",
+            _raise_oserror,
+        )
+
+        assert foreground_child_and_group_status(invocation) == "unknown"
+
+    def test_unknown_on_malformed_child_data(self, tmp_path, monkeypatch):
+        invocation = ForegroundInvocation("malformed", tmp_path / "malformed")
+        # child.json with missing required fields
+        atomic_write_json(invocation.child_path, {
+            "schema_version": 1,
+            "invocation_id": "malformed",
+            "child_pid": 1234,
+            # missing child_start_identity and child_process_group_id
+        })
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+
+        assert foreground_child_and_group_status(invocation) == "unknown"
+
+    def test_unknown_blocks_dispatch_not_dead(self, tmp_path, monkeypatch):
+        """Verify unknown is never inferred as dead — fail-closed."""
+        invocation = self._make_invocation(tmp_path, "fail-closed", 1234, "darwin:Mon Jul 20 10:00:00 2026", 1234)
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        monkeypatch.setattr("unison.foreground.read_process_identity", lambda pid: None)
+        # _darwin_process_group_alive returns "unknown"
+        monkeypatch.setattr(
+            "unison.foreground._darwin_process_group_alive",
+            lambda gid: "unknown",
+        )
+
+        result = foreground_child_and_group_status(invocation)
+        assert result == "unknown"
+        assert result != "dead"
+
+
+class TestDarwinProcessGroupAliveRealPath:
+    """Real-path tests for _darwin_process_group_alive: mock subprocess.run directly.
+
+    These cover the actual production failure modes that the old bool-returning
+    helper would silently swallow.
+    """
+
+    def _run_helper(self, monkeypatch, run_result):
+        """Patch subprocess.run, call _darwin_process_group_alive(group_id=9999)."""
+        from unittest.mock import patch as _patch
+        monkeypatch.setattr("unison.foreground.subprocess.run", run_result)
+        from unison.foreground import _darwin_process_group_alive
+        return _darwin_process_group_alive(9999)
+
+    def test_oserror_returns_unknown(self, monkeypatch):
+        """subprocess.run raises OSError → unknown (fail-closed)."""
+        def _raise(*a, **kw):
+            raise OSError("ps: not found")
+        assert self._run_helper(monkeypatch, _raise) == "unknown"
+
+    def test_timeout_returns_unknown(self, monkeypatch):
+        """subprocess.run raises TimeoutExpired → unknown."""
+        from subprocess import TimeoutExpired
+        def _raise(*a, **kw):
+            raise TimeoutExpired(cmd="ps", timeout=5)
+        assert self._run_helper(monkeypatch, _raise) == "unknown"
+
+    def test_subprocess_error_returns_unknown(self, monkeypatch):
+        """subprocess.run raises SubprocessError → unknown."""
+        def _raise(*a, **kw):
+            raise subprocess.SubprocessError("broken pipe")
+        assert self._run_helper(monkeypatch, _raise) == "unknown"
+
+    def test_nonzero_exit_returns_unknown(self, monkeypatch):
+        """ps exits non-zero → unknown (cannot trust output)."""
+        def _fake_run(*a, **kw):
+            return subprocess.CompletedProcess(args="ps", returncode=1, stdout="", stderr="error")
+        assert self._run_helper(monkeypatch, _fake_run) == "unknown"
+
+    def test_unparseable_output_returns_unknown(self, monkeypatch):
+        """ps returns garbage → no parseable lines → unknown."""
+        def _fake_run(*a, **kw):
+            return subprocess.CompletedProcess(args="ps", returncode=0, stdout="GARBAGE\n@@@\n", stderr="")
+        assert self._run_helper(monkeypatch, _fake_run) == "unknown"
+
+    def test_empty_output_returns_unknown(self, monkeypatch):
+        """ps returns empty stdout → no parseable lines → unknown."""
+        def _fake_run(*a, **kw):
+        
+            return subprocess.CompletedProcess(args="ps", returncode=0, stdout="", stderr="")
+        assert self._run_helper(monkeypatch, _fake_run) == "unknown"
+
+    def test_only_other_groups_returns_dead(self, tmp_path, monkeypatch):
+        """ps succeeds, parseable lines, none match 9999 → dead (only valid dead path)."""
+        def _fake_run(*a, **kw):
+            return subprocess.CompletedProcess(
+                args="ps", returncode=0,
+                stdout="1000\n2000\n3000\n", stderr="",
+            )
+        assert self._run_helper(monkeypatch, _fake_run) == "dead"
+
+    def test_matching_group_returns_live(self, monkeypatch):
+        """ps succeeds, one line matches group_id → live."""
+        def _fake_run(*a, **kw):
+            return subprocess.CompletedProcess(
+                args="ps", returncode=0,
+                stdout="1000\n9999\n3000\n", stderr="",
+            )
+        assert self._run_helper(monkeypatch, _fake_run) == "live"
+
+    def test_mixed_parseable_and_garbage_with_match(self, monkeypatch):
+        """Some lines unparseable → unknown (fail-closed, even if a later line matches)."""
+        def _fake_run(*a, **kw):
+            return subprocess.CompletedProcess(
+                args="ps", returncode=0,
+                stdout="abc\n9999\n@@\n", stderr="",
+            )
+        # First non-empty line 'abc' is unparseable → unknown immediately
+        assert self._run_helper(monkeypatch, _fake_run) == "unknown"
+
+    def test_mixed_parseable_and_garbage_no_match(self, monkeypatch):
+        """Some lines parseable, some garbage, no match → unknown (malformed line encountered)."""
+        def _fake_run(*a, **kw):
+            return subprocess.CompletedProcess(
+                args="ps", returncode=0,
+                stdout="abc\n1000\n@@\n", stderr="",
+            )
+        assert self._run_helper(monkeypatch, _fake_run) == "unknown"
+
+    def test_match_before_garbage_returns_unknown(self, monkeypatch):
+        """Match precedes garbage → unknown (strict: every line must be parseable)."""
+        def _fake_run(*a, **kw):
+            return subprocess.CompletedProcess(
+                args="ps", returncode=0,
+                stdout="9999\nnot-a-pgid\n", stderr="",
+            )
+        assert self._run_helper(monkeypatch, _fake_run) == "unknown"

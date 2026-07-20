@@ -1,0 +1,26 @@
+=== macOS Foreground Execution Evidence Pack ===
+Generated: 2026-07-20T12:24:06Z
+Evidence directory: inside repo at docs/evidence/foreground-macos-v1.1/current-head-evidence/
+To verify HEAD: git rev-parse HEAD
+
+=== Git Status (pre-case, clean baseline) ===
+git status --short:
+(no output — clean working tree at this commit)
+
+=== Versions ===
+Python: Python 3.10.11
+OS: macOS 13.7.8 x86_64
+Claude: 2.1.215 (Claude Code)
+Codex: codex-cli 0.144.5
+
+=== Test Totals ===
+test_interactive_execution.py: 80 passed, 0 failed, 5 skipped
+Full pytest: 1913 passed, 2 failed (test_lock.py multiprocessing pickle, pre-existing)
+-W error::DeprecationWarning: clean (0 warnings)
+
+=== Historical Evidence Note ===
+case6-codex/, case6-claude/, case7-codex/, case7-claude/, case8-codex/,
+case8-claude/, case9/, case10/ contain artifacts from commit bc1af54.
+Label: HISTORICAL LAUNCHER EVIDENCE — validates launcher/identity/lifecycle
+behavior only. Does NOT validate the three-state liveness fix.
+Three-state validation: see current-head-evidence/p0-proof/
