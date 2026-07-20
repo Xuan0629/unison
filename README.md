@@ -15,7 +15,7 @@ Unison is a **local-first, file-driven Loop Engineering pipeline** for coordinat
 
 It is not an LLM provider, a chat UI, or a replacement for Claude Code, Codex, Hermes, or OpenClaw. It is the orchestration and reliability layer around them.
 
-- **Published release:** [v1.0.0](https://github.com/Xuan0629/unison/releases/tag/v1.0.0). See [GitHub Releases](https://github.com/Xuan0629/unison/releases) for published-version status.
+- **Published release:** [v1.1.0](https://github.com/Xuan0629/unison/releases/tag/v1.1.0). See [GitHub Releases](https://github.com/Xuan0629/unison/releases) for published-version status.
 - **Platforms:** Linux and macOS; Windows through WSL. Native Windows is not supported because core locking uses `fcntl.flock`.
 - **Runtime model:** local subprocesses and files; no LangChain, CrewAI, or AutoGen dependency.
 - **License:** Apache License 2.0
@@ -98,7 +98,7 @@ Unison can automate implementation and verification loops; it cannot decide what
 ```bash
 python3 -m pip install unison-wanwuyixin
 
-# Or use the current development source (not the v1.0.0 release artifact)
+# Or use the current development source (not the v1.1.0 release artifact)
 git clone https://github.com/Xuan0629/unison.git
 cd unison
 python3 -m pip install -e .

@@ -2,9 +2,9 @@
 
 [English README](../README.md) · [中文 README](../README_CN.md)
 
-This manual documents the behavior in the current source tree. The latest published package is [v1.0.0](https://github.com/Xuan0629/unison/releases/tag/v1.0.0); see [GitHub Releases](https://github.com/Xuan0629/unison/releases) for published-version status.
+This manual documents the behavior in the current source tree. The latest published package is [v1.1.0](https://github.com/Xuan0629/unison/releases/tag/v1.1.0); see [GitHub Releases](https://github.com/Xuan0629/unison/releases) for published-version status.
 
-本手册说明当前源码的行为。最新已发布包为 [v1.0.0](https://github.com/Xuan0629/unison/releases/tag/v1.0.0)；已发布版本状态请查看 [GitHub Releases](https://github.com/Xuan0629/unison/releases)。
+本手册说明当前源码的行为。最新已发布包为 [v1.1.0](https://github.com/Xuan0629/unison/releases/tag/v1.1.0)；已发布版本状态请查看 [GitHub Releases](https://github.com/Xuan0629/unison/releases)。
 
 > [!WARNING]
 > Automated `headless_bypass` execution may use a runtime's permission-bypass flags. `foreground_manual` retains native manual approval and supports only Claude/Codex. Read [Chapter 3: Safety model](#3-safety-model--安全模型) before running either path on a real repository.

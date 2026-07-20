@@ -200,8 +200,7 @@ def foreground_child_and_group_status(invocation: "ForegroundInvocation") -> str
         return "unknown"
     current = read_process_identity(pid)
     if current is None:
-        process_exists = Path(f"/proc/{pid}").exists()
-        if process_exists:
+        if sys.platform == "linux" and Path(f"/proc/{pid}").exists():
             return "unknown"
     elif current.start_identity == identity:
         return "live"

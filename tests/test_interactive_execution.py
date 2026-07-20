@@ -1079,6 +1079,22 @@ class TestDarwinChildGroupLiveness:
 
         assert foreground_child_and_group_status(invocation) == "live"
 
+    def test_darwin_child_gone_does_not_consult_linux_proc(self, tmp_path, monkeypatch):
+        """Darwin liveness must delegate to ``ps`` even if Linux PID paths exist."""
+        invocation = self._make_invocation(
+            tmp_path, "darwin-no-proc", 1234, "darwin:Mon Jul 20 10:00:00 2026", 1234,
+        )
+        monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
+        monkeypatch.setattr("unison.foreground.read_process_identity", lambda pid: None)
+        original_exists = Path.exists
+        monkeypatch.setattr(
+            "unison.foreground.Path.exists",
+            lambda self: str(self) == "/proc/1234" or original_exists(self),
+        )
+        monkeypatch.setattr("unison.foreground._darwin_process_group_alive", lambda gid: "dead")
+
+        assert foreground_child_and_group_status(invocation) == "dead"
+
     def test_dead_when_child_gone_and_group_empty(self, tmp_path, monkeypatch):
         invocation = self._make_invocation(tmp_path, "dead-test", 1234, "darwin:Mon Jul 20 10:00:00 2026", 1234)
         monkeypatch.setattr("unison.foreground.sys.platform", "darwin")
