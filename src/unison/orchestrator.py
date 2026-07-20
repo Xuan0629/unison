@@ -79,6 +79,7 @@ from unison.runners.crush import CrushRunner
 from unison.runners.openclaw import OpenClawRunner
 from unison.run_history import RunHistoryStore
 from unison.run_lifecycle import RunLifecyclePersistence
+from unison.git_evidence import GitEvidenceReader
 from unison.risk_engine import RuleEngineRiskEvaluator
 from unison.snapshot import FileSnapshotManager, SnapshotBoundaryError
 from unison.world import RunContext
@@ -161,6 +162,7 @@ class Orchestrator:
             checkpoint_manager=self._checkpoint_mgr,
             run_history=self._run_history,
         )
+        self._git_evidence = GitEvidenceReader(self.spec.world.root)
 
         # F1: Risk matrix + snapshot safety net
         snap_config = self.spec.snapshots
@@ -5298,85 +5300,19 @@ class Orchestrator:
         return self._budget_tracker
 
     def _get_head_commit(self) -> str:
-        """Return the current HEAD commit hash, or empty string on failure."""
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(self.spec.world.root),
-                capture_output=True, timeout=10, check=False,
-            )
-            return result.stdout.decode("utf-8", errors="replace").strip()[:8]
-        except Exception:
-            return ""
+        """Compatibility façade for compact Git HEAD evidence."""
+        return self._git_evidence.head_commit()
 
     def _cumulative_diff(self, max_chars: int = 1200) -> str:
-        """A1: Return ``git diff <loop-start> HEAD --stat`` showing scope across entire loop.
-
-        Compact --stat output (~200 chars typical) shows which files changed
-        cumulatively, helping agents detect fix-regression patterns.
-        """
-        if not getattr(self, "_loop_start_commit", ""):
-            return ""
-        try:
-            # Check the start commit still exists
-            check = subprocess.run(
-                ["git", "cat-file", "-e", self._loop_start_commit],
-                cwd=str(self.spec.world.root),
-                capture_output=True, timeout=10, check=False,
-            )
-            if check.returncode != 0:
-                return ""
-            result = subprocess.run(
-                ["git", "diff", self._loop_start_commit, "HEAD", "--stat"],
-                cwd=str(self.spec.world.root),
-                capture_output=True, timeout=30, check=False,
-            )
-            if result.returncode == 0:
-                raw = result.stdout.decode("utf-8", errors="replace")
-                return raw[:max_chars] + ("\n...[cumulative diff truncated]" if len(raw) > max_chars else "")
-        except Exception:
-            pass
-        return ""
+        """Compatibility façade for cumulative Git diff evidence."""
+        return self._git_evidence.cumulative_diff(
+            getattr(self, "_loop_start_commit", ""),
+            max_chars=max_chars,
+        )
 
     def _recent_diff(self, max_chars: int = 8192) -> str:
-        """Return ``git diff HEAD~1 HEAD`` output (truncated), or ``""`` on failure."""
-        try:
-            # Check if parent commit exists (fails on initial commit)
-            parent_check = subprocess.run(
-                ["git", "rev-parse", "HEAD~1"],
-                cwd=str(self.spec.world.root),
-                capture_output=True,
-                timeout=10,
-                check=False,
-            )
-            if parent_check.returncode != 0:
-                # First commit — show staged changes instead
-                result = subprocess.run(
-                    ["git", "diff", "--cached"],
-                    cwd=str(self.spec.world.root),
-                    capture_output=True,
-                    timeout=30,
-                    check=False,
-                )
-                if result.returncode == 0:
-                    raw = result.stdout.decode("utf-8", errors="replace")
-                    return raw[:max_chars] + ("\n...[diff truncated]" if len(raw) > max_chars else "")
-                return ""
-            result = subprocess.run(
-                ["git", "diff", "HEAD~1", "HEAD"],
-                cwd=str(self.spec.world.root),
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
-            if result.returncode == 0:
-                raw = result.stdout.decode("utf-8", errors="replace")
-                if len(raw) > max_chars:
-                    return raw[:max_chars] + "\n...[diff truncated]"
-                return raw
-        except (subprocess.SubprocessError, FileNotFoundError, OSError):
-            pass
-        return ""
+        """Compatibility façade for recent Git diff evidence."""
+        return self._git_evidence.recent_diff(max_chars=max_chars)
 
     def _recover_timeout_work(
         self, role: str, world, iteration: int,
