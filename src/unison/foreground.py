@@ -87,16 +87,8 @@ class ProcessIdentity:
     start_identity: str
 
 
-def read_process_identity(pid: int) -> ProcessIdentity | None:
-    """Return *pid* identity when the operating system can verify it.
-
-    A missing, unreadable, or unsupported process source remains unknown;
-    callers must not turn this into evidence that a process has exited.
-    """
-    if not isinstance(pid, int) or pid <= 0:
-        return None
-    if sys.platform != "linux":
-        return None
+def _read_process_identity_linux(pid: int) -> ProcessIdentity | None:
+    """Linux process identity via /proc/<pid>/stat starttime."""
     try:
         stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
         closing_paren = stat.rfind(")")
@@ -111,15 +103,61 @@ def read_process_identity(pid: int) -> ProcessIdentity | None:
     return ProcessIdentity(pid=pid, start_identity=f"linux:{starttime}")
 
 
+def _read_process_identity_darwin(pid: int) -> ProcessIdentity | None:
+    """macOS process identity via ps lstart (process creation timestamp)."""
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=5,
+        )
+        lstart = result.stdout.strip()
+        if not lstart:
+            return None
+        return ProcessIdentity(pid=pid, start_identity=f"darwin:{lstart}")
+    except (subprocess.SubprocessError, OSError, UnicodeError):
+        return None
+
+
+def read_process_identity(pid: int) -> ProcessIdentity | None:
+    """Return *pid* identity when the operating system can verify it.
+
+    A missing, unreadable, or unsupported process source remains unknown;
+    callers must not turn this into evidence that a process has exited.
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    if sys.platform == "linux":
+        return _read_process_identity_linux(pid)
+    if sys.platform == "darwin":
+        return _read_process_identity_darwin(pid)
+    return None
+
+
+def _darwin_process_group_alive(group_id: int) -> bool:
+    """Check whether any process belongs to the given process group on macOS."""
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "pgid=", "-ax"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            try:
+                if int(line.strip()) == group_id:
+                    return True
+            except ValueError:
+                continue
+    except (subprocess.SubprocessError, OSError):
+        pass
+    return False
+
+
 def foreground_child_and_group_status(invocation: "ForegroundInvocation") -> str:
     """Return ``dead``, ``live``, or ``unknown`` for a recorded child group.
 
-    This is deliberately Linux-only.  Missing/malformed child evidence and any
-    unsupported or unverifiable process identity are ``unknown``; callers must
-    refuse replacement rather than infer that the invocation ended.
+    Missing/malformed child evidence and any unsupported or unverifiable
+    process identity are ``unknown``; callers must refuse replacement rather
+    than infer that the invocation ended.
     """
-    if sys.platform != "linux":
-        return "unknown"
     child = atomic_read_json(invocation.child_path)
     if not isinstance(child, dict) or not invocation._matches_invocation(child):
         return "unknown"
@@ -142,15 +180,19 @@ def foreground_child_and_group_status(invocation: "ForegroundInvocation") -> str
     else:
         return "unknown"
     try:
-        members = [
-            int(entry.name)
-            for entry in Path("/proc").iterdir()
-            if entry.name.isdigit()
-            and _linux_process_group_id(int(entry.name)) == group_id
-        ]
+        if sys.platform == "linux":
+            members = [
+                int(entry.name)
+                for entry in Path("/proc").iterdir()
+                if entry.name.isdigit()
+                and _linux_process_group_id(int(entry.name)) == group_id
+            ]
+            return "dead" if not members else "live"
+        if sys.platform == "darwin":
+            return "dead" if not _darwin_process_group_alive(group_id) else "live"
     except OSError:
         return "unknown"
-    return "dead" if not members else "live"
+    return "unknown"
 
 
 def _linux_process_group_id(pid: int) -> int | None:
@@ -563,26 +605,71 @@ def launch_linux_terminal(invocation: ForegroundInvocation) -> int:
 
 
 def launch_macos_terminal(invocation: ForegroundInvocation) -> int:
-    """Open Terminal.app for one wrapper invocation without terminal input control."""
+    """Open Terminal.app for one wrapper invocation without terminal input control.
+
+    Tries osascript first; falls back to ``open -a Terminal`` with a temporary
+    command file when AppleEvents are not authorised.
+    """
     if sys.platform != "darwin":
         raise RuntimeError("macOS Terminal launcher only supports macOS")
-    osascript = shutil.which("osascript")
-    if osascript is None:
-        raise RuntimeError("foreground execution requires osascript")
 
-    command = shlex.join([
+    request = invocation.read_request()
+    workdir = request.get("workdir")
+    if not isinstance(workdir, str):
+        raise RuntimeError("foreground request has invalid workdir")
+
+    wrapper_cmd = shlex.join([
         sys.executable,
         "-m", "unison.foreground", "wrapper",
         "--invocation-dir", str(invocation.directory),
     ])
-    script = [
-        osascript,
-        "-e", 'tell application "Terminal"',
-        "-e", f"do script {json.dumps(command)}",
-        "-e", "activate",
-        "-e", "end tell",
-    ]
-    return subprocess.Popen(script, start_new_session=True).pid
+
+    # --- Attempt 1: osascript (AppleEvents) ---
+    osascript = shutil.which("osascript")
+    if osascript is not None:
+        script = [
+            osascript,
+            "-e", 'tell application "Terminal"',
+            "-e", f"do script {json.dumps(wrapper_cmd)}",
+            "-e", "activate",
+            "-e", "end tell",
+        ]
+        proc = subprocess.Popen(script, start_new_session=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        try:
+            proc.wait(timeout=10)
+            if proc.returncode == 0:
+                return proc.pid
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+    # --- Attempt 2: ``open -a Terminal`` with a .command wrapper ---
+    cmd_file = invocation.directory / "_launch.command"
+    try:
+        cmd_file.write_text(
+            f"#!/bin/bash\ncd {shlex.quote(workdir)} && exec {wrapper_cmd}\n",
+            encoding="utf-8",
+        )
+        cmd_file.chmod(0o755)
+        proc = subprocess.Popen(
+            ["open", "-a", "Terminal", str(cmd_file)],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            proc.wait(timeout=10)
+            return proc.pid
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    except OSError:
+        pass
+
+    raise RuntimeError(
+        "foreground execution could not launch Terminal.app "
+        "(osascript and open both failed)"
+    )
 
 
 def launch_foreground_terminal(invocation: ForegroundInvocation) -> int:
