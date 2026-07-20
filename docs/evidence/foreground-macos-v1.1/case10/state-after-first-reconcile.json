@@ -1,0 +1,71 @@
+{
+  "version": "2.0",
+  "phase": "dev_active",
+  "iteration": 1,
+  "history": [
+    {
+      "from_phase": null,
+      "to_phase": "dev_active",
+      "by": "orchestrator",
+      "timestamp": "2026-07-20T09:29:51Z",
+      "note": "starting development loop",
+      "iter_n": 1,
+      "verdict": null,
+      "commit": null
+    },
+    {
+      "from_phase": "dev_active",
+      "to_phase": "dev_active",
+      "by": "orchestrator",
+      "timestamp": "2026-07-20T09:29:51Z",
+      "note": "dev_active iter 1/5",
+      "iter_n": 1,
+      "verdict": null,
+      "commit": null
+    }
+  ],
+  "halt_signal": false,
+  "halt_reason": null,
+  "last_dev_commit": null,
+  "last_review_verdict": null,
+  "last_review_path": null,
+  "last_activity": "2026-07-20T09:29:51Z",
+  "dag_status": null,
+  "reviewer_verdicts": [],
+  "runtime_agents": [
+    {
+      "key": "developer",
+      "role": "developer",
+      "pipeline_role": "developer",
+      "runtime": "codex",
+      "model": "gpt-5.6-luna"
+    },
+    {
+      "key": "reviewer",
+      "role": "reviewer",
+      "pipeline_role": "reviewer",
+      "runtime": "codex",
+      "model": "gpt-5.6-luna"
+    }
+  ],
+  "observer_language": "en",
+  "pipeline_name": "pipeline-codex",
+  "run_id": "47991866954b",
+  "active_foreground_invocation": {
+    "invocation_id": "f9acf427-0ad8-40f2-8e75-ddcdd3a0958d",
+    "phase": "dev_active",
+    "role": "developer",
+    "runtime": "codex",
+    "wrapper_pid": null,
+    "wrapper_start_identity": null,
+    "launcher_pid": 65007,
+    "artifact_dir": "/private/tmp/unison-test-repo/.unison/runs/pipeline-codex-2d6e17/47991866954b/foreground/f9acf427-0ad8-40f2-8e75-ddcdd3a0958d",
+    "result_path": "/private/tmp/unison-test-repo/.unison/runs/pipeline-codex-2d6e17/47991866954b/foreground/f9acf427-0ad8-40f2-8e75-ddcdd3a0958d/result.json",
+    "output_path": "/private/tmp/unison-test-repo/.unison/runs/pipeline-codex-2d6e17/47991866954b/foreground/f9acf427-0ad8-40f2-8e75-ddcdd3a0958d/output.log",
+    "started_at": "2026-07-20T09:29:51Z",
+    "last_heartbeat_observed_at": null,
+    "snapshot_ids": []
+  },
+  "foreground_reconcile": null,
+  "alignment_corrections": 0
+}

@@ -1,0 +1,47 @@
+=== git rev-parse HEAD ===
+bc1af54eab136d1074eab52df986eedbd3120aba
+
+=== git status --short ===
+ M prompts/developer.md
+ M prompts/reviewer.md
+ M src/unison/foreground.py
+ M tests/test_interactive_execution.py
+?? MACOS_FIX.md
+?? pipeline.yaml
+?? test.txt
+
+=== macOS ===
+ProductName:		macOS
+ProductVersion:		13.7.8
+BuildVersion:		22H730
+
+=== Python ===
+Python 3.12.13
+
+=== unison --help (first 20 lines) ===
+usage: unison [-h]
+              {run,reconcile,resume,dry-run,mode,init,new,webui,observe} ...
+
+万物一心 — 本地优先、文件驱动的 Multi-Agent 自动化协作桥梁
+
+positional arguments:
+  {run,reconcile,resume,dry-run,mode,init,new,webui,observe}
+    run                 Run a pipeline to completion
+    reconcile           Verify a foreground result and resume its persisted
+                        run
+    resume              Replace a verified-dead interrupted foreground
+                        invocation
+    dry-run             Validate pipeline.yaml without running
+    mode                Print pipeline mode (full-dev, code-dev, ...)
+    init                Interactive onboarding — generate pipeline.yaml
+    new                 Generate pipeline.yaml + prompts/ from a description
+    webui               Start web dashboard for pipeline status
+    observe             Start observer daemon (file watcher + notifications)
+
+options:
+
+=== claude --version ===
+2.1.214 (Claude Code)
+
+=== codex --version ===
+codex-cli 0.144.5

@@ -1,0 +1,11 @@
+Effective execution policy: interactive
+Tools OK: codex, git
+============================================================
+Final phase: init
+Iteration:   0
+Halted:      False (no reason)
+Last commit: -
+Last verdict:-
+Last review: -
+Transitions: 0
+============================================================

@@ -1,0 +1,5 @@
+{
+  "description": "unknown blocks resume \u2014 verified by test_orchestrator.py::test_resume_refuses_live_and_unknown",
+  "expectation": "ValueError: child process or group liveness is unverified",
+  "code_path": "_darwin_process_group_alive returns 'unknown' \u2192 foreground_child_and_group_status returns 'unknown' \u2192 orchestrator raises ValueError"
+}

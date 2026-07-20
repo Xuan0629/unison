@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "invocation_id": "f9acf427-0ad8-40f2-8e75-ddcdd3a0958d",
+  "phase": "dev_active",
+  "role": "developer",
+  "runtime": "codex",
+  "launched_at": "2026-07-20T09:29:51Z",
+  "workdir": "/private/tmp/unison-test-repo",
+  "command": [
+    "codex",
+    "--sandbox",
+    "workspace-write",
+    "--ask-for-approval",
+    "on-request",
+    "-c",
+    "model_provider=\"987xyz\"",
+    "--model",
+    "gpt-5.6-luna"
+  ],
+  "prompt_path": "/private/tmp/unison-test-repo/.unison/runs/pipeline-codex-2d6e17/47991866954b/foreground/f9acf427-0ad8-40f2-8e75-ddcdd3a0958d/prompt.txt",
+  "baseline_commit": "2a8d0aeaa322d1ba33e0386b50fd5b9488458ac5"
+}

@@ -1,0 +1,13 @@
+Tools OK: codex, git
+{
+  "version": "2.0",
+  "phase": "dev_review",
+  "iteration": 1,
+  "halt_signal": true,
+  "halt_reason": "foreground interrupted_unverified: result evidence is missing or invalid",
+  "last_dev_commit": "b957a71e1cc99fa8888c4d3fe384a214235e37f6",
+  "last_review_verdict": null,
+  "last_review_path": null,
+  "last_activity": "2026-07-20T10:02:17Z",
+  "history_len": 4
+}

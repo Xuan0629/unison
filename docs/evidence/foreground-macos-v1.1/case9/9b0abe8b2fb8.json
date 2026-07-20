@@ -1,0 +1,15 @@
+{
+  "id": "9b0abe8b2fb8",
+  "pipeline_name": "pipeline-codex",
+  "mode": "code-dev",
+  "status": "halted",
+  "phase": "dev_active",
+  "iteration": 1,
+  "verdict": null,
+  "commit": null,
+  "started_at": "2026-07-20T09:55:29.188898+00:00",
+  "finished_at": "2026-07-20T09:56:59.947137+00:00",
+  "legacy": false,
+  "source": "native",
+  "halt_reason": "foreground interrupted_unverified: no verified heartbeat for 90 seconds"
+}
