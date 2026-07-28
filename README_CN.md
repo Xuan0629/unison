@@ -23,6 +23,12 @@ Unison 是一个协调命令行 AI Agent 的**本地优先、文件驱动 Loop E
 > [!WARNING]
 > `automatic` 使用 `headless_bypass`：adapter 可能使用 Runtime 的权限绕过参数，包括 Claude 的 `--dangerously-skip-permissions`、Codex 的 `--dangerously-bypass-approvals-and-sandbox` 和 Hermes 的 `--yolo`。`interactive` 使用 `foreground_manual`，仅支持在可见 native terminal 中运行 Claude/Codex 并保留其正常审批 UI；Unison 不会自动批准或注入 terminal input。Hermes、OpenClaw 与 Crush 仅支持 headless。两条路径都不能让不可信工作区或生产系统变安全：请在隔离 Git 仓库中运行、保护凭据、审查 diff 和测试证据，并保留人工监督。
 
+## 可选的配套 Skill 包
+
+Unison 在仓库中随附一份可移植的操作 Skill：[`skills/unison/SKILL.md`](skills/unison/SKILL.md)。它描述当前仓库版本的有界 pipeline 操作、dry-run 证据、Hermes execution profile 与人工发布门控。
+
+对于刻意在本项目之外维护的跨 Agent 流程，可选参考 [shared-skills 配套仓库](https://github.com/Xuan0629/shared-skills)。它**不是** Unison 依赖：Unison 不会自动 clone、更新或加载它。使用外部 Skill 包前，请自行审查并固定版本，只向目标 Agent 安装兼容的 Skill。
+
 ## 名字为什么叫“万物一心”
 
 “万物一心”是电子游戏《杀戮尖塔》中故障机器人（Defect）的一张金卡，对应英文 **All for One**。游戏要求玩家在每局都不同的牌组中寻找通关组合；“万物一心”会把弃牌堆中的 0 费牌重新拿回手牌，让一个个轻量、专门的小动作再次组合，形成新的打法与获胜路径。

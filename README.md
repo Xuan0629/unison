@@ -23,6 +23,12 @@ It is not an LLM provider, a chat UI, or a replacement for Claude Code, Codex, H
 > [!WARNING]
 > `automatic` uses `headless_bypass`: its adapters may use runtime permission-bypass flags, including Claude `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-and-sandbox`, and Hermes `--yolo`. `interactive` uses `foreground_manual` only for Claude and Codex in a visible native terminal with their normal approval UI; Unison never auto-approves or injects terminal input. Hermes, OpenClaw, and Crush are headless-only. Neither path makes an untrusted workspace or production system safe: use an isolated Git repository, protect credentials, review diffs and test evidence, and retain human oversight.
 
+## Optional companion Skill packs
+
+Unison includes a portable operations Skill at [`skills/unison/SKILL.md`](skills/unison/SKILL.md). It describes bounded pipeline operation, dry-run evidence, Hermes execution profiles, and human release gates for the version of Unison in this repository.
+
+For cross-Agent procedures that are deliberately maintained outside this project, see the optional [shared-skills companion repository](https://github.com/Xuan0629/shared-skills). It is **not** an Unison dependency: Unison never clones, updates, or loads it automatically. Review and version-pin any external Skill pack yourself, then install only compatible Skills into the target Agent environment.
+
 ## The name: “万物一心”
 
 “万物一心” is the Chinese name of **All for One**, a rare Defect card in *Slay the Spire*. The game asks you to win with a deck that changes every run. All for One returns discarded zero-cost cards to your hand, turning small, specialized actions into new combinations and new lines of play.
