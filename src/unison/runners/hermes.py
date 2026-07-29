@@ -31,6 +31,8 @@ class HermesRunner(BaseRunner):
         if self.use_stdin:
             raise ValueError("HermesRunner only supports argv prompt transport")
         cmd = [self.binary, *(flag for flag in spec.cli_flags if flag != "-q")]
+        if spec.provider:
+            cmd.extend(["--provider", spec.provider])
         if spec.model:
             cmd.extend(["-m", spec.model])
         if spec.skills:

@@ -17,6 +17,20 @@ from unison.webui import (
 from unison.state import Transition, State
 
 
+DASHBOARD_JS = Path(__file__).parents[1] / "src" / "unison" / "webui" / "static" / "dashboard.js"
+
+
+# ============================================================================
+# Dashboard agent route metadata
+# ============================================================================
+
+
+def test_dashboard_agent_cards_render_non_empty_provider():
+    source = DASHBOARD_JS.read_text(encoding="utf-8")
+    assert "a.provider ? ' / ' + esc(a.provider) : ''" in source
+    assert "providerMeta + ' / ' + esc(a.model || \"\")" in source
+
+
 # ============================================================================
 # Multi-project registry — stable path identity and isolation
 # ============================================================================

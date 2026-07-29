@@ -1195,6 +1195,7 @@ class PipelineLoader:
             raise PipelineValidationError("moa.synthesizer must be a mapping")
 
         analyzer_specs: list[tuple[str, str]] = []
+        analyzer_providers: list[str] = []
         if "analyzers" in raw:
             if "agents" in raw:
                 raise PipelineValidationError(
@@ -1216,6 +1217,7 @@ class PipelineLoader:
                     )
                 runtime = item.get("runtime")
                 model = item.get("model")
+                provider = item.get("provider", "")
                 if not isinstance(runtime, str) or not runtime.strip():
                     raise PipelineValidationError(
                         f"moa.analyzers[{index}].runtime must be a non-empty string"
@@ -1224,7 +1226,12 @@ class PipelineLoader:
                     raise PipelineValidationError(
                         f"moa.analyzers[{index}].model must be a non-empty string"
                     )
+                if not isinstance(provider, str):
+                    raise PipelineValidationError(
+                        f"moa.analyzers[{index}].provider must be a string"
+                    )
                 analyzer_specs.append((runtime, model))
+                analyzer_providers.append(provider)
 
         target = raw.get("target", "")
         scope = raw.get("scope", "")
@@ -1240,9 +1247,12 @@ class PipelineLoader:
                 model=raw.get("model", "deepseek-v4-pro"),
                 analyzer_runtime=analyzer.get("runtime", ""),
                 analyzer_model=analyzer.get("model", ""),
+                analyzer_provider=analyzer.get("provider", ""),
                 analyzers=tuple(analyzer_specs),
+                analyzer_providers=tuple(analyzer_providers),
                 synthesizer_runtime=synthesizer.get("runtime", ""),
                 synthesizer_model=synthesizer.get("model", ""),
+                synthesizer_provider=synthesizer.get("provider", ""),
                 granularity=raw.get("granularity", "auto"),
                 target=target,
                 scope=scope,

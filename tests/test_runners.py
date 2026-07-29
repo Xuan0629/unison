@@ -123,6 +123,20 @@ class TestHermesRunner:
         with pytest.raises(ValueError, match="only supports argv prompt transport"):
             runner._build_command(spec, "Write PRD")
 
+    def test_hermes_runner_forwards_explicit_provider(self):
+        spec = AgentSpec(
+            role="planner",
+            runtime="hermes",
+            provider="custom:alibaba",
+            model="qwen3.7-plus",
+            system_prompt_path=Path("prompts/planner.md"),
+        )
+
+        cmd = HermesRunner()._build_command(spec, "Write PRD")
+
+        assert cmd[cmd.index("--provider") + 1] == "custom:alibaba"
+        assert cmd[-2:] == ["-q", "Write PRD"]
+
 
 class TestAgentResult:
     """AgentResult tests."""

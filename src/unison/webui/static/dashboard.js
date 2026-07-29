@@ -732,7 +732,8 @@ function patchAgents(s) {
     html += '<div class="agent-card' + (isActive ? " agent-card--active" : "") + '">';
     html += '<span class="agent-card__dot agent-card__dot--' + (isActive ? "online" : "offline") + '" aria-hidden="true"></span>';
     html += '<span class="agent-card__role">' + esc(a.role) + '</span>';
-    html += '<div class="agent-card__meta">' + esc(a.runtime || "") + ' / ' + esc(a.model || "") + '</div>';
+    var providerMeta = a.provider ? ' / ' + esc(a.provider) : '';
+    html += '<div class="agent-card__meta">' + esc(a.runtime || "") + providerMeta + ' / ' + esc(a.model || "") + '</div>';
     html += '</div>';
   }
   el.innerHTML = html;

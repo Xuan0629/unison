@@ -65,6 +65,11 @@ class TestMoaConfigDefaults:
             ("claude", "deepseek-v4-pro"),
             ("codex", "gpt-5.6-terra"),
         )
+        assert cfg.analyzer_invocations() == (
+            ("hermes", "MiniMax-M3", ""),
+            ("claude", "deepseek-v4-pro", ""),
+            ("codex", "gpt-5.6-terra", ""),
+        )
 
     def test_shared_analyzer_specs_preserve_legacy_replication(self):
         cfg = MoaConfig(
@@ -76,6 +81,31 @@ class TestMoaConfigDefaults:
             ("hermes", "MiniMax-M3"),
             ("hermes", "MiniMax-M3"),
         )
+
+    def test_shared_hermes_provider_applies_to_each_analyzer(self):
+        cfg = MoaConfig(
+            agents=2,
+            analyzer_runtime="hermes",
+            analyzer_model="qwen3.7-plus",
+            analyzer_provider="custom:alibaba",
+        )
+        assert cfg.analyzer_invocations() == (
+            ("hermes", "qwen3.7-plus", "custom:alibaba"),
+            ("hermes", "qwen3.7-plus", "custom:alibaba"),
+        )
+
+    def test_legacy_positional_fields_remain_compatible(self):
+        analyzers = (("hermes", "model-a"),)
+        cfg = MoaConfig(
+            1, 1, "claude", "base-model", "hermes", "analyzer-model",
+            analyzers, "hermes", "synth-model", "deep", "target", "scope",
+        )
+        assert cfg.analyzers == analyzers
+        assert cfg.synthesizer_runtime == "hermes"
+        assert cfg.synthesizer_model == "synth-model"
+        assert cfg.granularity == "deep"
+        assert cfg.target == "target"
+        assert cfg.scope == "scope"
 
     def test_invalid_direct_per_analyzer_specs_rejected(self):
         with pytest.raises(ValueError, match="moa.analyzers entries must be runtime/model pairs"):
@@ -266,23 +296,29 @@ project_root: "."
 moa:
   analyzers:
     - runtime: hermes
-      model: MiniMax-M3
+      provider: custom:alibaba
+      model: qwen3.7-plus
     - runtime: claude
       model: deepseek-v4-pro
     - runtime: codex
       model: gpt-5.6-terra
   synthesizer:
     runtime: hermes
+    provider: custom:openai-987xyz
     model: gpt-5.6-sol
 ''')
         spec = PipelineLoader().load(pipeline_file)
         assert spec.moa is not None
         assert spec.moa.agents == 3
         assert spec.moa.analyzers == (
-            ("hermes", "MiniMax-M3"),
+            ("hermes", "qwen3.7-plus"),
             ("claude", "deepseek-v4-pro"),
             ("codex", "gpt-5.6-terra"),
         )
+        assert spec.moa.analyzer_providers == (
+            "custom:alibaba", "", "",
+        )
+        assert spec.moa.synthesizer_provider == "custom:openai-987xyz"
 
     @pytest.mark.parametrize(
         ("analyzers", "message"),
@@ -291,6 +327,10 @@ moa:
             ([], "moa.analyzers must be a non-empty list"),
             ([{"runtime": "unknown", "model": "x"}], "Invalid runtime 'unknown'"),
             ([{"runtime": "hermes"}], r"moa\.analyzers\[0\]\.model must be a non-empty string"),
+            (
+                [{"runtime": "codex", "model": "x", "provider": "custom:x"}],
+                "provider is only supported for hermes runtime",
+            ),
         ],
     )
     def test_invalid_per_analyzer_config_rejected(self, tmp_path, analyzers, message):
@@ -382,6 +422,29 @@ moa:
   analyzer: fast-model
 ''')
         with pytest.raises(Exception, match="moa.analyzer must be a mapping"):
+            PipelineLoader().load(pipeline_file)
+
+    @pytest.mark.parametrize("provider", [False, 0])
+    def test_shared_analyzer_provider_must_be_string(self, tmp_path, provider):
+        import yaml
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(yaml.safe_dump({
+            "version": "1.0",
+            "mode": "moa:review",
+            "project_root": ".",
+            "moa": {
+                "analyzer": {
+                    "runtime": "claude",
+                    "model": "deepseek-v4-pro",
+                    "provider": provider,
+                },
+            },
+        }))
+        with pytest.raises(
+            PipelineValidationError,
+            match="moa analyzer provider must be a string",
+        ):
             PipelineLoader().load(pipeline_file)
 
     @pytest.mark.parametrize("field", ["target", "scope"])
@@ -607,7 +670,7 @@ moa:
             tmp_path,
             "moa:review",
             "  analyzers:\n"
-            "    - runtime: hermes\n      model: MiniMax-M3\n"
+            "    - runtime: hermes\n      provider: custom:alibaba\n      model: qwen3.7-plus\n"
             "    - runtime: claude\n      model: deepseek-v4-pro\n"
             "    - runtime: codex\n      model: gpt-5.6-terra\n",
         )
@@ -624,7 +687,7 @@ moa:
                 output.parent.mkdir(parents=True, exist_ok=True)
                 output.write_text("analysis " * 20)
                 with lock:
-                    calls.append((self.runtime, spec.runtime, spec.model))
+                    calls.append((self.runtime, spec.runtime, spec.model, spec.provider))
                 return AgentResult(
                     success=True, exit_code=0, duration=0,
                     stdout_tail="", stderr_tail="", log_path=log_path,
@@ -635,9 +698,9 @@ moa:
         orch._run_moa_analyze_unprotected(1, orch.spec.moa)
 
         assert sorted(calls) == sorted([
-            ("hermes", "hermes", "MiniMax-M3"),
-            ("claude", "claude", "deepseek-v4-pro"),
-            ("codex", "codex", "gpt-5.6-terra"),
+            ("hermes", "hermes", "qwen3.7-plus", "custom:alibaba"),
+            ("claude", "claude", "deepseek-v4-pro", ""),
+            ("codex", "codex", "gpt-5.6-terra", ""),
         ])
 
     def test_synthesizer_rejects_non_substantive_output(self, tmp_path):
@@ -704,6 +767,35 @@ moa:
         orch._runners["claude"] = FakeRunner()
         orch._run_moa_synthesis_unprotected(1, orch.spec.moa)
         assert seen_models == ["strong-model"]
+
+    def test_synthesizer_uses_explicit_hermes_provider(self, tmp_path):
+        from unison.interfaces import AgentResult
+
+        orch = self._make_orchestrator(
+            tmp_path,
+            "moa:review",
+            "  synthesizer:\n"
+            "    runtime: hermes\n"
+            "    provider: custom:openai-987xyz\n"
+            "    model: gpt-5.6-sol\n",
+        )
+        reviews_dir = orch.spec.world.reviews_dir_for(orch._run_ctx)
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        (reviews_dir / "moa-moa-agent1-round1.md").write_text("analysis " * 20)
+        seen = []
+
+        class FakeRunner:
+            def run(self, spec, prompt, workdir, timeout, log_path):
+                seen.append((spec.runtime, spec.model, spec.provider))
+                (reviews_dir / "moa-review.md").write_text("synthesis " * 20)
+                return AgentResult(
+                    success=True, exit_code=0, duration=0,
+                    stdout_tail="", stderr_tail="", log_path=log_path,
+                )
+
+        orch._runners["hermes"] = FakeRunner()
+        orch._run_moa_synthesis_unprotected(1, orch.spec.moa)
+        assert seen == [("hermes", "gpt-5.6-sol", "custom:openai-987xyz")]
 
 
 class TestMoaPhaseSequence:
@@ -941,12 +1033,14 @@ def test_moa_runtime_agents_use_per_analyzer_models(tmp_path):
         mode="moa:review",
         moa=MoaConfig(
             analyzers=(
-                ("hermes", "MiniMax-M3"),
+                ("hermes", "qwen3.7-plus"),
                 ("claude", "deepseek-v4-pro"),
                 ("codex", "gpt-5.6-terra"),
             ),
+            analyzer_providers=("custom:alibaba", "", ""),
             synthesizer_runtime="hermes",
             synthesizer_model="gpt-5.6-sol",
+            synthesizer_provider="custom:openai-987xyz",
         ),
     )
     orchestrator._state = State()
@@ -955,11 +1049,11 @@ def test_moa_runtime_agents_use_per_analyzer_models(tmp_path):
     orchestrator._run_moa_pipeline()
 
     assert [
-        (item["runtime"], item["model"])
+        (item["runtime"], item["model"], item["provider"])
         for item in orchestrator._state.runtime_agents
     ] == [
-        ("hermes", "MiniMax-M3"),
-        ("claude", "deepseek-v4-pro"),
-        ("codex", "gpt-5.6-terra"),
-        ("hermes", "gpt-5.6-sol"),
+        ("hermes", "qwen3.7-plus", "custom:alibaba"),
+        ("claude", "deepseek-v4-pro", ""),
+        ("codex", "gpt-5.6-terra", ""),
+        ("hermes", "gpt-5.6-sol", "custom:openai-987xyz"),
     ]

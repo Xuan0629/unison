@@ -96,6 +96,7 @@ class AgentSpec:
     reasoning_effort: str | None = None  # P12c: reasoning effort level (low/medium/high/xhigh/max)
     skills: tuple[str, ...] = ()  # Hermes-only profile-scoped skill preload.
     toolsets: tuple[str, ...] = ()  # Hermes-only profile-scoped tool allowlist.
+    provider: str = ""  # Hermes-only explicit provider routing.
 
     @property
     def effective_role(self) -> AgentRole:
@@ -315,6 +316,9 @@ class MoaConfig:
     granularity: str = "auto"
     target: str = ""
     scope: str = ""
+    analyzer_provider: str = ""
+    analyzer_providers: tuple[str, ...] = ()
+    synthesizer_provider: str = ""
 
     def __post_init__(self):
         if self.agents < 1:
@@ -361,11 +365,32 @@ class MoaConfig:
                 normalized.append((runtime, model))
             self.analyzers = tuple(normalized)
             self.agents = len(self.analyzers)
+            if not self.analyzer_providers:
+                self.analyzer_providers = tuple("" for _ in self.analyzers)
+            if len(self.analyzer_providers) != len(self.analyzers):
+                raise ValueError(
+                    "moa.analyzer_providers must align with moa.analyzers"
+                )
+            for (runtime, _model), provider in zip(
+                self.analyzers, self.analyzer_providers, strict=True
+            ):
+                if not isinstance(provider, str):
+                    raise ValueError("moa analyzer provider must be a string")
+                if provider and runtime != "hermes":
+                    raise ValueError(
+                        "moa analyzer provider is only supported for hermes runtime"
+                    )
         if not self.analyzer_runtime:
             self.analyzer_runtime = self.runtime
         if not self.analyzer_model:
             self.analyzer_model = self.model
         if not self.analyzers:
+            if not isinstance(self.analyzer_provider, str):
+                raise ValueError("moa analyzer provider must be a string")
+            if self.analyzer_provider and self.analyzer_runtime != "hermes":
+                raise ValueError(
+                    "moa analyzer provider is only supported for hermes runtime"
+                )
             try:
                 analyzer_capability = get_runtime_capability(self.analyzer_runtime)
             except KeyError as exc:
@@ -384,6 +409,12 @@ class MoaConfig:
             self.synthesizer_runtime = self.runtime
         if not self.synthesizer_model:
             self.synthesizer_model = self.model
+        if not isinstance(self.synthesizer_provider, str):
+            raise ValueError("moa synthesizer provider must be a string")
+        if self.synthesizer_provider and self.synthesizer_runtime != "hermes":
+            raise ValueError(
+                "moa synthesizer provider is only supported for hermes runtime"
+            )
 
     def analyzer_specs(self) -> tuple[tuple[str, str], ...]:
         """Return one runtime/model pair for every analyzer invocation."""
@@ -392,6 +423,19 @@ class MoaConfig:
         return tuple(
             (self.analyzer_runtime, self.analyzer_model)
             for _ in range(self.agents)
+        )
+
+    def analyzer_invocations(self) -> tuple[tuple[str, str, str], ...]:
+        """Return runtime/model/provider routing for every analyzer."""
+        specs = self.analyzer_specs()
+        providers = (
+            self.analyzer_providers
+            if self.analyzers
+            else tuple(self.analyzer_provider for _ in specs)
+        )
+        return tuple(
+            (runtime, model, provider)
+            for (runtime, model), provider in zip(specs, providers, strict=True)
         )
 
 

@@ -3235,6 +3235,7 @@ class TestP10023ExhaustionAndSkipRedirect:
             "pipeline_role": "reviewer",
             "runtime": security.runtime,
             "model": security.model,
+            "provider": "",
         }]
 
     def test_custom_review_only_loads_yaml_and_runs_real_handler(
@@ -3319,7 +3320,9 @@ webui:
 
         assert len(orch.state().runtime_agents) == 3
         assert all(
-            set(agent) == {"key", "role", "pipeline_role", "runtime", "model"}
+            set(agent) == {
+                "key", "role", "pipeline_role", "runtime", "model", "provider",
+            }
             for agent in orch.state().runtime_agents
         )
         assert orch.state().runtime_agents[-1]["pipeline_role"] == "synthesizer"

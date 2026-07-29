@@ -576,15 +576,22 @@ the list length becomes the analyzer count:
 moa:
   analyzers:
     - runtime: hermes
-      model: MiniMax-M3
+      provider: custom:alibaba
+      model: qwen3.7-plus
     - runtime: claude
       model: deepseek-v4-pro
     - runtime: codex
       model: gpt-5.6-terra
   synthesizer:
     runtime: hermes
+    provider: custom:openai-987xyz
     model: gpt-5.6-sol
 ```
+
+`provider` is optional and supported only for Hermes analyzer/synthesizer
+invocations. It maps to the Hermes CLI `--provider` option; omit it to retain
+normal Hermes provider selection. Non-Hermes runtime/provider combinations are
+rejected during pipeline loading.
 
 Do not combine `analyzers` with the shared `analyzer` block or rely on `agents`
 to resize the explicit list. Every list entry requires a registered runtime and
