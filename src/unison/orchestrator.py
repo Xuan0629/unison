@@ -1039,14 +1039,16 @@ class Orchestrator:
         # Populate runtime_agents for Web UI display (P8 S14: append
         # to preserve agents from earlier modes instead of overwriting)
         moa_agents = []
-        for i in range(1, moa_config.agents + 1):
+        for i, (runtime, model) in enumerate(
+            moa_config.analyzer_specs(), start=1
+        ):
             key = f"moa-analyzer-{i}"
             moa_agents.append({
                 "key": key,
                 "role": key,
                 "pipeline_role": "analyzer",
-                "runtime": moa_config.analyzer_runtime,
-                "model": moa_config.analyzer_model,
+                "runtime": runtime,
+                "model": model,
             })
         moa_agents.append({
             "key": "moa-synthesizer",
@@ -1178,12 +1180,14 @@ class Orchestrator:
 
         # Generate dynamic agent specs
         agent_specs: list[AgentSpec] = []
-        for i in range(1, moa_config.agents + 1):
+        for i, (runtime, model) in enumerate(
+            moa_config.analyzer_specs(), start=1
+        ):
             role = f"moa-agent{i}"
             agent_specs.append(AgentSpec(
                 role=role,
-                runtime=moa_config.analyzer_runtime,  # type: ignore[arg-type]
-                model=moa_config.analyzer_model,
+                runtime=runtime,  # type: ignore[arg-type]
+                model=model,
                 system_prompt_path=Path("prompts/moa-analyzer.md"),
                 pipeline_role="analyzer",
             ))

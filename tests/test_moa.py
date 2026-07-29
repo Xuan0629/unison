@@ -4,7 +4,7 @@ import pytest
 
 from unison.interfaces import MoaConfig, AgentSpec, PipelineSpec, World
 from unison.phase_router import PhaseRouter, PhaseDef
-from unison.pipeline import PipelineLoader
+from unison.pipeline import PipelineLoader, PipelineValidationError
 from pathlib import Path
 
 
@@ -50,6 +50,53 @@ class TestMoaConfigDefaults:
         assert cfg.analyzer_model == "fast-model"
         assert cfg.synthesizer_runtime == "claude"
         assert cfg.synthesizer_model == "strong-model"
+
+    def test_per_analyzer_models_override_shared_analyzer_count(self):
+        cfg = MoaConfig(
+            analyzers=(
+                ("hermes", "MiniMax-M3"),
+                ("claude", "deepseek-v4-pro"),
+                ("codex", "gpt-5.6-terra"),
+            ),
+        )
+        assert cfg.agents == 3
+        assert cfg.analyzer_specs() == (
+            ("hermes", "MiniMax-M3"),
+            ("claude", "deepseek-v4-pro"),
+            ("codex", "gpt-5.6-terra"),
+        )
+
+    def test_shared_analyzer_specs_preserve_legacy_replication(self):
+        cfg = MoaConfig(
+            agents=2,
+            analyzer_runtime="hermes",
+            analyzer_model="MiniMax-M3",
+        )
+        assert cfg.analyzer_specs() == (
+            ("hermes", "MiniMax-M3"),
+            ("hermes", "MiniMax-M3"),
+        )
+
+    def test_invalid_direct_per_analyzer_specs_rejected(self):
+        with pytest.raises(ValueError, match="moa.analyzers entries must be runtime/model pairs"):
+            MoaConfig(analyzers=(("hermes",),))
+        with pytest.raises(ValueError, match="runtime and model must be non-empty strings"):
+            MoaConfig(analyzers=(("hermes", "  "),))
+        with pytest.raises(ValueError, match="Invalid runtime 'unknown'"):
+            MoaConfig(analyzers=(("unknown", "model"),))
+        with pytest.raises(ValueError, match="runtime 'crush' supports at most 1"):
+            MoaConfig(analyzers=(
+                ("crush", "provider/model-a"),
+                ("crush", "provider/model-b"),
+            ))
+
+    def test_shared_analyzer_rejects_runtime_concurrency_violation(self):
+        with pytest.raises(ValueError, match="runtime 'crush' supports at most 1"):
+            MoaConfig(
+                agents=2,
+                analyzer_runtime="crush",
+                analyzer_model="provider/model",
+            )
 
     @pytest.mark.parametrize("granularity", ["auto", "compact", "standard", "deep"])
     def test_valid_granularity(self, granularity):
@@ -211,6 +258,121 @@ moa:
         assert spec.moa.runtime == "claude"  # legacy analyzer default
         assert spec.moa.model == "deepseek-v4-pro"  # legacy analyzer default
 
+    def test_per_analyzer_runtime_models_parsed(self, tmp_path):
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text('''version: "1.0"
+mode: moa:review
+project_root: "."
+moa:
+  analyzers:
+    - runtime: hermes
+      model: MiniMax-M3
+    - runtime: claude
+      model: deepseek-v4-pro
+    - runtime: codex
+      model: gpt-5.6-terra
+  synthesizer:
+    runtime: hermes
+    model: gpt-5.6-sol
+''')
+        spec = PipelineLoader().load(pipeline_file)
+        assert spec.moa is not None
+        assert spec.moa.agents == 3
+        assert spec.moa.analyzers == (
+            ("hermes", "MiniMax-M3"),
+            ("claude", "deepseek-v4-pro"),
+            ("codex", "gpt-5.6-terra"),
+        )
+
+    @pytest.mark.parametrize(
+        ("analyzers", "message"),
+        [
+            ("fast-model", "moa.analyzers must be a non-empty list"),
+            ([], "moa.analyzers must be a non-empty list"),
+            ([{"runtime": "unknown", "model": "x"}], "Invalid runtime 'unknown'"),
+            ([{"runtime": "hermes"}], r"moa\.analyzers\[0\]\.model must be a non-empty string"),
+        ],
+    )
+    def test_invalid_per_analyzer_config_rejected(self, tmp_path, analyzers, message):
+        import yaml
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(yaml.safe_dump({
+            "version": "1.0",
+            "mode": "moa:review",
+            "project_root": ".",
+            "moa": {"analyzers": analyzers},
+        }))
+        with pytest.raises(Exception, match=message):
+            PipelineLoader().load(pipeline_file)
+
+    @pytest.mark.parametrize(
+        ("moa_config", "message"),
+        [
+            (
+                {
+                    "agents": 4,
+                    "analyzers": [{"runtime": "hermes", "model": "x"}],
+                },
+                "moa.agents cannot be combined with moa.analyzers",
+            ),
+            (
+                {
+                    "analyzer": {"runtime": "hermes", "model": "x"},
+                    "analyzers": [{"runtime": "codex", "model": "y"}],
+                },
+                "moa.analyzer cannot be combined with moa.analyzers",
+            ),
+        ],
+    )
+    def test_conflicting_analyzer_modes_rejected(self, tmp_path, moa_config, message):
+        import yaml
+
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text(yaml.safe_dump({
+            "version": "1.0",
+            "mode": "moa:review",
+            "project_root": ".",
+            "moa": moa_config,
+        }))
+        with pytest.raises(Exception, match=message):
+            PipelineLoader().load(pipeline_file)
+
+    def test_moa_rejects_explicit_analyzers_above_runtime_concurrency(self, tmp_path):
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text('''version: "1.0"
+mode: moa:review
+project_root: "."
+moa:
+  analyzers:
+    - runtime: crush
+      model: provider/model-a
+    - runtime: crush
+      model: provider/model-b
+''')
+        with pytest.raises(
+            PipelineValidationError,
+            match="runtime 'crush' supports at most 1 concurrent MoA analyzer",
+        ):
+            PipelineLoader().load(pipeline_file)
+
+    def test_moa_rejects_shared_analyzer_above_runtime_concurrency(self, tmp_path):
+        pipeline_file = tmp_path / "pipeline.yaml"
+        pipeline_file.write_text('''version: "1.0"
+mode: moa:review
+project_root: "."
+moa:
+  agents: 2
+  analyzer:
+    runtime: crush
+    model: provider/model
+''')
+        with pytest.raises(
+            PipelineValidationError,
+            match="runtime 'crush' supports at most 1 concurrent MoA analyzer",
+        ):
+            PipelineLoader().load(pipeline_file)
+
     def test_invalid_nested_role_config_rejected(self, tmp_path):
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text('''version: "1.0"
@@ -315,14 +477,14 @@ class TestMoaSubmodeContracts:
         (tmp_path / "prompts" / "moa-analyzer.md").write_text("analyzer")
         (tmp_path / "prompts" / "moa-synthesizer.md").write_text("synthesizer")
         pipeline_file = tmp_path / f"{mode.replace(':', '-')}.yaml"
+        shared_agents = "" if "analyzers:" in moa_yaml else "  agents: 2\n"
         pipeline_file.write_text(f'''version: "1.0"
 mode: {mode}
 project_root: "."
 project:
   name: contract-test
 moa:
-  agents: 2
-{moa_yaml}
+{shared_agents}{moa_yaml}
 ''')
         return Orchestrator(PipelineLoader().load(pipeline_file))
 
@@ -436,6 +598,47 @@ moa:
             for _, prompt in calls
         }
         assert len(perspectives) == 2
+
+    def test_per_analyzer_runtimes_dispatch_independently(self, tmp_path):
+        from threading import Lock
+        from unison.interfaces import AgentResult
+
+        orch = self._make_orchestrator(
+            tmp_path,
+            "moa:review",
+            "  analyzers:\n"
+            "    - runtime: hermes\n      model: MiniMax-M3\n"
+            "    - runtime: claude\n      model: deepseek-v4-pro\n"
+            "    - runtime: codex\n      model: gpt-5.6-terra\n",
+        )
+        calls = []
+        lock = Lock()
+
+        class FakeRunner:
+            def __init__(self, runtime):
+                self.runtime = runtime
+
+            def run(self, spec, prompt, workdir, timeout, log_path):
+                output_marker = "Write your analysis to: "
+                output = Path(prompt.split(output_marker, 1)[1].splitlines()[0])
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text("analysis " * 20)
+                with lock:
+                    calls.append((self.runtime, spec.runtime, spec.model))
+                return AgentResult(
+                    success=True, exit_code=0, duration=0,
+                    stdout_tail="", stderr_tail="", log_path=log_path,
+                )
+
+        for runtime in ("hermes", "claude", "codex"):
+            orch._runners[runtime] = FakeRunner(runtime)
+        orch._run_moa_analyze_unprotected(1, orch.spec.moa)
+
+        assert sorted(calls) == sorted([
+            ("hermes", "hermes", "MiniMax-M3"),
+            ("claude", "claude", "deepseek-v4-pro"),
+            ("codex", "codex", "gpt-5.6-terra"),
+        ])
 
     def test_synthesizer_rejects_non_substantive_output(self, tmp_path):
         from unison.interfaces import AgentResult
@@ -723,3 +926,40 @@ class TestPipelineSpecMoaIntegration:
         assert spec.moa is not None
         assert spec.moa.agents == 5
         assert spec.moa.rounds == 3
+
+
+def test_moa_runtime_agents_use_per_analyzer_models(tmp_path):
+    """MoA run metadata must expose each configured analyzer runtime/model."""
+    from unison.orchestrator import Orchestrator
+    from unison.state import State
+
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator.spec = PipelineSpec(
+        version="2.0",
+        world=World(root=tmp_path),
+        agents={},
+        mode="moa:review",
+        moa=MoaConfig(
+            analyzers=(
+                ("hermes", "MiniMax-M3"),
+                ("claude", "deepseek-v4-pro"),
+                ("codex", "gpt-5.6-terra"),
+            ),
+            synthesizer_runtime="hermes",
+            synthesizer_model="gpt-5.6-sol",
+        ),
+    )
+    orchestrator._state = State()
+    orchestrator._state.halt_signal = True
+
+    orchestrator._run_moa_pipeline()
+
+    assert [
+        (item["runtime"], item["model"])
+        for item in orchestrator._state.runtime_agents
+    ] == [
+        ("hermes", "MiniMax-M3"),
+        ("claude", "deepseek-v4-pro"),
+        ("codex", "gpt-5.6-terra"),
+        ("hermes", "gpt-5.6-sol"),
+    ]

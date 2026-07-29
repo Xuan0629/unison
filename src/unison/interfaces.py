@@ -296,9 +296,12 @@ class GreenfieldConfig:
 class MoaConfig:
     """Single fan-out/fan-in Mixture of Agents configuration.
 
-    ``runtime``/``model`` remain legacy analyzer defaults. Role-specific
-    settings allow a cheaper analyzer tier and a stronger synthesizer tier.
-    ``rounds`` defaults to one; values above one are an explicit rebuttal loop.
+    ``runtime``/``model`` remain legacy analyzer defaults. ``analyzers``
+    optionally selects one runtime/model pair per analyzer; when omitted, the
+    legacy shared analyzer settings and ``agents`` count remain unchanged.
+    Role-specific settings allow a cheaper analyzer tier and a stronger
+    synthesizer tier. ``rounds`` defaults to one; values above one are an
+    explicit rebuttal loop.
     """
     agents: int = 3
     rounds: int = 1
@@ -306,6 +309,7 @@ class MoaConfig:
     model: str = "deepseek-v4-pro"
     analyzer_runtime: str = ""
     analyzer_model: str = ""
+    analyzers: tuple[tuple[str, str], ...] = ()
     synthesizer_runtime: str = ""
     synthesizer_model: str = ""
     granularity: str = "auto"
@@ -321,14 +325,74 @@ class MoaConfig:
             raise ValueError(
                 "moa.granularity must be auto, compact, standard, or deep"
             )
+        from unison.runtime_capabilities import get_runtime_capability
+
+        if self.analyzers:
+            normalized: list[tuple[str, str]] = []
+            runtime_counts: dict[str, int] = {}
+            for item in self.analyzers:
+                if not isinstance(item, tuple) or len(item) != 2:
+                    raise ValueError(
+                        "moa.analyzers entries must be runtime/model pairs"
+                    )
+                runtime, model = item
+                if (
+                    not isinstance(runtime, str) or not runtime.strip()
+                    or not isinstance(model, str) or not model.strip()
+                ):
+                    raise ValueError(
+                        "moa.analyzers runtime and model must be non-empty strings"
+                    )
+                try:
+                    capability = get_runtime_capability(runtime)
+                except KeyError as exc:
+                    raise ValueError(
+                        f"Invalid runtime '{runtime}' for moa.analyzers"
+                    ) from exc
+                runtime_counts[runtime] = runtime_counts.get(runtime, 0) + 1
+                if (
+                    capability.max_concurrency is not None
+                    and runtime_counts[runtime] > capability.max_concurrency
+                ):
+                    raise ValueError(
+                        f"runtime '{runtime}' supports at most "
+                        f"{capability.max_concurrency} concurrent MoA analyzer"
+                    )
+                normalized.append((runtime, model))
+            self.analyzers = tuple(normalized)
+            self.agents = len(self.analyzers)
         if not self.analyzer_runtime:
             self.analyzer_runtime = self.runtime
         if not self.analyzer_model:
             self.analyzer_model = self.model
+        if not self.analyzers:
+            try:
+                analyzer_capability = get_runtime_capability(self.analyzer_runtime)
+            except KeyError as exc:
+                raise ValueError(
+                    f"Invalid runtime '{self.analyzer_runtime}' for moa.analyzer"
+                ) from exc
+            if (
+                analyzer_capability.max_concurrency is not None
+                and self.agents > analyzer_capability.max_concurrency
+            ):
+                raise ValueError(
+                    f"runtime '{self.analyzer_runtime}' supports at most "
+                    f"{analyzer_capability.max_concurrency} concurrent MoA analyzer"
+                )
         if not self.synthesizer_runtime:
             self.synthesizer_runtime = self.runtime
         if not self.synthesizer_model:
             self.synthesizer_model = self.model
+
+    def analyzer_specs(self) -> tuple[tuple[str, str], ...]:
+        """Return one runtime/model pair for every analyzer invocation."""
+        if self.analyzers:
+            return self.analyzers
+        return tuple(
+            (self.analyzer_runtime, self.analyzer_model)
+            for _ in range(self.agents)
+        )
 
 
 @dataclass
