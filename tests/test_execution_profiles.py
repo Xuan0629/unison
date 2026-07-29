@@ -117,11 +117,11 @@ def test_hermes_runner_forwards_profile_scopes_and_preserves_default_skills() ->
     command = HermesRunner()._build_command(spec, "Review this project")
 
     assert command == [
-        "hermes", "chat", "--yolo", "-q",
+        "hermes", "chat", "--yolo",
         "-m", "gpt-5.6-sol",
         "--skills", "test-driven-development",
         "--toolsets", "terminal,file",
-        "Review this project",
+        "-q", "Review this project",
     ]
 
 
@@ -136,9 +136,9 @@ def test_hermes_runner_preserves_default_skills_without_a_profile() -> None:
     command = HermesRunner()._build_command(spec, "Review this project")
 
     assert command == [
-        "hermes", "chat", "--yolo", "-q",
+        "hermes", "chat", "--yolo",
         "--skills",
         "spec-driven-development,test-driven-development,code-review-and-quality,"
         "incremental-implementation,source-driven-development,planning-and-task-breakdown",
-        "Review this project",
+        "-q", "Review this project",
     ]

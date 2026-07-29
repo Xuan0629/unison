@@ -28,7 +28,9 @@ class HermesRunner(BaseRunner):
 
     def _build_command(self, spec: AgentSpec, prompt: str) -> list[str]:
         """Build hermes chat command with explicit profile-scoped flags."""
-        cmd = [self.binary, *spec.cli_flags]
+        if self.use_stdin:
+            raise ValueError("HermesRunner only supports argv prompt transport")
+        cmd = [self.binary, *(flag for flag in spec.cli_flags if flag != "-q")]
         if spec.model:
             cmd.extend(["-m", spec.model])
         if spec.skills:
@@ -37,6 +39,5 @@ class HermesRunner(BaseRunner):
             cmd.extend(["--skills", ",".join(_DEFAULT_SKILLS)])
         if spec.toolsets:
             cmd.extend(["--toolsets", ",".join(spec.toolsets)])
-        if not self.use_stdin:
-            cmd.append(prompt)
+        cmd.extend(["-q", prompt])
         return cmd
