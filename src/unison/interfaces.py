@@ -96,6 +96,7 @@ class AgentSpec:
     reasoning_effort: str | None = None  # P12c: reasoning effort level (low/medium/high/xhigh/max)
     skills: tuple[str, ...] = ()  # Hermes-only profile-scoped skill preload.
     toolsets: tuple[str, ...] = ()  # Hermes-only profile-scoped tool allowlist.
+    provider: str = ""  # Hermes-only explicit provider routing.
 
     @property
     def effective_role(self) -> AgentRole:
@@ -296,9 +297,12 @@ class GreenfieldConfig:
 class MoaConfig:
     """Single fan-out/fan-in Mixture of Agents configuration.
 
-    ``runtime``/``model`` remain legacy analyzer defaults. Role-specific
-    settings allow a cheaper analyzer tier and a stronger synthesizer tier.
-    ``rounds`` defaults to one; values above one are an explicit rebuttal loop.
+    ``runtime``/``model`` remain legacy analyzer defaults. ``analyzers``
+    optionally selects one runtime/model pair per analyzer; when omitted, the
+    legacy shared analyzer settings and ``agents`` count remain unchanged.
+    Role-specific settings allow a cheaper analyzer tier and a stronger
+    synthesizer tier. ``rounds`` defaults to one; values above one are an
+    explicit rebuttal loop.
     """
     agents: int = 3
     rounds: int = 1
@@ -306,11 +310,15 @@ class MoaConfig:
     model: str = "deepseek-v4-pro"
     analyzer_runtime: str = ""
     analyzer_model: str = ""
+    analyzers: tuple[tuple[str, str], ...] = ()
     synthesizer_runtime: str = ""
     synthesizer_model: str = ""
     granularity: str = "auto"
     target: str = ""
     scope: str = ""
+    analyzer_provider: str = ""
+    analyzer_providers: tuple[str, ...] = ()
+    synthesizer_provider: str = ""
 
     def __post_init__(self):
         if self.agents < 1:
@@ -321,14 +329,114 @@ class MoaConfig:
             raise ValueError(
                 "moa.granularity must be auto, compact, standard, or deep"
             )
+        from unison.runtime_capabilities import get_runtime_capability
+
+        if self.analyzers:
+            normalized: list[tuple[str, str]] = []
+            runtime_counts: dict[str, int] = {}
+            for item in self.analyzers:
+                if not isinstance(item, tuple) or len(item) != 2:
+                    raise ValueError(
+                        "moa.analyzers entries must be runtime/model pairs"
+                    )
+                runtime, model = item
+                if (
+                    not isinstance(runtime, str) or not runtime.strip()
+                    or not isinstance(model, str) or not model.strip()
+                ):
+                    raise ValueError(
+                        "moa.analyzers runtime and model must be non-empty strings"
+                    )
+                try:
+                    capability = get_runtime_capability(runtime)
+                except KeyError as exc:
+                    raise ValueError(
+                        f"Invalid runtime '{runtime}' for moa.analyzers"
+                    ) from exc
+                runtime_counts[runtime] = runtime_counts.get(runtime, 0) + 1
+                if (
+                    capability.max_concurrency is not None
+                    and runtime_counts[runtime] > capability.max_concurrency
+                ):
+                    raise ValueError(
+                        f"runtime '{runtime}' supports at most "
+                        f"{capability.max_concurrency} concurrent MoA analyzer"
+                    )
+                normalized.append((runtime, model))
+            self.analyzers = tuple(normalized)
+            self.agents = len(self.analyzers)
+            if not self.analyzer_providers:
+                self.analyzer_providers = tuple("" for _ in self.analyzers)
+            if len(self.analyzer_providers) != len(self.analyzers):
+                raise ValueError(
+                    "moa.analyzer_providers must align with moa.analyzers"
+                )
+            for (runtime, _model), provider in zip(
+                self.analyzers, self.analyzer_providers, strict=True
+            ):
+                if not isinstance(provider, str):
+                    raise ValueError("moa analyzer provider must be a string")
+                if provider and runtime != "hermes":
+                    raise ValueError(
+                        "moa analyzer provider is only supported for hermes runtime"
+                    )
         if not self.analyzer_runtime:
             self.analyzer_runtime = self.runtime
         if not self.analyzer_model:
             self.analyzer_model = self.model
+        if not self.analyzers:
+            if not isinstance(self.analyzer_provider, str):
+                raise ValueError("moa analyzer provider must be a string")
+            if self.analyzer_provider and self.analyzer_runtime != "hermes":
+                raise ValueError(
+                    "moa analyzer provider is only supported for hermes runtime"
+                )
+            try:
+                analyzer_capability = get_runtime_capability(self.analyzer_runtime)
+            except KeyError as exc:
+                raise ValueError(
+                    f"Invalid runtime '{self.analyzer_runtime}' for moa.analyzer"
+                ) from exc
+            if (
+                analyzer_capability.max_concurrency is not None
+                and self.agents > analyzer_capability.max_concurrency
+            ):
+                raise ValueError(
+                    f"runtime '{self.analyzer_runtime}' supports at most "
+                    f"{analyzer_capability.max_concurrency} concurrent MoA analyzer"
+                )
         if not self.synthesizer_runtime:
             self.synthesizer_runtime = self.runtime
         if not self.synthesizer_model:
             self.synthesizer_model = self.model
+        if not isinstance(self.synthesizer_provider, str):
+            raise ValueError("moa synthesizer provider must be a string")
+        if self.synthesizer_provider and self.synthesizer_runtime != "hermes":
+            raise ValueError(
+                "moa synthesizer provider is only supported for hermes runtime"
+            )
+
+    def analyzer_specs(self) -> tuple[tuple[str, str], ...]:
+        """Return one runtime/model pair for every analyzer invocation."""
+        if self.analyzers:
+            return self.analyzers
+        return tuple(
+            (self.analyzer_runtime, self.analyzer_model)
+            for _ in range(self.agents)
+        )
+
+    def analyzer_invocations(self) -> tuple[tuple[str, str, str], ...]:
+        """Return runtime/model/provider routing for every analyzer."""
+        specs = self.analyzer_specs()
+        providers = (
+            self.analyzer_providers
+            if self.analyzers
+            else tuple(self.analyzer_provider for _ in specs)
+        )
+        return tuple(
+            (runtime, model, provider)
+            for (runtime, model), provider in zip(specs, providers, strict=True)
+        )
 
 
 @dataclass

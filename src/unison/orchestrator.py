@@ -132,6 +132,7 @@ class Orchestrator:
                 "pipeline_role": agent.effective_role,
                 "runtime": agent.runtime,
                 "model": agent.model,
+                "provider": agent.provider,
             }
             for key, agent in self.spec.agents.items()
         ]
@@ -1039,14 +1040,17 @@ class Orchestrator:
         # Populate runtime_agents for Web UI display (P8 S14: append
         # to preserve agents from earlier modes instead of overwriting)
         moa_agents = []
-        for i in range(1, moa_config.agents + 1):
+        for i, (runtime, model, provider) in enumerate(
+            moa_config.analyzer_invocations(), start=1
+        ):
             key = f"moa-analyzer-{i}"
             moa_agents.append({
                 "key": key,
                 "role": key,
                 "pipeline_role": "analyzer",
-                "runtime": moa_config.analyzer_runtime,
-                "model": moa_config.analyzer_model,
+                "runtime": runtime,
+                "model": model,
+                "provider": provider,
             })
         moa_agents.append({
             "key": "moa-synthesizer",
@@ -1054,6 +1058,7 @@ class Orchestrator:
             "pipeline_role": "synthesizer",
             "runtime": moa_config.synthesizer_runtime,
             "model": moa_config.synthesizer_model,
+            "provider": moa_config.synthesizer_provider,
         })
         self._state.runtime_agents.extend(moa_agents)
 
@@ -1178,12 +1183,15 @@ class Orchestrator:
 
         # Generate dynamic agent specs
         agent_specs: list[AgentSpec] = []
-        for i in range(1, moa_config.agents + 1):
+        for i, (runtime, model, provider) in enumerate(
+            moa_config.analyzer_invocations(), start=1
+        ):
             role = f"moa-agent{i}"
             agent_specs.append(AgentSpec(
                 role=role,
-                runtime=moa_config.analyzer_runtime,  # type: ignore[arg-type]
-                model=moa_config.analyzer_model,
+                runtime=runtime,  # type: ignore[arg-type]
+                model=model,
+                provider=provider,
                 system_prompt_path=Path("prompts/moa-analyzer.md"),
                 pipeline_role="analyzer",
             ))
@@ -1536,6 +1544,7 @@ class Orchestrator:
                                 "pipeline_role": agent.effective_role,
                                 "runtime": agent.runtime,
                                 "model": agent.model,
+                                "provider": agent.provider,
                             })
 
                     # P0.3: Thread chain depth through recursive dispatch so
@@ -1727,6 +1736,7 @@ class Orchestrator:
             role="moa-synthesizer",
             runtime=moa_config.synthesizer_runtime,  # type: ignore[arg-type]
             model=moa_config.synthesizer_model,
+            provider=moa_config.synthesizer_provider,
             system_prompt_path=Path("prompts/moa-synthesizer.md"),
             pipeline_role="synthesizer",
         )

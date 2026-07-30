@@ -101,12 +101,41 @@ class TestHermesRunner:
         )
         
         cmd = runner._build_command(spec, "Write PRD")
-        
-        assert "hermes" in cmd
-        assert "chat" in cmd
-        assert "-q" in cmd
-        assert "--yolo" in cmd
-        assert "Write PRD" in cmd
+
+        assert cmd == [
+            "hermes", "chat", "--yolo",
+            "-m", "qwen3.7-plus",
+            "--skills",
+            "spec-driven-development,test-driven-development,code-review-and-quality,"
+            "incremental-implementation,source-driven-development,planning-and-task-breakdown",
+            "-q", "Write PRD",
+        ]
+
+    def test_hermes_runner_rejects_stdin_prompt_transport(self):
+        runner = HermesRunner(use_stdin=True)
+        spec = AgentSpec(
+            role="planner",
+            runtime="hermes",
+            model="qwen3.7-plus",
+            system_prompt_path=Path("prompts/planner.md"),
+        )
+
+        with pytest.raises(ValueError, match="only supports argv prompt transport"):
+            runner._build_command(spec, "Write PRD")
+
+    def test_hermes_runner_forwards_explicit_provider(self):
+        spec = AgentSpec(
+            role="planner",
+            runtime="hermes",
+            provider="custom:alibaba",
+            model="qwen3.7-plus",
+            system_prompt_path=Path("prompts/planner.md"),
+        )
+
+        cmd = HermesRunner()._build_command(spec, "Write PRD")
+
+        assert cmd[cmd.index("--provider") + 1] == "custom:alibaba"
+        assert cmd[-2:] == ["-q", "Write PRD"]
 
 
 class TestAgentResult:

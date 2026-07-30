@@ -568,6 +568,40 @@ moa:
 - One round is the default fan-out/fan-in design; more rounds explicitly enable rebuttal.
 - Analyzer failures are recorded; synthesis should not silently present missing perspectives as success.
 
+The shared `analyzer` block above remains the backward-compatible single-runtime
+mode. To select a different runtime/model for each analyzer, use `analyzers`;
+the list length becomes the analyzer count:
+
+```yaml
+moa:
+  analyzers:
+    - runtime: hermes
+      provider: custom:alibaba
+      model: qwen3.7-plus
+    - runtime: claude
+      model: deepseek-v4-pro
+    - runtime: codex
+      model: gpt-5.6-terra
+  synthesizer:
+    runtime: hermes
+    provider: custom:openai-987xyz
+    model: gpt-5.6-sol
+```
+
+`provider` is optional and supported only for Hermes analyzer/synthesizer
+invocations. It maps to the Hermes CLI `--provider` option; omit it to retain
+normal Hermes provider selection. Non-Hermes runtime/provider combinations are
+rejected during pipeline loading.
+
+Do not combine `analyzers` with the shared `analyzer` block or rely on `agents`
+to resize the explicit list. Every list entry requires a registered runtime and
+a non-empty model. The explicit list is useful for independent model/provider
+perspectives; the shared form remains preferable for homogeneous replication.
+
+上方共享 `analyzer` 配置继续兼容原有单 runtime 模式。需要每路使用不同
+runtime/model 时改用 `analyzers` 列表，列表长度即 analyzer 数量。不要同时
+配置共享 `analyzer`；每项必须使用已注册 runtime 和非空 model。
+
 ### 6.6 Chain configuration · Chain 配置
 
 ```yaml
